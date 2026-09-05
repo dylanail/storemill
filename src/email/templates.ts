@@ -34,6 +34,7 @@ export type TemplateKey =
   | 'order_cancelled'
   | 'refund_issued'
   | 'welcome'
+  | 'back_in_stock'
   | 'password_reset'
   | 'abandoned_cart'
   | 'review_request'
@@ -70,6 +71,7 @@ export const TEMPLATES: EmailTemplate[] = [
   { key: 'order_cancelled', name: 'Cancelled', trigger: 'order.cancelled', delayHours: 0, subject: 'Order #{{order.displayId}} was cancelled', body: BODY(`<p>Your order was cancelled and nothing was charged.</p>`) },
   { key: 'refund_issued', name: 'Refund', trigger: 'order.refunded', delayHours: 0, subject: 'Refund for order #{{order.displayId}}', body: BODY(`<p>We refunded {{amount}} to your original payment method. Banks usually take 5–10 days to show it.</p>`) },
   { key: 'welcome', name: 'Welcome', trigger: 'customer.created', delayHours: 0, subject: 'Welcome to {{store.name}}', body: BODY(`<p>{{store.slogan}}</p><p><a class="btn" href="{{storeUrl}}">Have a look around</a></p>`) },
+  { key: 'back_in_stock', name: 'Back in stock', trigger: 'inventory.restocked', delayHours: 0, subject: '{{product.title}} is back in stock', body: BODY(`<p>You asked to hear when this came back. It has.</p><p><a class="btn" href="{{storeUrl}}">Get it before it goes again</a></p>`) },
   { key: 'password_reset', name: 'Password reset', trigger: 'auth.reset_requested', delayHours: 0, subject: 'Reset your password', body: BODY(`<p>This link works once and expires in an hour.</p><p><a class="btn" href="{{resetUrl}}">Set a new password</a></p>`) },
   { key: 'abandoned_cart', name: 'Abandoned cart', trigger: 'cart.abandoned', delayHours: 4, subject: 'You left something behind', body: BODY(`<p>Your cart is still here.</p><table class="items">{{#each cart.items}}<tr><td>{{title}}</td><td class="amt">{{lineTotal}}</td></tr>{{/each}}</table><p><a class="btn" href="{{cartUrl}}">Finish checking out</a></p>`) },
   { key: 'review_request', name: 'Review request', trigger: 'order.delivered', delayHours: 168, subject: 'How is your {{product.title}}?', body: BODY(`<p>You have had it a week. Would you tell other people what you think?</p>{{#if code}}<p>There is {{code}} in it for you — {{discount}} off your next order.</p>{{/if}}<p><a class="btn" href="{{reviewUrl}}">Leave a review</a></p>`) },
@@ -103,7 +105,7 @@ table{width:100%;border-collapse:collapse;margin:16px 0}
 .brand{font:400 13px/1 Georgia,serif;letter-spacing:.22em;text-transform:uppercase;margin-bottom:22px;color:${accent}}
 .foot{color:#8a8078;font-size:12px;margin-top:22px}
 </style></head><body><div class="wrap"><div class="brand">${escapeHtml(storeName)}</div><div class="card">${inner}</div>
-<p class="foot">Sent by ${escapeHtml(storeName)} on Amboras. Reply to this email and a person will read it.</p></div></body></html>`
+<p class="foot">Sent by ${escapeHtml(storeName)} on storemill. Reply to this email and a person will read it.</p></div></body></html>`
 }
 
 export function lineTotals<T extends { unitCents: number; quantity: number }>(items: T[], currency: string) {

@@ -5,9 +5,16 @@ import { listProducts } from '../domain/catalog.ts'
 import { listReviews } from '../domain/reviews.ts'
 import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '../domain/ops.ts'
 import type { Store } from '../control/stores.ts'
-import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
+import { BLOCK_RUNTIME, blockDefinition, defaultsFor, inlineScript, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
 import { customDefinitions } from './custom-blocks.ts'
-import { minorDigits } from '../lib/money.ts'
+import { minorUnitRate } from '../domain/regions.ts'
+
+export const PAGE_ROLES = { page: 'General page', pdp: 'Product page', advertorial: 'Advertorial', offer: 'Offer / sales page', cart: 'Cart', checkout: 'Checkout', upsell: 'Upsell', downsell: 'Downsell', thankyou: 'Thank you' } as const
+export type PageRole = keyof typeof PAGE_ROLES
+export function pageRole(value: unknown): PageRole {
+  if (typeof value !== 'string' || !Object.hasOwn(PAGE_ROLES, value)) throw new Error('Choose a valid page type')
+  return value as PageRole
+}
 
 export type Page = {
   id: string
@@ -26,13 +33,23 @@ export type Page = {
   /** A version of a product's page (role 'pdp') or an advertorial for it. */
   productId: string
   /** 'checkout' makes this page the store's checkout: the most recently updated published one wins. */
-  role: 'page' | 'pdp' | 'advertorial' | 'offer' | 'checkout'
+  role: PageRole
   /** Split-test weight among a product's pdp versions; 0 = not in the test. */
   weight: number
   format: string
   direction: string
   createdAt: string
   updatedAt: string
+}
+
+export type PageRevision = {
+  id: string
+  pageId: string
+  storeId: string
+  version: number
+  note: string
+  createdAt: string
+  snapshot: Pick<Page, 'title' | 'handle' | 'kind' | 'role' | 'productId' | 'mode' | 'blocks' | 'rawHtml' | 'headHtml' | 'seo' | 'status' | 'isHome'>
 }
 
 function rowToPage(row: Row): Page {
@@ -69,14 +86,81 @@ export function getPage(db: Db, storeId: string, idOrHandle: string): Page | nul
   return row ? rowToPage(row) : null
 }
 
-export function homePage(db: Db, storeId: string): Page | null {
-  const row = db.one("SELECT * FROM pages WHERE store_id = ? AND is_home = 1 AND status = 'published'", storeId)
+function pageSnapshot(page: Page): PageRevision['snapshot'] {
+  return {
+    title: page.title,
+    handle: page.handle,
+    kind: page.kind,
+    role: page.role,
+    productId: page.productId,
+    mode: page.mode,
+    blocks: page.blocks,
+    rawHtml: page.rawHtml,
+    headHtml: page.headHtml,
+    seo: page.seo,
+    status: page.status,
+    isHome: page.isHome,
+  }
+}
+
+function rowToRevision(row: Row): PageRevision {
+  return {
+    id: row.id as string,
+    pageId: row.page_id as string,
+    storeId: row.store_id as string,
+    version: row.version as number,
+    snapshot: json(row.snapshot, {} as PageRevision['snapshot']),
+    note: row.note as string,
+    createdAt: row.created_at as string,
+  }
+}
+
+export function listPageRevisions(db: Db, storeId: string, pageId: string, limit = 40): PageRevision[] {
+  return db.all('SELECT * FROM page_revisions WHERE store_id = ? AND page_id = ? ORDER BY version DESC LIMIT ?', storeId, pageId, limit).map(rowToRevision)
+}
+
+export function savePageRevision(db: Db, page: Page, note = 'Saved'): PageRevision {
+  const version = (db.one<{ version: number | null }>('SELECT MAX(version) version FROM page_revisions WHERE page_id = ?', page.id)?.version ?? 0) + 1
+  const revisionId = id('rev')
+  db.insert('page_revisions', {
+    id: revisionId,
+    page_id: page.id,
+    store_id: page.storeId,
+    version,
+    snapshot: pageSnapshot(page),
+    note: note.slice(0, 120) || 'Saved',
+    created_at: now(),
+  })
+  return rowToRevision(db.one('SELECT * FROM page_revisions WHERE id = ?', revisionId) as Row)
+}
+
+export function ensurePageRevision(db: Db, page: Page): PageRevision {
+  return listPageRevisions(db, page.storeId, page.id, 1)[0] ?? savePageRevision(db, page, 'Original')
+}
+
+export function restorePageRevision(db: Db, storeId: string, pageId: string, revisionId: string): Page {
+  const row = db.one('SELECT * FROM page_revisions WHERE id = ? AND page_id = ? AND store_id = ?', revisionId, pageId, storeId)
+  if (!row) throw new Error('No such page revision')
+  const revision = rowToRevision(row)
+  const restored = updatePage(db, storeId, pageId, revision.snapshot)
+  savePageRevision(db, restored, `Restored version ${revision.version}`)
+  return restored
+}
+
+/** The chosen home page. Draft homes are visible in preview before publication. */
+export function homePage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND is_home = 1 ${opts.preview ? '' : "AND status = 'published'"}`, storeId)
   return row ? rowToPage(row) : null
 }
 
-/** The checkout built from blocks, if the store has one. Drafts count in preview, so the editor shows what it is about to publish. */
+/** Copied and native checkouts use the same store-owned payment endpoints. */
 export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
-  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' AND mode = 'blocks' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
+  return row ? rowToPage(row) : null
+}
+
+export function liveCartPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'cart' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
   return row ? rowToPage(row) : null
 }
 
@@ -121,7 +205,9 @@ export function createPage(
     created_at: timestamp,
     updated_at: timestamp,
   })
-  return getPage(db, storeId, pageId) as Page
+  const page = getPage(db, storeId, pageId) as Page
+  savePageRevision(db, page, 'Created')
+  return page
 }
 
 export function updatePage(db: Db, storeId: string, pageId: string, patch: Partial<Omit<Page, 'id' | 'storeId' | 'createdAt' | 'updatedAt'>>): Page {
@@ -231,12 +317,25 @@ export function offerTemplate(input: TemplateInput): BlockInstance[] {
     newBlock('countdown', { text: 'Save on your first order — ending soon' }),
     newBlock('hero', { headline: product ? `${product.title}: the one that works when the others did not` : `Introducing ${input.storeName}`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'Get it and save', ctaHref: '#offer', height: 'medium' }),
     newBlock('trust-badges', {}),
+    // The combined proof bar and the authority section were missing, and the
+    // order they sit in is the whole point of the case: the rating and the
+    // count answer "is this real" before the problem is named, and the
+    // authority line answers "who says so" before the story of the failures.
+    newBlock('rating-strip', { ...(product ? { productId: product.id } : {}) }),
     newBlock('headline', { level: 'h2', text: 'Why the usual fix keeps failing', sub: 'Say what the alternatives do wrong, in one line each.' }),
+    newBlock('expert-quote', {
+      headline: 'Who says so',
+      quotes: 'One sentence from the person who stands behind it, in their own words.|Their name|Their credential — maker, clinician, coach|',
+    }),
     newBlock('rich-text', { text: 'The cheap version fails in a month. The expensive one asks for a routine nobody keeps. Name each one, what it cost, and what happened next.' }),
     ...(product ? [newBlock('image-with-text', { image: product.image, headline: `What ${product.title} does differently`, text: 'The mechanism: how it creates the result, in two sentences an eleven-year-old follows.', cta: 'See the offer', ctaHref: '#offer' })] : []),
     newBlock('multicolumn', { headline: 'How it works' }),
     newBlock('review-wall', { headline: 'From people who bought it', count: 6, ...(product ? { productId: product.id } : {}) }),
     ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise' })] : [newBlock('offer-box', {})]),
+    // "Deeper education" after the buy box: whoever scrolled past the offer
+    // has a question the offer did not answer, and this is where the case put
+    // the answer rather than sending them away to look for it.
+    newBlock('how-it-works', { headline: 'In more detail' }),
     ...(input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : []),
     ...(input.research?.objections.length ? [newBlock('faq', { headline: 'Before you decide', items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') })] : [newBlock('faq', {})]),
     newBlock('guarantee', {}),
@@ -500,7 +599,7 @@ export function pageTemplate(key: string): PageTemplate {
 
 export function blockContextFor(db: Db, store: Store, base: string, localized?: { currency: string; exchangeRate: number; locale?: string }): BlockContext {
   const rawProducts = listProducts(db, store.id, { status: 'published', limit: 60 })
-  const rate = localized ? localized.exchangeRate * (10 ** minorDigits(localized.currency)) / (10 ** minorDigits(store.currency)) : 1
+  const rate = minorUnitRate(localized, store.currency)
   const products = rawProducts.map((product) => ({
     ...product,
     variants: product.variants.map((variant) => ({
@@ -538,7 +637,7 @@ export function blockContextFor(db: Db, store: Store, base: string, localized?: 
     bundles: products
       .map((product) => {
         const bundle = bundleFor(db, store.id, product.id)
-        return bundle ? { productId: product.id, html: renderBundleWidget(bundle, product, currency, { locale: localized?.locale }) } : null
+        return bundle ? { productId: product.id, html: renderBundleWidget({ ...bundle, tiers: bundle.tiers.map(tier => tier.unitPriceCents === undefined ? tier : { ...tier, unitPriceCents: Math.round(tier.unitPriceCents * rate) }) }, product, currency, { locale: localized?.locale }) } : null
       })
       .filter((entry): entry is { productId: string; html: string } => entry !== null),
   }
@@ -547,7 +646,7 @@ export function blockContextFor(db: Db, store: Store, base: string, localized?: 
 /** The blocks, the runtime, and the script of every custom block the page uses, once each. */
 export function renderPageBody(page: Page, context: BlockContext): string {
   const used = new Set(page.blocks.map((block) => block.type))
-  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${definition.js}\n})();</script>`)
+  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${inlineScript(definition.js)}\n})();</script>`)
   return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>${scripts.join('')}`
 }
 
@@ -555,6 +654,7 @@ export { BLOCK_RUNTIME }
 
 /** Styles the blocks need on top of the theme. Tokens come from the theme; nothing here hard-codes a colour. */
 export const PAGE_CSS = `
+.blk-font{font-family:var(--block-font,var(--body))}.blk-font h1,.blk-font h2,.blk-font h3,.blk-font .name,.blk-font .word,.blk-font .title{font-family:var(--block-display,var(--display))}
 .blk{padding-block:var(--pad)}
 .pad-none{--pad:0}.pad-small{--pad:1.4rem}.pad-medium{--pad:3.2rem}.pad-large{--pad:5.5rem}
 .blk-in{margin-inline:auto;width:min(92vw,var(--w))}
@@ -587,7 +687,7 @@ video.video{width:100%;height:auto;aspect-ratio:auto}
 .ba input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
 .ba .lbl{position:absolute;bottom:.7rem;font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;background:rgba(0,0,0,.55);color:#fff;padding:.4rem .6rem;border-radius:999px}
 .ba .lbl.l{left:.7rem}.ba .lbl.r{right:.7rem}
-.cols{display:grid;gap:1.6rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1.4rem}
+.cols>.col{min-width:0;overflow-wrap:anywhere}.cols{display:grid;gap:1.6rem;grid-template-columns:var(--cols-desktop,repeat(var(--per,3),minmax(0,1fr)));margin-top:1.4rem}
 .col .ico{font-size:1.6rem;color:var(--primary)}.col h3{margin:.5rem 0 .3rem}.col p{color:var(--muted);font-size:.94rem;margin:0}
 .buybox-blk{display:grid;gap:2.5rem;grid-template-columns:1fr 1fr;align-items:start}
 .buybox-blk figure{margin:0}.buybox-blk img{width:100%;border-radius:var(--radius)}
@@ -670,6 +770,6 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .costeps li{display:flex;align-items:center;gap:.4rem}.costeps li+li::before{content:'›';margin-right:.4rem;opacity:.5}
 .costeps span{width:22px;height:22px;border-radius:999px;border:1px solid var(--line);display:grid;place-items:center;font-size:.72rem;font-weight:600}
 .costeps .now{color:var(--ink);font-weight:600}.costeps .now span,.costeps .done span{background:var(--primary);color:#fff;border-color:var(--primary)}
-@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols,.hiw,.vwall{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}.letter{grid-template-columns:1fr}}
-@media (max-width:520px){.cols,.hiw{grid-template-columns:1fr}.tl li{grid-template-columns:1fr;gap:.2rem}}
+@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:var(--cols-tablet,repeat(2,minmax(0,1fr)))}.hiw,.vwall{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}.letter{grid-template-columns:1fr}}
+@media (max-width:520px){.cols{grid-template-columns:var(--cols-mobile,minmax(0,1fr))}.hiw{grid-template-columns:1fr}.tl li{grid-template-columns:1fr;gap:.2rem}}
 `

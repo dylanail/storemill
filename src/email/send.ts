@@ -82,6 +82,37 @@ export async function sendCustomEmail(
   return deliver(db, storeId, { template: input.template, to: input.to, subject, html })
 }
 
+/**
+ * An email about the account rather than about a store: the password reset.
+ * It cannot go through sendEmail, which is scoped to a store and writes to
+ * that store's outbox — the person who has forgotten their password may not
+ * have a store at all, and the reset is not any store's business.
+ *
+ * With no sending key configured the link goes to the server log, where the
+ * operator running the process can read it. It is never shown in the browser:
+ * anyone can type an email address into a forgot form, and a link on that page
+ * would hand them the account.
+ */
+export async function sendAccountEmail(input: { to: string; subject: string; html: string }): Promise<'sent' | 'logged' | 'failed'> {
+  const apiKey = process.env.RESEND_API_KEY
+  if (!apiKey) {
+    log.info(`(no RESEND_API_KEY) "${input.subject}" for ${input.to}:\n${input.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}`)
+    return 'logged'
+  }
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `storemill <accounts@${process.env.AMBORAS_EMAIL_DOMAIN ?? 'amboras.app'}>`, to: input.to, subject: input.subject, html: input.html }),
+    })
+    if (!response.ok) throw new Error(`Resend replied ${response.status}`)
+    return 'sent'
+  } catch (error) {
+    log.warn(`could not send "${input.subject}" to ${input.to}: ${error instanceof Error ? error.message : String(error)}`)
+    return 'failed'
+  }
+}
+
 export function orderContext(order: Order, storeUrl: string) {
   return {
     order: {

@@ -8,6 +8,7 @@ import { enhance, generate, PRESETS, type PresetId } from '../images.ts'
 import { authorContentFor, authorProductContent } from '../pages.ts'
 import { modelFor } from '../models.ts'
 import { latestResearch, rulesResearch } from '../research.ts'
+import { labelShot, PHOTO_BRIEFS } from '../../creative/briefs.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id)
@@ -76,12 +77,17 @@ export const productTools: Tool[] = defineTools([
       const combos = options.length
         ? cartesian(options.map((option) => option.values.map((entry) => ({ [option.title]: entry.value }))))
         : [[{}]]
-      const variants = combos.map((combo, index) => {
+      // Every variant is the price that was asked for. There used to be a
+      // silent surcharge of 5% of the base per variant index, documented
+      // nowhere and reported in no summary, so "a $240 jacket in S/M/L/XL"
+      // quietly priced XL at $276. A size premium is the merchant's decision,
+      // made on the product page.
+      const variants = combos.map((combo) => {
         const optionValues = Object.assign({}, ...combo) as Record<string, string>
         const label = Object.values(optionValues).join(' / ') || 'Default'
         return {
           title: label,
-          priceCents: price + index * Math.round(price * 0.05),
+          priceCents: price,
           inventory: (args.inventory as number) ?? 25,
           optionValues,
         }
@@ -359,6 +365,7 @@ export const productTools: Tool[] = defineTools([
       productId: { type: 'string', required: true },
       upload: { type: 'string', required: true, pattern: '^/_uploads/', help: 'The upload URL.' },
       preset: { type: 'string', enum: PRESET_IDS as unknown as string[], default: 'white-seamless' },
+      shot: { type: 'string', enum: PHOTO_BRIEFS.map((brief) => brief.id), help: 'Which brief from the photo checklist this satisfies. It goes in the alt text, which is what the Creative page counts coverage from.' },
     },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
@@ -372,12 +379,18 @@ export const productTools: Tool[] = defineTools([
         reference: args.upload as string,
         ...(store?.brand ? { palette: store.brand } : {}),
       })
+      const shot = (args.shot as string) ?? ''
       updateProduct(ctx.db, ctx.storeId, product.id, {
         heroImage: staged,
-        media: [{ url: staged, alt: `${product.title}, ${args.preset}` }, { url: args.upload as string, alt: `${product.title}, original photo` }, ...product.media].slice(0, 8),
+        media: [
+          { url: staged, alt: labelShot(`${product.title}, ${args.preset}`, shot) },
+          { url: args.upload as string, alt: labelShot(`${product.title}, original photo`, shot) },
+          ...product.media,
+        ].slice(0, 8),
       })
+      const brief = PHOTO_BRIEFS.find((entry) => entry.id === shot)
       return {
-        summary: `${product.title} now leads with your photo, staged as ${args.preset}. The original is kept in the gallery.`,
+        summary: `${product.title} now leads with your photo, staged as ${args.preset}${brief ? `, labelled as the ${brief.name.toLowerCase()} shot` : ''}. The original is kept in the gallery.`,
         artifacts: [{ type: 'image', urls: [staged, args.upload as string], caption: `${product.title}: staged and original` }],
       }
     },

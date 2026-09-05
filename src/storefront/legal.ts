@@ -58,6 +58,8 @@ type Facts = {
   hasReviews: boolean
   hasSubscriptions: boolean
   freeShippingAbove: string
+  /** Advertising measurement actually installed on this store, by name. */
+  pixels: string[]
 }
 
 function facts(db: Db, store: Store): Facts {
@@ -77,11 +79,76 @@ function facts(db: Db, store: Store): Facts {
     hasReviews: plugins.includes('product-reviews') || (db.one<{ c: number }>('SELECT COUNT(*) c FROM reviews WHERE store_id = ?', store.id)?.c ?? 0) > 0,
     hasSubscriptions: subscriptions > 0,
     freeShippingAbove: threshold?.free_above_cents ? `${(threshold.free_above_cents / 100).toFixed(0)} ${store.currency}` : '',
+    // The advertising pixels this store actually has installed. The Analytics
+    // clause asserted cookie-free counting and "nothing is sold or shared for
+    // advertising" on a page that was firing fbq('track','PageView') three
+    // lines above it.
+    pixels: plugins.filter((plugin) => ['meta-pixel', 'tiktok-pixel', 'ga4', 'google-ads', 'pinterest-tag', 'snap-pixel'].includes(plugin)).map((plugin) => PIXEL_NAMES[plugin] ?? plugin),
   }
+}
+
+const PIXEL_NAMES: Record<string, string> = {
+  'meta-pixel': 'Meta (Facebook and Instagram)',
+  'tiktok-pixel': 'TikTok',
+  ga4: 'Google Analytics',
+  'google-ads': 'Google Ads',
+  'pinterest-tag': 'Pinterest',
+  'snap-pixel': 'Snap',
 }
 
 const e = escapeHtml
 const paragraphs = (text: string) => text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).map((part) => `<p>${e(part)}</p>`).join('')
+
+/**
+ * Shipping and returns, from how the store is actually configured.
+ *
+ * This was the one built-in policy page still hardcoded: every store served
+ * the demo's fourteen-day build times, a currency-less "Free shipping over
+ * 200" and a joke about boxing gear, from the footer of every page.
+ */
+export function shippingHtml(db: Db, store: Store): string {
+  const legal = legalFor(db, store)
+  const f = facts(db, store)
+  const rates = db.all<{ name: string; amount_cents: number; free_above_cents: number | null; region: string; currency: string }>(
+    `SELECT s.name, s.amount_cents, s.free_above_cents, r.name region, r.currency
+     FROM shipping_options s JOIN regions r ON r.id = s.region_id
+     WHERE r.store_id = ? ORDER BY r.is_default DESC, r.name, s.position`,
+    store.id,
+  )
+  const windows = db
+    .all<{ min: number | null; max: number | null; processing: number | null }>(
+      `SELECT json_extract(supplier, '$.shippingDaysMin') min, json_extract(supplier, '$.shippingDaysMax') max,
+              json_extract(supplier, '$.processingDays') processing
+       FROM products WHERE store_id = ? AND status = 'published'`,
+      store.id,
+    )
+    .filter((row) => row.min !== null && row.max !== null)
+  const lead = windows.length
+    ? (() => {
+        const from = Math.min(...windows.map((row) => (row.processing ?? 0) + (row.min ?? 0)))
+        const to = Math.max(...windows.map((row) => (row.processing ?? 0) + (row.max ?? 0)))
+        return `<p>Orders are prepared and then shipped; most arrive ${from}–${to} days after you order. The estimate on each product page is the one for that product.</p>`
+      })()
+    : '<p>Delivery times are shown on each product page where they are known for that product.</p>'
+  return `
+<p><em>Last updated ${e(legal.updatedAt.slice(0, 10))}.</em></p>
+<h3>What it costs</h3>
+${rates.length
+    ? `<table class="lines">${rates
+        .map(
+          (rate) =>
+            `<tr><td>${e(rate.region)} — ${e(rate.name)}</td><td>${rate.amount_cents ? `${(rate.amount_cents / 100).toFixed(2)} ${e(rate.currency)}` : 'Free'}${rate.free_above_cents ? `, free over ${(rate.free_above_cents / 100).toFixed(0)} ${e(rate.currency)}` : ''}</td></tr>`,
+        )
+        .join('')}</table>`
+    : '<p>Shipping is calculated at checkout.</p>'}
+${f.freeShippingAbove ? `<p>Orders over ${e(f.freeShippingAbove)} ship free.</p>` : ''}
+<h3>How long it takes</h3>
+${lead}
+<h3>Returns</h3>
+<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange, as long as it is in the condition you received it. Where a product page states a ${legal.guaranteeDays}-day money-back guarantee, that guarantee applies as written there.</p>
+${legal.email ? `<p>Start a return by emailing <a href="mailto:${e(legal.email)}">${e(legal.email)}</a>.</p>` : '<p>Start a return through the contact page.</p>'}
+<p class="micro">This page is generated from the store's own shipping rates, delivery windows and returns window, and updates when they change.</p>`
+}
 
 export function privacyHtml(db: Db, store: Store): string {
   const legal = legalFor(db, store)
@@ -96,7 +163,11 @@ export function privacyHtml(db: Db, store: Store): string {
 <li><strong>Orders.</strong> Your name, email, shipping address and what you bought, kept so we can fulfil the order, answer questions about it and meet tax and accounting obligations.</li>
 <li><strong>Payment.</strong> ${f.hasStripe ? 'Card details go directly to Stripe and never touch our servers; we keep the payment reference Stripe returns.' : 'Card details are handled by the payment provider shown at checkout and are not stored by us.'}</li>
 <li><strong>Email.</strong> Order confirmations, shipping updates and, only if you ticked the box or signed up, marketing email you can leave with one click.${f.hasEmail ? ' Opens and clicks on those emails are counted.' : ''}</li>
-<li><strong>Analytics.</strong> We count visits with a first-party, cookie-free method: a hash of your network address and browser that changes every day and cannot identify you across sites. We also record how far a page was scrolled, which sections were seen and which buttons were used, to improve the pages. Nothing is sold or shared for advertising.</li>
+<li><strong>Analytics.</strong> We count visits with a first-party, cookie-free method: a hash of your network address and browser that changes every day and cannot identify you across sites. We also record how far a page was scrolled, which sections were seen and which buttons were used, to improve the pages. ${
+  f.pixels.length
+    ? `This store also loads advertising measurement from ${e(f.pixels.join(', '))}, which set their own cookies and receive the pages you view and the orders you place so we can measure our advertising. Their own policies govern what they do with it, and your browser's tracking controls apply to them.`
+    : 'Nothing is sold or shared for advertising.'
+}</li>
 ${f.hasReviews ? '<li><strong>Reviews and questions.</strong> The name and text you submit with a review or a question are shown publicly with the product once approved.</li>' : ''}
 ${f.hasSubscriptions ? '<li><strong>Subscriptions.</strong> If you subscribe, we keep the schedule and the saved payment reference needed to charge each delivery until you cancel.</li>' : ''}
 <li><strong>Cart.</strong> A cookie holds your cart id for thirty days so what you add is still there when you come back. It contains nothing else.</li>

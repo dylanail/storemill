@@ -38,6 +38,25 @@ export function listCustomBlocks(db: Db, storeId: string): CustomBlock[] {
   return db.all('SELECT * FROM custom_blocks WHERE store_id = ? ORDER BY created_at', storeId).map(rowToBlock)
 }
 
+/**
+ * Custom definitions are part of this personal owner's library, even when
+ * they were first made while editing another asset. Prefer a local definition
+ * when two assets happened to use the same type name.
+ */
+export function listAvailableCustomBlocks(db: Db, storeId: string): CustomBlock[] {
+  const rows = db.all(
+    `SELECT cb.* FROM custom_blocks cb
+     JOIN stores source ON source.id = cb.store_id
+     JOIN stores current ON current.id = ?
+     WHERE source.owner_id = current.owner_id
+     ORDER BY CASE WHEN cb.store_id = ? THEN 0 ELSE 1 END, cb.updated_at DESC`,
+    storeId,
+    storeId,
+  ).map(rowToBlock)
+  const seen = new Set<string>()
+  return rows.filter((block) => seen.has(block.type) ? false : (seen.add(block.type), true))
+}
+
 export function getCustomBlock(db: Db, storeId: string, typeOrId: string): CustomBlock | null {
   const row = db.one('SELECT * FROM custom_blocks WHERE store_id = ? AND (type = ? OR id = ?)', storeId, typeOrId, typeOrId)
   return row ? rowToBlock(row) : null
@@ -76,7 +95,7 @@ export function deleteCustomBlock(db: Db, storeId: string, typeOrId: string) {
 /** The store's blocks as definitions, skipping any whose stored template no longer validates. */
 export function customDefinitions(db: Db, storeId: string): BlockDefinition[] {
   const out: BlockDefinition[] = []
-  for (const block of listCustomBlocks(db, storeId)) {
+  for (const block of listAvailableCustomBlocks(db, storeId)) {
     try { out.push(customDefinition(block)) } catch { /* a broken one is left out of the palette, never breaks a page */ }
   }
   return out
@@ -84,5 +103,5 @@ export function customDefinitions(db: Db, storeId: string): BlockDefinition[] {
 
 /** A catalog entry for the model: what the store's own blocks are, in one line each. */
 export function customCatalog(db: Db, storeId: string): Array<{ type: string; name: string; description: string; fields: string[] }> {
-  return listCustomBlocks(db, storeId).map((block) => ({ type: block.type, name: block.name, description: block.description ?? '', fields: block.fields.map((field) => field.key) }))
+  return listAvailableCustomBlocks(db, storeId).map((block) => ({ type: block.type, name: block.name, description: block.description ?? '', fields: block.fields.map((field) => field.key) }))
 }

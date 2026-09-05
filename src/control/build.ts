@@ -1,5 +1,6 @@
 import { json, now, type Db } from '../lib/db.ts'
 import type { BlockInstance } from '../pages/blocks.ts'
+import { environment, setTheme } from './stores.ts'
 
 /**
  * The guided build.
@@ -55,6 +56,8 @@ export type BuildState = {
   answers: Record<string, BuildAnswer>
   skipped: string[]
   startedAt: string
+  /** The owner has actually made the shape and front-door decision, rather than inheriting the mode's default. */
+  shapeConfirmed?: boolean
 }
 
 export const SHAPES: Array<{ id: SiteShape; name: string; description: string; pages: string }> = [
@@ -77,6 +80,24 @@ export const DOORS: Array<{ id: FrontDoor; name: string; description: string }> 
   { id: 'quiz', name: 'Quiz', description: 'Three to six questions, one per screen, each answer a label the buyer uses for themselves; the result names them and shows the offer built for them.' },
 ]
 
+/**
+ * What happens after publish, which is where the order of work used to stop.
+ *
+ * A published store is not a launched one: it takes money only once Stripe is
+ * connected, it answers at its own address only once the domain is verified,
+ * and it sells nothing at all until an ad runs and the spend behind it is
+ * written down. The course's own order ends with reading the numbers against
+ * breakeven and deciding — so the build ends there too, rather than at a green
+ * "Published" and a shrug.
+ */
+export const LAUNCH_STEPS: BuildStep[] = [
+  { key: 'payments', label: 'Connect Stripe and put one order through', detail: 'Keys in, webhook set, one real order through the live checkout before a pound of ad spend. A store that cannot take money converts at zero.', href: '/settings/payments' },
+  { key: 'domain', label: 'Connect the domain', detail: 'The records for your registrar, verification, and SSL issued. Ads that land on a platform subdomain cost trust and, on some accounts, get rejected.', href: '/domains' },
+  { key: 'ads', label: 'Write the ads for the angle', detail: 'The plan names the concepts; the ad writer fills them in inside each platform\'s limits, quoting only approved reviews.', href: '/ads' },
+  { key: 'launch', label: 'Run the first test and record the spend', detail: 'Statics first as a marksman test across the sub-avatars, then a sniper video on what got traction. Record the spend each day: every number that follows is against it.', href: '/profit#spend' },
+  { key: 'read', label: 'Read it against breakeven and decide', detail: 'Breakeven ROAS is 1 ÷ gross margin, target is that plus one. Revenue per session against the cost per click says whether it is the page, the price or the traffic. Write the loop down: what is failing, what is working, what you will change.', href: '/market#loops' },
+]
+
 export const MODES: Array<{ id: BuildMode; name: string; description: string; steps: BuildStep[] }> = [
   {
     id: 'own-product',
@@ -97,6 +118,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the pages the shape needs', detail: 'The page plan lists every page the shape and the front door call for, which exist, and a template for each one missing.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell; the checkout reads them.', href: '/bundles' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Privacy and terms are generated; the popup is optional; behaviour tracking is on; then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
   {
@@ -112,6 +134,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the rest of the pages', detail: 'The page plan lists what the shape still needs beyond the pages you read: the front door, the checkout offers, the popup.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell.', href: '/funnels' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Generated legal pages, the optional popup, tracking on, then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
   {
@@ -129,6 +152,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the rest of the pages', detail: 'The page plan lists what the shape still needs beyond the pages you read.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell.', href: '/funnels' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Generated legal pages, the optional popup, tracking on, then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
 ]
@@ -152,7 +176,7 @@ export function modeById(id: string): (typeof MODES)[number] | null {
 export function buildState(db: Db, storeId: string): BuildState {
   const row = db.one<{ build: string }>('SELECT build FROM stores WHERE id = ?', storeId)
   const stored = json<Partial<BuildState>>(row?.build, {})
-  return { mode: stored.mode ?? '', shape: stored.shape ?? '', doors: stored.doors ?? [], popup: stored.popup ?? '', answers: stored.answers ?? {}, skipped: stored.skipped ?? [], startedAt: stored.startedAt ?? '' }
+  return { mode: stored.mode ?? '', shape: stored.shape ?? '', doors: stored.doors ?? [], popup: stored.popup ?? '', answers: stored.answers ?? {}, skipped: stored.skipped ?? [], startedAt: stored.startedAt ?? '', shapeConfirmed: stored.shapeConfirmed ?? false }
 }
 
 function save(db: Db, storeId: string, state: BuildState) {
@@ -163,7 +187,11 @@ export function setBuildMode(db: Db, storeId: string, mode: BuildMode): BuildSta
   if (!modeById(mode)) throw new Error('No such build mode')
   const state = buildState(db, storeId)
   // Copying a funnel implies a funnel until the owner says otherwise; a
-  // product of one's own is more often a store. Either can be changed.
+  // product of one's own is more often a store. Either can be changed — and
+  // the plan needs a shape to list anything, so the default stands. What it
+  // does not do is answer the question for them: `shapeConfirmed` is set only
+  // when the owner presses save on the shape card, so step one stays open
+  // until the front-door and popup decisions in it have actually been made.
   const shape: SiteShape | '' = state.shape || (mode === 'own-product' ? 'store' : 'funnel')
   const next = { ...state, mode, shape, startedAt: state.startedAt || now() }
   save(db, storeId, next)
@@ -186,7 +214,17 @@ export function setSiteShape(db: Db, storeId: string, input: { shape?: string; d
     const known = new Set(DOORS.map((door) => door.id))
     next.doors = [...new Set(input.doors.filter((door): door is FrontDoor => known.has(door as FrontDoor)))]
   }
-  if (input.popup !== undefined) next.popup = input.popup === 'yes' ? 'yes' : input.popup === 'no' ? 'no' : ''
+  next.shapeConfirmed = true
+  if (input.popup !== undefined) {
+    next.popup = input.popup === 'yes' ? 'yes' : input.popup === 'no' ? 'no' : ''
+    // The decision has to reach the thing it decides. It used to live only in
+    // the build state and control whether a Popup row appeared in the plan,
+    // while the storefront read theme.popup.enabled and kept showing one.
+    if (next.popup === 'no') {
+      const theme = environment(db, storeId, 'draft').theme
+      if (theme.popup?.enabled) setTheme(db, storeId, { popup: { ...theme.popup, enabled: false } })
+    }
+  }
   next.startedAt = next.startedAt || now()
   save(db, storeId, next)
   return next
@@ -200,7 +238,10 @@ export function saveAnswers(db: Db, storeId: string, input: Record<string, { val
     const given = input[question.key]
     if (!given) continue
     const value = (given.value ?? '').trim()
-    const unknown = Boolean(given.unknown) || !value
+    // Typing an answer is knowing it. The card leaves "I don't know" ticked on
+    // an assumed answer and tells the owner to type it in to confirm — and the
+    // tick used to win, so what they typed was thrown away.
+    const unknown = !value
     const previous = answers[question.key]
     answers[question.key] = { value: unknown ? '' : value, unknown, ...(unknown && previous?.assumed ? { assumed: previous.assumed } : {}) }
   }
@@ -284,16 +325,41 @@ function worldFacts(db: Db, storeId: string, state: BuildState): Record<string, 
   const ripped = count("SELECT COUNT(*) c FROM pages WHERE store_id = ? AND source_url != ''")
   const reviews = count("SELECT COUNT(*) c FROM reviews WHERE store_id = ? AND status = 'approved'")
   const briefs = count("SELECT COUNT(*) c FROM creative_queue WHERE store_id = ? AND kind = 'photo-brief'")
+  // Reviewing the photos against the briefs is deciding on each one, not
+  // generating the list: queueing the briefs is what creates the work.
+  const briefsReviewed = count("SELECT COUNT(*) c FROM creative_queue WHERE store_id = ? AND kind = 'photo-brief' AND status != 'pending'")
   const vetted = count("SELECT COUNT(*) c FROM creative_queue WHERE store_id = ? AND status != 'pending'")
   const bundles = count("SELECT COUNT(*) c FROM bundles WHERE store_id = ? AND status = 'active'")
   const funnels = count('SELECT COUNT(*) c FROM funnels WHERE store_id = ?')
   const live = db.one<{ status: string }>('SELECT status FROM stores WHERE id = ?', storeId)?.status === 'live'
-  const answered = Object.keys(state.answers).length
+  // After publish. A published store is not a launched one.
+  const stripeReady = count("SELECT COUNT(*) c FROM store_plugins WHERE store_id = ? AND plugin_id = 'stripe' AND enabled = 1") > 0
+  const paidOrders = count("SELECT COUNT(*) c FROM orders WHERE store_id = ? AND payment_status = 'paid'")
+  const verifiedDomains = count("SELECT COUNT(*) c FROM domains WHERE store_id = ? AND status = 'verified'")
+  const ads = count('SELECT COUNT(*) c FROM ads WHERE store_id = ?')
+  const spendCents = db.one<{ c: number }>('SELECT COALESCE(SUM(amount_cents), 0) c FROM ad_spend WHERE store_id = ?', storeId)?.c ?? 0
+  const spendDays = count('SELECT COUNT(DISTINCT day) c FROM ad_spend WHERE store_id = ?')
+  const loopsWithOutcome = count("SELECT COUNT(*) c FROM market_docs WHERE store_id = ? AND kind = 'loop' AND trim(COALESCE(json_extract(body, '$.outcome'), '')) != ''")
+  // Answers, not keys: saveAnswers writes an entry for all eight questions on
+  // every save, so counting keys made one submit of an empty form report
+  // "8 of 8 questions answered".
+  const answered = Object.values(state.answers).filter((entry) => entry.value.trim() || entry.assumed).length
   const plan = pagePlan(db, storeId, state)
-  const missing = plan.pages.filter((entry) => entry.status === 'missing' && !entry.optional)
+  // Bundle tiers, the checkout's bump and the upsell are the offer step's work
+  // and appear in the plan for completeness; the pages step is about pages, and
+  // could only be finished by finishing the step after it.
+  const OFFER_ROWS = new Set(['bundle', 'checkout', 'upsell'])
+  const missing = plan.pages.filter((entry) => entry.status !== 'done' && entry.status !== 'built-in' && !entry.optional && !OFFER_ROWS.has(entry.key))
   return {
-    shape: { done: Boolean(state.shape), why: state.shape ? `${shapeById(state.shape)?.name ?? state.shape}${state.doors.length ? ` with ${state.doors.join(' and ')} in front` : ', the ad lands on it directly'}${state.popup ? `, popup ${state.popup}` : ''}` : 'Store or funnel not chosen yet' },
-    pages: { done: Boolean(state.shape) && missing.length === 0, why: !state.shape ? 'Needs the shape first' : missing.length ? `Missing: ${missing.map((entry) => entry.label).join(', ')}` : `Every page the ${state.shape} needs exists` },
+    shape: { done: Boolean(state.shape) && Boolean(state.shapeConfirmed), why: state.shape ? `${shapeById(state.shape)?.name ?? state.shape}${state.doors.length ? ` with ${state.doors.join(' and ')} in front` : ', the ad lands on it directly'}${state.popup ? `, popup ${state.popup}` : ''}${state.shapeConfirmed ? '' : ' — a starting point; confirm it and the front door'}` : 'Store or funnel not chosen yet' },
+    pages: {
+      done: Boolean(state.shape) && missing.length === 0,
+      why: !state.shape
+        ? 'Needs the shape first'
+        : missing.length
+          ? `${missing.map((entry) => `${entry.label} (${entry.status === 'draft' ? 'draft' : 'missing'})`).join(', ')}`
+          : `Every page the ${state.shape} needs is published`,
+    },
     images: { done: withImages > 0, why: withImages ? `${withImages} product${withImages === 1 ? '' : 's'} with an image` : products ? 'Products exist but none has an image yet' : 'No products yet' },
     reference: { done: withSheet > 0, why: withSheet ? 'A reference sheet has been rendered' : 'No renders yet' },
     guidance: { done: answered > 0, why: answered ? `${answered} of ${QUESTIONS.length} questions answered` : 'Nothing answered yet' },
@@ -304,10 +370,15 @@ function worldFacts(db: Db, storeId: string, state: BuildState): Record<string, 
     angle: { done: selected > 0 && analysis > 0, why: selected && analysis ? 'An avatar is on and the analysis names the reset' : 'Needs the analysis and an avatar turned on' },
     copy: { done: versions > 0, why: versions ? `${versions} page version${versions === 1 ? '' : 's'}` : 'No versions written yet' },
     proof: { done: reviews > 0 || vetted > 0, why: reviews ? `${reviews} approved reviews` : vetted ? 'Creative has been vetted' : 'No reviews or vetted creative yet' },
-    photos: { done: briefs > 0, why: briefs ? 'Photo briefs reviewed' : 'Photos not reviewed against the briefs yet' },
+    photos: { done: briefs > 0 && briefsReviewed === briefs, why: !briefs ? 'Briefs not generated yet' : briefsReviewed ? `${briefsReviewed} of ${briefs} briefs decided` : `${briefs} briefs queued, none reviewed yet` },
     offer: { done: bundles > 0 || funnels > 0, why: bundles ? 'Bundle tiers set' : funnels ? 'A funnel exists' : 'No bundle or funnel yet' },
     rip: { done: ripped > 0, why: ripped ? `${ripped} page${ripped === 1 ? '' : 's'} read from a funnel` : 'Nothing read yet' },
     ship: { done: live, why: live ? 'Published' : 'Not published yet' },
+    payments: { done: stripeReady, why: stripeReady ? (paidOrders ? `Stripe connected, ${paidOrders} paid order${paidOrders === 1 ? '' : 's'} through it` : 'Stripe connected — put one order through before you spend on ads') : 'No payment provider connected; the checkout cannot take money' },
+    domain: { done: verifiedDomains > 0, why: verifiedDomains ? `${verifiedDomains} domain${verifiedDomains === 1 ? '' : 's'} verified` : 'Running on the platform address' },
+    ads: { done: ads > 0, why: ads ? `${ads} ad${ads === 1 ? '' : 's'} written` : 'No ads written yet' },
+    launch: { done: spendCents > 0, why: spendCents > 0 ? `${(spendCents / 100).toFixed(2)} of spend recorded across ${spendDays} day${spendDays === 1 ? '' : 's'}` : 'No spend recorded, so nothing can be measured against it' },
+    read: { done: loopsWithOutcome > 0, why: loopsWithOutcome ? `${loopsWithOutcome} loop${loopsWithOutcome === 1 ? '' : 's'} closed with an outcome` : spendCents > 0 ? 'Spend is running and no loop has been written yet' : 'Needs a test to read' },
   }
 }
 
@@ -322,13 +393,14 @@ export type PlanPage = {
   /** The template under Pages that makes this page, when it is a page. */
   template?: 'advertorial' | 'quiz' | 'offer' | 'sales' | 'landing'
   optional: boolean
-  status: 'done' | 'missing' | 'built-in'
+  /** 'draft' is written but not published, so the storefront still 404s it. */
+  status: 'done' | 'draft' | 'missing' | 'built-in'
   why: string
   /** Where to go: the page's editor when it exists, else where it is made. */
   href: string
 }
 
-type PageRow = { id: string; kind: string; role: string; blocks: string; is_home: number; product_id: string }
+type PageRow = { id: string; kind: string; role: string; blocks: string; is_home: number; product_id: string; status: string; source_url: string }
 
 function hasBlock(row: PageRow, type: string): boolean {
   return json<BlockInstance[]>(row.blocks, []).some((block) => block.type === type)
@@ -344,7 +416,7 @@ export function pagePlan(db: Db, storeId: string, given?: BuildState): { shape: 
   const state = given ?? buildState(db, storeId)
   const pages: PlanPage[] = []
   if (!state.shape) return { shape: '', doors: state.doors, popup: state.popup, pages }
-  const rows = db.all<PageRow>('SELECT id, kind, role, blocks, is_home, product_id FROM pages WHERE store_id = ? ORDER BY updated_at DESC', storeId)
+  const rows = db.all<PageRow>('SELECT id, kind, role, blocks, is_home, product_id, status, source_url FROM pages WHERE store_id = ? ORDER BY updated_at DESC', storeId)
   const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", storeId)?.c ?? 0
   const withPage = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published' AND hero_image != '' AND description != ''", storeId)?.c ?? 0
   const funnel = db.one<{ id: string; offer_page_id: string; upsell: string; bump: string }>("SELECT id, offer_page_id, upsell, bump FROM funnels WHERE store_id = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1", storeId)
@@ -355,14 +427,30 @@ export function pagePlan(db: Db, storeId: string, given?: BuildState): { shape: 
 
   const advertorial = rows.find((row) => row.kind === 'advertorial' || row.role === 'advertorial')
   const quiz = rows.find((row) => hasBlock(row, 'quiz'))
-  const offer = rows.find((row) => row.role === 'offer' || (row.kind === 'landing' && row.role !== 'pdp' && (hasBlock(row, 'buy-box') || hasBlock(row, 'bundle-offer') || hasBlock(row, 'offer-box'))))
+  // The quiz template is a landing page with a buy box on it, so it used to
+  // satisfy this row too and the sales page could never be created from the
+  // plan. A ripped page is written with role 'pdp' and was invisible here,
+  // which left "Copy a funnel" demanding the page its first two steps had
+  // just produced.
+  const offer = rows.find(
+    (row) =>
+      row.id !== quiz?.id &&
+      (row.role === 'offer' ||
+        (row.source_url && row.kind !== 'advertorial') ||
+        (row.kind === 'landing' && row.role !== 'pdp' && (hasBlock(row, 'buy-box') || hasBlock(row, 'bundle-offer') || hasBlock(row, 'offer-box')))),
+  )
+  // A page the storefront will not serve is not done. Every generator here
+  // writes drafts by default, so the plan could report a complete site whose
+  // sales page and advertorial both 404.
+  const built = (row: PageRow | undefined, made: string): { status: PlanPage['status']; why: string } =>
+    !row ? { status: 'missing', why: '' } : row.status === 'published' ? { status: 'done', why: made } : { status: 'draft', why: `${made}, but it is still a draft — publish it or the storefront serves a 404` }
   const home = rows.find((row) => row.is_home === 1)
   const versions = rows.filter((row) => row.role === 'pdp').length
 
   const door = (which: FrontDoor): PlanPage =>
     which === 'advertorial'
-      ? { key: 'advertorial', label: 'Advertorial', detail: 'Publication bar, editorial headline, byline, the lead, numbered reasons or story beats with an image each, the offer after the teaching, FAQ, guarantee, comments, the disclaimer. Links to the product page or the sales page.', builtIn: false, template: 'advertorial', optional: false, status: advertorial ? 'done' : 'missing', why: advertorial ? 'An advertorial exists' : 'No advertorial yet', href: editor(advertorial) }
-      : { key: 'quiz', label: 'Quiz', detail: 'One question per screen, a progress bar, a result that names the buyer and shows the offer for them. Every step is an event.', builtIn: false, template: 'quiz', optional: false, status: quiz ? 'done' : 'missing', why: quiz ? 'A page with a quiz exists' : 'No quiz yet', href: editor(quiz) }
+      ? { key: 'advertorial', label: 'Advertorial', detail: 'Publication bar, editorial headline, byline, the lead, numbered reasons or story beats with an image each, the offer after the teaching, FAQ, guarantee, comments, the disclaimer. Links to the sales page — the funnel supplies the link.', builtIn: false, template: 'advertorial', optional: false, ...built(advertorial, 'An advertorial exists'), why: built(advertorial, 'An advertorial exists').why || 'No advertorial yet', href: editor(advertorial) }
+      : { key: 'quiz', label: 'Quiz', detail: 'One question per screen, a progress bar, a result that names the buyer and shows the offer for them. Every step is an event.', builtIn: false, template: 'quiz', optional: false, ...built(quiz, 'A page with a quiz exists'), why: built(quiz, 'A page with a quiz exists').why || 'No quiz yet', href: editor(quiz) }
 
   for (const which of state.doors) pages.push(door(which))
 
@@ -376,7 +464,7 @@ export function pagePlan(db: Db, storeId: string, given?: BuildState): { shape: 
     )
   } else {
     pages.push(
-      { key: 'sales', label: 'Sales page', detail: 'The saving and the timer above the fold, the trust bar, the problem, the failed alternatives, the mechanism, how it works, proof, the buy box with the tiers, the education for the sceptic, FAQ, reviews, the sticky button. Long form (the sales page) or short (the offer page).', builtIn: false, template: 'sales', optional: false, status: offer ? 'done' : 'missing', why: offer ? 'A sales or offer page exists' : 'No sales page yet', href: editor(offer) },
+      { key: 'sales', label: 'Sales page', detail: 'The saving and the timer above the fold, the trust bar, the problem, the failed alternatives, the mechanism, how it works, proof, the buy box with the tiers, the education for the sceptic, FAQ, reviews, the sticky button. Long form (the sales page) or short (the offer page).', builtIn: false, template: 'sales', optional: false, ...built(offer, 'A sales or offer page exists'), why: built(offer, 'A sales or offer page exists').why || 'No sales page yet', href: editor(offer) },
       { key: 'bundle', label: 'Bundle tiers on the buy box', detail: 'Buy 1, 2, 3 with the per-unit price, the saving in the bigger number, a badge on the tier to pick, free shipping and a gift on the higher tiers.', builtIn: true, optional: false, status: bundles > 0 ? 'done' : 'missing', why: bundles ? 'Bundle tiers set' : 'No bundle yet', href: '/bundles' },
       { key: 'checkout', label: 'Checkout with the order bump', detail: 'One page, no navigation: order summary with the bump ticked off, express pay first, one form, the guarantee beside the button.', builtIn: true, optional: false, status: funnel?.offer_page_id ? 'done' : 'missing', why: funnel?.offer_page_id ? `The funnel has its offer page${json<{ variantId?: string; enabled?: boolean }>(funnel.bump, {}).variantId ? ' and a bump' : ''}` : funnel ? 'A funnel exists but no offer page is set on it' : 'No funnel yet', href: '/funnels' },
       { key: 'upsell', label: 'One-click upsell and downsell', detail: 'After payment, the saved card buys the upsell in one click; the downsell shows only if the upsell is declined.', builtIn: true, optional: true, status: funnel && json<{ variantId?: string }>(funnel.upsell, {}).variantId ? 'done' : 'missing', why: funnel && json<{ variantId?: string }>(funnel.upsell, {}).variantId ? 'Upsell set' : 'No upsell chosen', href: '/funnels' },

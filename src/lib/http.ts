@@ -68,7 +68,10 @@ function matchSegments(segments: string[], parts: string[]): Record<string, stri
     }
     const part = parts[i]
     if (part === undefined) return null
-    if (segment.startsWith(':')) params[segment.slice(1)] = decodeURIComponent(part)
+    if (segment.startsWith(':')) {
+      try { params[segment.slice(1)] = decodeURIComponent(part) }
+      catch { throw badRequest('Invalid URL encoding') }
+    }
     else if (segment !== part) return null
   }
   return segments.length === parts.length || segments.at(-1) === '*' ? params : null
@@ -111,10 +114,12 @@ export class Raw {
   readonly body: Buffer | string
   readonly contentType: string
   readonly headers: Record<string, string>
-  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}) {
+  readonly status: number
+  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}, status = 200) {
     this.body = body
     this.contentType = contentType
     this.headers = headers
+    this.status = status
   }
 }
 
@@ -128,7 +133,9 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
   // it every absolute link the admin builds would say http://.
   const forwarded = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim().toLowerCase()
   const protocol = forwarded === 'https' ? 'https' : 'http'
-  const url = new URL(req.url ?? '/', `${protocol}://${host}`)
+  let url: URL
+  try { url = new URL(req.url ?? '/', `${protocol}://${host}`) }
+  catch { throw badRequest('Invalid request URL or host') }
   let cached: Buffer | null = null
   const raw = async () => {
     if (cached) return cached
@@ -136,7 +143,9 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
     let size = 0
     for await (const chunk of req) {
       size += (chunk as Buffer).length
-      if (size > 8 * 1024 * 1024) throw badRequest('Request body too large')
+      // The media upload route authenticates before reading a video body. Other routes keep the small default limit.
+      const limit = url.pathname === '/admin/media/upload' ? 101 * 1024 * 1024 : url.pathname === '/admin/media/rebrand' ? 13 * 1024 * 1024 : 8 * 1024 * 1024
+      if (size > limit) throw badRequest('Request body too large')
       chunks.push(chunk as Buffer)
     }
     cached = Buffer.concat(chunks)
@@ -233,13 +242,19 @@ function parseCookies(header?: string): Record<string, string> {
   for (const pair of header.split(';')) {
     const index = pair.indexOf('=')
     if (index === -1) continue
-    out[pair.slice(0, index).trim()] = decodeURIComponent(pair.slice(index + 1).trim())
+    // A corrupt or unrelated cookie must not prevent the whole site loading.
+    try { out[pair.slice(0, index).trim()] = decodeURIComponent(pair.slice(index + 1).trim()) }
+    catch { /* Ignore only the malformed cookie, retaining valid session cookies. */ }
   }
   return out
 }
 
 export function setCookie(res: ServerResponse, name: string, value: string, options: { maxAge?: number; httpOnly?: boolean; path?: string } = {}) {
   const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${options.path ?? '/'}`, 'SameSite=Lax']
+  // Secure wherever the deployment is served over TLS — which is every real
+  // one, since Caddy and Railway both terminate it. Left off on a plain
+  // localhost origin, where the browser would drop the cookie entirely.
+  if ((process.env.AMBORAS_PUBLIC_ORIGIN ?? '').startsWith('https://') || process.env.AMBORAS_STOREFRONT_HOST || process.env.RAILWAY_PUBLIC_DOMAIN) parts.push('Secure')
   if (options.httpOnly !== false) parts.push('HttpOnly')
   if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`)
   const existing = res.getHeader('Set-Cookie')
@@ -290,7 +305,7 @@ export async function send(res: ServerResponse, result: unknown, req?: IncomingM
   }
   if (result instanceof Raw) {
     const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, 'utf8')
-    writeBody(req, res, 200, body, { 'Content-Type': result.contentType, ...result.headers })
+    writeBody(req, res, result.status, body, { 'Content-Type': result.contentType, ...result.headers })
     return
   }
   if (result === undefined) {

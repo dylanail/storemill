@@ -42,8 +42,8 @@ const sha256 = (value?: string) => value ? createHash('sha256').update(value.tri
 function metaPayload(input: ServerEventInput) {
   const scale = 10 ** minorDigits(input.currency ?? 'USD')
   const user: Record<string, unknown> = {
-    client_ip_address: input.ip,
-    client_user_agent: input.userAgent,
+    ...(input.ip?{client_ip_address:input.ip}:{}),
+    ...(input.userAgent?{client_user_agent:input.userAgent}:{}),
     ...(input.email ? { em: [sha256(input.email)] } : {}),
     ...(input.phone ? { ph: [sha256(input.phone.replace(/\D/g, ''))] } : {}),
     ...(input.externalId ? { external_id: [sha256(input.externalId)] } : {}),
@@ -138,20 +138,24 @@ export async function dispatchServerEvents(db: Db, transport: EventTransport = f
     try {
       const response = row.provider === 'meta'
         ? await transport(`https://graph.facebook.com/${process.env.AMBORAS_META_API_VERSION ?? 'v25.0'}/${encodeURIComponent(pixelId)}/events`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: [payload], access_token: accessToken }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: [payload], access_token: accessToken, ...(installed?.settings.testEventCode?{test_event_code:installed.settings.testEventCode}:{}) }),
           })
         : await transport('https://business-api.tiktok.com/open_api/v1.3/event/track/', {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'Access-Token': accessToken },
             body: JSON.stringify({ event_source: 'web', event_source_id: pixelId, data: [payload] }),
           })
       if (!response.ok) throw new Error(`${row.provider} replied ${response.status}: ${(await response.text()).slice(0, 180)}`)
+      if(row.provider==='meta'){
+        const acknowledgement=JSON.parse(await response.text());
+        if(acknowledgement.error||Number(acknowledgement.events_received)<1||!Number.isFinite(Number(acknowledgement.events_received)))throw new Error('Meta did not acknowledge receipt of this event. Check the Pixel ID and token in Events Manager.');
+      }
       db.update('server_event_deliveries', row.id, { status: 'sent', attempts: row.attempts + 1, error: '', sent_at: now() })
       sent++
     } catch (error) {
       const attempts = row.attempts + 1
       db.update('server_event_deliveries', row.id, {
         status: attempts >= 5 ? 'failed' : 'retry', attempts,
-        error: error instanceof Error ? error.message : String(error),
+        error: (error instanceof Error ? error.message : String(error)).split(accessToken).join('[redacted]'),
         next_attempt_at: new Date(Date.now() + Math.min(3600_000, 2 ** attempts * 60_000)).toISOString(),
       })
       failed++

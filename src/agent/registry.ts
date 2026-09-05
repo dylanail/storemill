@@ -103,12 +103,27 @@ export class ToolRefusal extends Error {
  * that publishing is a separate, deliberate step with a rollback.
  */
 export async function execute(name: string, rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
+  // A refusal is the most interesting thing in the log — a model reaching for
+  // a tool that does not exist, or calling one with arguments it cannot
+  // accept — and both used to throw before anything was written, which made
+  // the log a record of what ran rather than what was attempted.
+  const refuse = (kind: 'unknown' | 'invalid', message: string, detail?: unknown, area: ToolArea = 'setup') => {
+    recordAudit(ctx.db, {
+      storeId: ctx.storeId,
+      actorType: ctx.actor.type,
+      actorId: ctx.actor.id,
+      action: `${name} (refused)`,
+      target: area,
+      diff: { args: rawArgs, error: message, ...(detail ? { issues: detail } : {}) },
+    })
+    return new ToolRefusal(kind, message, detail)
+  }
   const tool = getTool(name)
-  if (!tool) throw new ToolRefusal('unknown', `There is no tool called ${name}.`)
+  if (!tool) throw refuse('unknown', `There is no tool called ${name}.`)
 
   const validated = check(tool.schema, rawArgs)
   if (!validated.ok) {
-    throw new ToolRefusal('invalid', `${name} was called with arguments it cannot accept.`, validated.issues)
+    throw refuse('invalid', `${name} was called with arguments it cannot accept.`, validated.issues, tool.area)
   }
   ctx.emit?.({ area: tool.area, tool: name, status: 'running' })
   try {

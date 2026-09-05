@@ -1,4 +1,4 @@
-# Amboras
+# storemill
 
 One person's replacement for Shopify and the thirty apps a dropshipper bolts
 onto it. Stores and funnels are separate top-level assets over the same
@@ -18,13 +18,14 @@ the registrar's own words.
 ```
 node --version     # 22.18 or newer
 npm ci
-cp .env.example .env               # a model key, and AMBORAS_SECRET
+cp .env.example .env               # a model key, and STOREMILL_SECRET
 npm run seed                       # builds the Ironjaw & Co demo store
 npm start                          # http://localhost:4100
 ```
 
 ```
-npm test            # 160 tests, ~4s; model and service paths run against fake networks
+npm run test:all     # typecheck, core/HTTP/production regressions, and every browser suite
+npm test            # core and HTTP tests; model/service paths use controlled transports
 npm run typecheck
 npm run reset       # throw the database away and re-seed
 ```
@@ -67,7 +68,7 @@ says on every page and every record when it is looking at rules output.
 | **Products** | options, variants, swatches, media, SEO, supplier cost and margin, size chart, import from any Shopify `/products/x.json` or Open Graph page, structured page content, image re-shoots from a sentence with GPT Image 2 or Gemini 3 Pro Image |
 | **Pages & builder** | blocks the store defines for itself (a name, fields, an HTML template in a small language, css) when the catalog has nothing for a section, by the owner or by the assistant through `create_block`; they sit in the palette under Custom and render through the same validated path; the assistant can also drop a one-off `custom-html` section into a page, and the page writers may add a section a layout is missing; css and js wherever they are needed: a `custom-code` block for one page, a block's own css and script (run once per page that uses it), and store-wide css and js on the theme through the designer or `set_store_code`; 73 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz, the checkout's own pieces, and the parts the reference funnels run on: rating line, big numbers, results timeline, steps, value stack, expert quotes, founder letter, cost of the alternatives, video reviews, research citations, gallery, specs) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls reference URLs in with their styles and locally owned images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
 | **Templates** | offer page in the order that turned 1.18x into 3.59x, the long-form sales page, the Shopify-style product page, the science page, the story landing page, advertorial listicle, quiz funnel, product landing page, home page, and the checkout itself as blocks — published, it becomes the store's `/checkout` |
-| **Dashboard** | Shopify-style operator home and organized channel/marketing/insights navigation with familiar icons; sales and profit, period-over-period KPIs, conversion funnel, live visitors, fulfillment load, experiments, recent orders, next steps, quick actions and a compact storefront preview |
+| **Dashboard** | Shopify-style operator home and organized channel/marketing/insights navigation with familiar icons; sales and profit, period-over-period KPIs, conversion funnel, live visitors, fulfillment load, experiments, recent orders, next steps and quick actions |
 | **Versions & CRO** | PDP versions and advertorials in named formats with free-form direction; stable per-session assignment; Beta-Bernoulli probability-to-win; minimum-view and purchase guardrails; autonomous winner promotion; exact prior-weight rollback |
 | **Funnels** | standalone Funnelish assets have their own navigation and visible ad → advertorial/quiz → PDP/sales page → checkout → post-purchase flow; store assets can still attach optional campaign funnels; test groups split traffic at `/go/<group>` by weight and compare revenue per session |
 | **Media** | one per-asset library aggregating uploads, generated images, cloned assets, product and variant media, collections, block pages, imported HTML and creative output, with reusable URLs |
@@ -154,16 +155,16 @@ See `.env.example` for everything. The ones that decide what runs:
 
 | Variable | Effect |
 |---|---|
-| `AMBORAS_SECRET` | master key for password hashing, credential sealing and visitor fingerprints. **Set this in any real deployment.** |
-| `ANTHROPIC_API_KEY`, `AMBORAS_MODEL` | Claude writes; the model defaults to `claude-opus-5` |
-| `OPENAI_API_KEY`, `AMBORAS_OPENAI_MODEL` | GPT writes (default id `gpt-5`), and GPT Image 2 re-shoots |
-| `AMBORAS_TEXT_PROVIDER` | which family answers when both keys are set; `AMBORAS_MODEL_<TASK>` pins one job |
-| `GEMINI_API_KEY`, `AMBORAS_GOOGLE_IMAGE_MODEL` | Gemini 3 Pro Image re-shoots |
-| `AMBORAS_STOREFRONT_HOST`, `AMBORAS_ADMIN_HOST`, `AMBORAS_EDGE_HOST` | storefronts at `*.host`, the admin's hostname, what custom domains point at |
+| `STOREMILL_SECRET` | master key for password hashing, credential sealing and visitor fingerprints. **Set this in any real deployment.** |
+| `ANTHROPIC_API_KEY`, `STOREMILL_MODEL` | Claude writes; the model defaults to `claude-opus-5` |
+| `OPENAI_API_KEY`, `STOREMILL_OPENAI_MODEL` | GPT writes (default id `gpt-5`), and GPT Image 2 re-shoots |
+| `STOREMILL_TEXT_PROVIDER` | which family answers when both keys are set; `STOREMILL_MODEL_<TASK>` pins one job |
+| `GEMINI_API_KEY`, `STOREMILL_GOOGLE_IMAGE_MODEL` | Gemini 3 Pro Image re-shoots |
+| `STOREMILL_STOREFRONT_HOST`, `STOREMILL_ADMIN_HOST`, `STOREMILL_EDGE_HOST` | storefronts at `*.host`, the admin's hostname, what custom domains point at |
 | `META_AD_LIBRARY_TOKEN` | the Ads tab searches the Meta Ad Library |
-| `AMBORAS_META_API_VERSION` | Graph API version for Meta CAPI; defaults to `v25.0` |
-| `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | email actually sends |
-| `AMBORAS_17TRACK_API_KEY` | registers supplier tracking numbers and powers live carrier events on `/track` |
+| `STOREMILL_META_API_VERSION` | Graph API version for Meta CAPI; defaults to `v25.0` |
+| `RESEND_API_KEY`, `STOREMILL_EMAIL_DOMAIN` | email actually sends |
+| `STOREMILL_17TRACK_API_KEY` | registers supplier tracking numbers and powers live carrier events on `/track` |
 
 On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
 `/preview/:slug` is the draft (untracked, pixels suppressed).
@@ -195,3 +196,5 @@ The platform was first built beside an unrelated project and inherited some
 of its shape. `docs/DARWIN_INHERITANCE.md` lists every such decision with the
 verdict on each; `ORIGINAL_INTENT.md` is the direction it was built to,
 instruction by instruction.
+
+Platform branding is storemill. New deployments may use `STOREMILL_*` settings; existing `AMBORAS_*` settings remain supported. The database path, encryption salt, cookies, saved-page metadata, and browser event hooks retain their existing identifiers for compatibility.

@@ -141,12 +141,14 @@ export function auditHtml(html: string, input: { path: string; title?: string; b
   }
 }
 
-/** Renders the home page, the first three product pages and every published built page as a visitor would get them, and audits each. */
-export function auditStore(db: Db, store: Store): { pages: PageAudit[]; score: number } {
-  const env = environment(db, store.id, 'draft')
-  const current: StoreView = { db, store, env, base: `/preview/${store.slug}`, preview: false, cart: null, totals: null, region: defaultRegion(db, store.id), regions: listRegions(db, store.id) }
+/** Audits the live environment when there is one, and the draft before first publication. */
+export function auditStore(db: Db, store: Store, opts: { environment?: 'draft' | 'live' } = {}): { pages: PageAudit[]; score: number; environment: 'draft' | 'live' } {
+  const kind = opts.environment ?? (store.status === 'live' ? 'live' : 'draft')
+  const env = environment(db, store.id, kind)
+  const audited = Object.keys(env.brand).length ? { ...store, brand: env.brand } : store
+  const current: StoreView = { db, store: audited, env, base: kind === 'live' ? `/s/${store.slug}` : `/preview/${store.slug}`, preview: false, cart: null, totals: null, region: defaultRegion(db, store.id), regions: listRegions(db, store.id) }
   const products = listProducts(db, store.id, { status: 'published', limit: 3 })
-  const brand = { ...(store.brand.primary ? { primary: store.brand.primary } : {}), ...(store.brand.paper ? { paper: store.brand.paper } : {}), ...(store.brand.ink ? { ink: store.brand.ink } : {}) }
+  const brand = { ...(audited.brand.primary ? { primary: audited.brand.primary } : {}), ...(audited.brand.paper ? { paper: audited.brand.paper } : {}), ...(audited.brand.ink ? { ink: audited.brand.ink } : {}) }
   const pages: PageAudit[] = []
   const safely = (path: string, title: string, render: () => string) => {
     try {
@@ -163,5 +165,5 @@ export function auditStore(db: Db, store: Store): { pages: PageAudit[]; score: n
     safely(`/pages/${page.handle}`, page.title, () => (page.mode === 'html' ? view.htmlPage(current, page) : view.blockPage(current, page)))
   }
   const score = pages.length ? Math.round(pages.reduce((sum, page) => sum + page.score, 0) / pages.length) : 0
-  return { pages, score }
+  return { pages, score, environment: kind }
 }

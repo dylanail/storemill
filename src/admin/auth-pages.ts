@@ -1,3 +1,4 @@
+import { brandHead, brandLogo, brandStyles } from '../brand/index.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { MODES, SHAPES } from '../control/build.ts'
 
@@ -10,10 +11,10 @@ const EXAMPLES = [
 
 function frame(title: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} — Amboras</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} — storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-<style>
+${brandHead}<style>${brandStyles}
 :root{--paper:#f6f7f9;--ink:#202223;--muted:#6d7175;--line:#dfe3e8;--accent:#2c6ecb}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 'Inter',ui-sans-serif,system-ui,sans-serif;
@@ -41,7 +42,7 @@ button:hover{background:var(--accent)}
 .steps{display:grid;gap:.4rem;margin:1.4rem 0 0;font-size:12.5px;color:var(--muted)}
 .steps div{display:flex;gap:.5rem}
 .steps i{width:6px;height:6px;border-radius:999px;background:var(--accent);margin-top:.55rem;flex:0 0 auto}
-</style></head><body><div class="sheet">${inner}</div></body></html>`
+</style></head><body><div class="sheet"><a class="storemill-home" style="margin-bottom:28px" href="/" aria-label="storemill home">${brandLogo()}</a>${inner}</div></body></html>`
 }
 
 export function authPage(mode: 'login' | 'register', error: string | null): string {
@@ -58,7 +59,43 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
       ${isLogin ? '' : '<p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>'}
       <button type="submit">${isLogin ? 'Sign in' : 'Create account'}</button>
     </form>
-    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
+    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a> · <a href="/forgot">Forgot your password?</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
+}
+
+export function forgotPage(state: { error?: string | null; sent?: boolean; logged?: boolean }): string {
+  return frame('Reset your password', `
+    <h1>Reset your password</h1>
+    <p class="lead">${state.sent ? 'If that address has an account, a link is on its way. It is good for an hour.' : 'We will email you a single-use link that expires in an hour.'}</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    ${state.logged ? '<div class="err">No email sender is configured, so the reset link was written to the server log.</div>' : ''}
+    <form method="post" action="/forgot">
+      <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="email"></div>
+      <button type="submit">Email me a link</button>
+    </form>
+    <p class="alt">Remembered it? <a href="/login">Sign in</a></p>`)
+}
+
+export function resetPage(state: { token: string; email?: string; error?: string | null }): string {
+  return frame('Choose a new password', `
+    <h1>Choose a new password</h1>
+    <p class="lead">${state.email ? `For ${escapeHtml(state.email)}. ` : ''}Saving signs out every other device.</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    <form method="post" action="/reset">
+      <input type="hidden" name="token" value="${escapeHtml(state.token)}">
+      <div class="field"><label for="password">New password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password"></div>
+      <p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>
+      <button type="submit">Save it and sign in</button>
+    </form>
+    <p class="alt"><a href="/login">Back to sign in</a></p>`)
+}
+
+export function buildingPage(ticket: { id: string; stage: string; storeName: string }): string {
+  return frame('Building your asset', `
+    <h1>${ticket.storeName ? escapeHtml(ticket.storeName) : 'Building it now'}</h1>
+    <p class="lead" id="stage">${escapeHtml(ticket.stage)}</p>
+    <div class="steps"><div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div><div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div><div><i></i><span>Writes products with full pages, variants, prices and imagery</span></div><div><i></i><span>Sets offers, shipping and automation</span></div><div><i></i><span>Builds the chosen store or funnel and hands you the address</span></div></div>
+    <p class="alt" id="note">This takes a minute or two. You can leave this page open.</p>
+    <script>(function(){var stage=document.getElementById('stage'),note=document.getElementById('note');function poll(){fetch('/onboarding/status?t=${encodeURIComponent(ticket.id)}',{headers:{accept:'application/json'}}).then(function(r){return r.json()}).then(function(s){if(s.stage)stage.textContent=s.stage;if(s.state==='done'){window.location=s.next;return}if(s.state==='failed'){note.textContent=s.error||'That did not work. Try again.';return}setTimeout(poll,1500)}).catch(function(){setTimeout(poll,3000)})}setTimeout(poll,1200)})();</script>`)
 }
 
 export function onboardingPage(name: string, error: string | null, hasStores = false): string {

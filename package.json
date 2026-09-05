@@ -1,5 +1,5 @@
 {
-  "name": "amboras",
+  "name": "storemill",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,11 +13,21 @@
     "seed": "node --disable-warning=ExperimentalWarning src/seed.ts",
     "reset": "rm -rf data && node --disable-warning=ExperimentalWarning src/seed.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:editor": "node --disable-warning=ExperimentalWarning --test test/editor*.browser.mjs",
+    "test:theme": "node --disable-warning=ExperimentalWarning --test test/theme-editor.browser.mjs",
+    "test:admin": "node --disable-warning=ExperimentalWarning --test test/admin-experience.browser.mjs",
+    "test:storefront": "node --disable-warning=ExperimentalWarning --test test/storefront.browser.mjs",
+    "test:commerce": "node --disable-warning=ExperimentalWarning --test test/imported-commerce.browser.mjs test/imported-media.browser.mjs test/imported-bundles.browser.mjs test/funnel-checkout.browser.mjs",
+    "test:capture": "node --disable-warning=ExperimentalWarning --test test/clone-capture*.browser.mjs",
+    "test:browser": "node --disable-warning=ExperimentalWarning --test --test-concurrency=2 test/*.browser.mjs",
+    "test:production": "node --disable-warning=ExperimentalWarning --test test/production.test.ts",
+    "test:all": "npm run typecheck && npm test && npm run test:browser"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",
-    "openai": "^7.9.0"
+    "openai": "^7.9.0",
+    "playwright": "^1.62.1"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

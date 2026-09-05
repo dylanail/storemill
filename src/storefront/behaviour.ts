@@ -27,6 +27,20 @@ addEventListener('pagehide',flush);document.addEventListener('visibilitychange',
 
 export const DEFAULT_POPUP: Popup = { enabled: false, trigger: 'exit', after: 20, kind: 'email', headline: 'Before you go', text: 'Leave your email and the offer is yours.', code: '', buttonLabel: 'Send it', href: '#offer', validDays: 7, image: '', dismissDays: 7 }
 
+/**
+ * Where the popup's button goes.
+ *
+ * The email form was prefixed with the store's base path and this link was
+ * not, so on the documented `/s/:slug` setup — and on any deployment where a
+ * store does not own the whole origin — the two kinds of popup that exist
+ * only to send the visitor somewhere both landed on a 404.
+ */
+function popupHref(base: string, href: string | undefined, kind: string): string {
+  const target = href || (kind === 'quiz' ? '/pages/quiz' : '#offer')
+  if (target.startsWith('#') || /^[a-z]+:/i.test(target) || target.startsWith('//')) return target
+  return target.startsWith('/') ? `${base}${target}` : target
+}
+
 /** The popup markup and its runtime. Nothing renders when it is off. */
 export function popupHtml(base: string, popup: Popup | undefined): string {
   if (!popup?.enabled) return ''
@@ -36,7 +50,7 @@ export function popupHtml(base: string, popup: Popup | undefined): string {
     kind === 'email'
       ? `<form method="post" action="${e(base)}/subscribe" class="signup" data-popup-form><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="source" value="popup"><button class="btn" type="submit">${e(popup.buttonLabel || 'Send it')}</button></form>
 <p class="micro" data-popup-done hidden>${popup.code ? `You are in. Your code: <strong>${e(popup.code)}</strong>` : 'You are in.'}</p>${valid}`
-      : `${popup.code ? `<p class="popup-code">Use code <strong>${e(popup.code)}</strong></p>` : ''}<p><a class="btn" href="${e(popup.href || (kind === 'quiz' ? '/pages/quiz' : '#offer'))}" data-popup-go>${e(popup.buttonLabel || (kind === 'quiz' ? 'Take the quiz' : 'Claim it'))}</a></p>${valid}`
+      : `${popup.code ? `<p class="popup-code">Use code <strong>${e(popup.code)}</strong></p>` : ''}<p><a class="btn" href="${e(popupHref(base, popup.href, kind))}" data-popup-go>${e(popup.buttonLabel || (kind === 'quiz' ? 'Take the quiz' : 'Claim it'))}</a></p>${valid}`
   return `<div class="popup" id="popup" hidden role="dialog" aria-modal="true" aria-labelledby="popup-h" data-trigger="${e(popup.trigger)}" data-after="${Number(popup.after) || 0}" data-days="${Number(popup.dismissDays) || 7}" data-kind="${e(kind)}">
 <div class="popup-card">${popup.image ? `<img class="popup-img" src="${e(popup.image)}" alt="" loading="lazy">` : ''}<button type="button" class="popup-x" aria-label="Close">×</button>
 <h2 id="popup-h">${e(popup.headline)}</h2>${popup.text ? `<p>${e(popup.text)}</p>` : ''}
@@ -50,4 +64,9 @@ var t=p.dataset.trigger;if(t==='delay'){setTimeout(show,after*1000)}else if(t===
 var g=p.querySelector('[data-popup-go]');g&&g.addEventListener('click',function(){window.__track&&window.__track('popup.submit',{kind:p.dataset.kind});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
 var f=p.querySelector('[data-popup-form]');f&&f.addEventListener('submit',function(ev){ev.preventDefault();var d=new FormData(f);fetch(f.action,{method:'POST',body:new URLSearchParams(d),keepalive:true}).catch(function(){});f.hidden=true;p.querySelector('[data-popup-done]').hidden=false;window.__track&&window.__track('popup.submit',{});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
 })();</script>`
+}
+
+/** The generated storefront keeps its navigation available on small screens. */
+export function navigationScript(): string {
+  return `<script>(function(){document.querySelectorAll('[data-nav-toggle]').forEach(function(toggle){var nav=document.getElementById(toggle.getAttribute('aria-controls'));if(!nav)return;function show(open){toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',open?'Close menu':'Open menu');nav.dataset.open=String(open)}toggle.addEventListener('click',function(){show(toggle.getAttribute('aria-expanded')!=='true')});document.addEventListener('keydown',function(e){if(e.key==='Escape'&&toggle.getAttribute('aria-expanded')==='true'){show(false);toggle.focus()}});nav.addEventListener('click',function(e){if(e.target.closest('a'))show(false)});});})();</script>`
 }

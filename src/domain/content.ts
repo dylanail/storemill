@@ -83,6 +83,50 @@ export function createArticle(
   return rowToArticle(db.one('SELECT * FROM articles WHERE id = ?', articleId) as Row)
 }
 
+export function getArticle(db: Db, storeId: string, articleId: string): Article | null {
+  const row = db.one('SELECT * FROM articles WHERE id = ? AND store_id = ?', articleId, storeId)
+  return row ? rowToArticle(row) : null
+}
+
+export function updateArticle(
+  db: Db,
+  storeId: string,
+  articleId: string,
+  patch: Partial<Pick<Article, 'title' | 'body' | 'excerpt' | 'image' | 'tags' | 'status'>> & { publishAt?: string | null },
+): Article {
+  const article = getArticle(db, storeId, articleId)
+  if (!article) throw new Error('No such article')
+  const values: Row = {}
+  if (patch.title !== undefined) { values.title = patch.title; values.handle = toHandle(patch.title) }
+  if (patch.body !== undefined) values.body = patch.body
+  if (patch.excerpt !== undefined) values.excerpt = patch.excerpt
+  if (patch.image !== undefined) values.image = patch.image
+  if (patch.tags !== undefined) values.tags = patch.tags
+  if (patch.status !== undefined) values.status = patch.status
+  if (patch.publishAt !== undefined) {
+    if (!patch.publishAt) values.published_at = null
+    else {
+      const requested = new Date(patch.publishAt)
+      if (Number.isNaN(requested.getTime())) throw new Error('Publish time is not a valid date')
+      values.published_at = requested.toISOString()
+      values.status = requested.getTime() > Date.now() ? 'scheduled' : 'published'
+    }
+  } else if (patch.status === 'published' && !article.publishedAt) values.published_at = now()
+  if (Object.keys(values).length) db.update('articles', articleId, values)
+  return getArticle(db, storeId, articleId) as Article
+}
+
+export function deleteArticle(db: Db, storeId: string, articleId: string): boolean {
+  return Number(db.run('DELETE FROM articles WHERE id = ? AND store_id = ?', articleId, storeId).changes) > 0
+}
+
+export function deleteBlog(db: Db, storeId: string, blogId: string): boolean {
+  return Number(db.tx(() => {
+    db.run('DELETE FROM articles WHERE blog_id = ? AND store_id = ?', blogId, storeId)
+    return db.run('DELETE FROM blogs WHERE id = ? AND store_id = ?', blogId, storeId).changes
+  })) > 0
+}
+
 /** Scheduled posts become public from their timestamp without needing a worker. */
 export function articleIsPublic(article: Article, at = new Date()): boolean {
   if (article.status === 'published') return true

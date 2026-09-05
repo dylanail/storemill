@@ -1,7 +1,7 @@
 import { now, type Db, type Row } from '../lib/db.ts'
 
 export type StoreExport = {
-  format: 'amboras-store-backup'
+  format: 'storemill-store-backup'
   version: 1
   exportedAt: string
   storeId: string
@@ -26,5 +26,5 @@ export function exportStore(db: Db, storeId: string): StoreExport {
   }
   tables.collection_products = db.all('SELECT cp.* FROM collection_products cp JOIN collections c ON c.id = cp.collection_id WHERE c.store_id = ?', storeId)
   tables.shipping_options = db.all('SELECT so.* FROM shipping_options so JOIN regions r ON r.id = so.region_id WHERE r.store_id = ?', storeId)
-  return { format: 'amboras-store-backup', version: 1, exportedAt: now(), storeId, tables }
+  return { format: 'storemill-store-backup', version: 1, exportedAt: now(), storeId, tables }
 }

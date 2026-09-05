@@ -103,7 +103,7 @@ export function robots(base: string): string {
  * controls. Generative engines cite what they can parse; this is the parseable
  * version of the brand.
  */
-export function llmsTxt(store: Store, products: Product[]): string {
+export function llmsTxt(store: Store, products: Product[], storefrontUrl?: string): string {
   const brand = store.brand
   return [
     `# ${store.name}`,
@@ -117,7 +117,9 @@ export function llmsTxt(store: Store, products: Product[]): string {
     ...(brand.voice ? [brand.voice] : []),
     '',
     `## Contact`,
-    `Storefront: https://${store.slug}`,
+    // The slug is an internal handle with a random suffix, never a hostname:
+    // the whole point of this file is an address an engine can cite.
+    `Storefront: ${storefrontUrl ?? `https://${store.slug}`}`,
   ].join('\n')
 }
 

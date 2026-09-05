@@ -1,15 +1,23 @@
 import { json, type Db } from '../lib/db.ts'
 import { listUploads } from '../lib/uploads.ts'
+import { assetHeroImage } from './asset-cover.ts'
+import { htmlMedia } from './media-references.ts'
 
 export type StoreMedia = {
   url: string
+  kind: 'image' | 'video' | 'embed'
   source: 'Brand' | 'Product' | 'Variant' | 'Collection' | 'Page' | 'Review' | 'Creative' | 'Upload'
   label: string
   uploadedAt: string | null
   bytes: number | null
 }
 
-const explicitImage = /(?:\.(?:avif|gif|jpe?g|png|svg|webp)(?:[?#]|$)|\/_uploads\/|\/_media\/)/i
+const explicitImage = /(?:\.(?:avif|gif|jpe?g|png|svg|webp|mp4|webm|mov)(?:[?#]|$)|\/_uploads\/|\/_media\/)/i
+export function mediaKind(url: string): StoreMedia['kind'] {
+  if (/\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(url)) return 'video'
+  if (/(?:youtube(?:-nocookie)?\.com\/embed|youtu\.be\/|player\.vimeo\.com\/video)/i.test(url)) return 'embed'
+  return 'image'
+}
 
 /**
  * A store's image library is a view over the source of truth, not another
@@ -18,7 +26,7 @@ const explicitImage = /(?:\.(?:avif|gif|jpe?g|png|svg|webp)(?:[?#]|$)|\/_uploads
  */
 export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
   const found = new Map<string, StoreMedia>()
-  const add = (value: unknown, source: StoreMedia['source'], label: string, options: { uploadedAt?: string | null; bytes?: number | null; trusted?: boolean } = {}) => {
+  const add = (value: unknown, source: StoreMedia['source'], label: string, options: { uploadedAt?: string | null; bytes?: number | null; trusted?: boolean; kind?: StoreMedia['kind'] } = {}) => {
     if (typeof value !== 'string') return
     const url = value.trim()
     if (!url || url.startsWith('data:') || url.startsWith('<svg')) return
@@ -26,15 +34,16 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
     if (!/^(?:https?:\/\/|\/)/i.test(url)) return
     const current = found.get(url)
     if (current) {
+      if (options.kind) current.kind = options.kind
       if (!current.uploadedAt && options.uploadedAt) current.uploadedAt = options.uploadedAt
       if (current.bytes === null && options.bytes !== undefined) current.bytes = options.bytes
       return
     }
-    found.set(url, { url, source, label, uploadedAt: options.uploadedAt ?? null, bytes: options.bytes ?? null })
+    found.set(url, { url, kind: options.kind ?? mediaKind(url), source, label, uploadedAt: options.uploadedAt ?? null, bytes: options.bytes ?? null })
   }
   const walk = (value: unknown, source: StoreMedia['source'], label: string, key = '') => {
     if (typeof value === 'string') {
-      if (/image|photo|media|hero|logo|poster|background|src|url/i.test(key) || explicitImage.test(value)) add(value, source, label, { trusted: /image|photo|media|hero|logo|poster|background|src/i.test(key) })
+      if (/image|photo|video|media|hero|logo|poster|background|src|url/i.test(key) || explicitImage.test(value)) add(value, source, label, { trusted: /image|photo|video|media|hero|logo|poster|background|src/i.test(key), ...(/video/i.test(key) ? { kind: mediaKind(value) === 'embed' ? 'embed' : 'video' } : {}) })
       return
     }
     if (Array.isArray(value)) value.forEach((entry) => walk(entry, source, label, key))
@@ -59,11 +68,17 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
   for (const page of db.all<{ title: string; blocks: string; raw_html: string; seo: string; updated_at: string }>('SELECT title, blocks, raw_html, seo, updated_at FROM pages WHERE store_id = ?', storeId)) {
     walk(json(page.blocks, []), 'Page', page.title)
     walk(json(page.seo, {}), 'Page', page.title)
-    for (const match of page.raw_html.matchAll(/<(?:img|source)\b[^>]*(?:src|srcset)=["']([^"']+)/gi)) add(match[1], 'Page', page.title, { trusted: true, uploadedAt: page.updated_at })
-    for (const match of page.raw_html.matchAll(/url\(["']?([^"')]+)["']?\)/gi)) add(match[1], 'Page', page.title)
+    for (const media of htmlMedia(page.raw_html)) add(media.url, 'Page', page.title, { trusted: true, kind: media.kind, uploadedAt: page.updated_at })
+  }
+  for (const block of db.all<{ name: string; fields: string; template: string; css: string }>('SELECT name, fields, template, css FROM custom_blocks WHERE store_id = ?', storeId)) {
+    walk(json(block.fields, []), 'Page', block.name)
+    for (const media of htmlMedia(block.template + '<style>' + block.css + '</style>')) add(media.url, 'Page', block.name, { trusted: true, kind: media.kind })
   }
   for (const review of db.all<{ author: string; media: string }>('SELECT author, media FROM reviews WHERE store_id = ?', storeId)) walk(json(review.media, []), 'Review', review.author || 'Customer photo')
   for (const creative of db.all<{ title: string; body: string }>('SELECT title, body FROM creative_queue WHERE store_id = ?', storeId)) walk(json(creative.body, {}), 'Creative', creative.title || 'Creative')
+  for (const env of db.all<{ theme: string; brand: string }>("SELECT theme, brand FROM store_environments WHERE store_id = ? AND kind = 'draft'", storeId)) {
+    walk(json(env.theme, {}), 'Brand', 'Draft theme'); walk(json(env.brand, {}), 'Brand', 'Draft brand')
+  }
 
   for (const upload of listUploads(storeId)) add(upload.url, 'Upload', upload.url.split('/').pop() ?? 'Upload', { trusted: true, uploadedAt: upload.uploadedAt, bytes: upload.bytes })
 
@@ -74,5 +89,5 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
 }
 
 export function storeCoverImage(db: Db, storeId: string): string {
-  return listStoreMedia(db, storeId).find((asset) => asset.source === 'Brand' || asset.source === 'Product' || asset.source === 'Page')?.url ?? ''
+  return assetHeroImage(db, storeId)
 }

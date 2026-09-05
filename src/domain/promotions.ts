@@ -91,7 +91,7 @@ function eligibleItems(promotion: Promotion, items: LineItem[], collectionsByPro
 export type PromotionOutcome = {
   discountCents: number
   freeShipping: boolean
-  applied: Array<{ id: string; title: string; code: string; amountCents: number }>
+  applied: Array<{ id: string; title: string; code: string; amountCents: number; kind: Promotion['kind'] }>
 }
 
 /**
@@ -134,7 +134,7 @@ export function applyPromotions(
   for (const promotion of candidates) {
     if (promotion.rules.minSubtotalCents && opts.subtotalCents < Math.round(promotion.rules.minSubtotalCents * (opts.currencyRate ?? 1))) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
-    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf)
+    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf && item.source !== 'order-bump')
     if (!eligible.length && promotion.kind !== 'free_shipping') continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
@@ -156,9 +156,17 @@ export function applyPromotions(
         if (units >= (promotion.rules.buyQuantity ?? 2)) amount = percentOf(eligibleTotal, promotion.value)
         break
       case 'tiered': {
-        const tiers = [...(promotion.rules.tiers ?? [])].sort((a, b) => b.quantity - a.quantity)
-        const hit = tiers.find((tier) => units >= tier.quantity)
-        if (hit) amount = percentOf(eligibleTotal, hit.percent)
+        const tiers = [...(promotion.rules.tiers ?? [])].filter(tier => Number.isSafeInteger(tier.quantity) && tier.quantity > 0).sort((a, b) => b.quantity - a.quantity)
+        const exactUnits = eligible.filter(item => promotion.rules.productIds?.includes(item.productId)).reduce((sum,item) => sum + item.quantity, 0)
+        const hit = tiers.find((tier) => (tier.unitPriceCents === undefined ? units : exactUnits) >= tier.quantity)
+        if (hit?.unitPriceCents !== undefined) {
+          // Exact copied offers have a verified product scope and positive price.
+          // Never turn malformed/unscoped rules into an order-wide discount.
+          if (promotion.rules.productIds?.length && Number.isSafeInteger(hit.unitPriceCents) && hit.unitPriceCents > 0) {
+            const unit = Math.round(hit.unitPriceCents * (opts.currencyRate ?? 1))
+            if (Number.isSafeInteger(unit) && unit > 0) amount = eligible.filter(item => promotion.rules.productIds!.includes(item.productId)).reduce((sum, item) => sum + Math.max(0, item.unitCents - unit) * item.quantity, 0)
+          }
+        } else if (hit) amount = percentOf(eligibleTotal, hit.percent)
         break
       }
       case 'bogo': {
@@ -193,9 +201,11 @@ export function applyPromotions(
       }
     }
 
+    const takeable = Math.max(0, opts.subtotalCents - outcome.discountCents)
+    amount = Math.min(amount, takeable)
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
-      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount })
+      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount, kind: promotion.kind })
       if (promotion.rules.combinable === false) break
     }
   }
@@ -204,14 +214,13 @@ export function applyPromotions(
   // product's own bundle tiers are two answers to the same question; the
   // customer gets the better one, not both.
   const quantityKinds = new Set(['bundle', 'tiered', 'mix_match', 'fixed_bundle'])
-  const quantity = outcome.applied.filter((entry) => quantityKinds.has(all.find((promotion) => promotion.id === entry.id)?.kind ?? ''))
+  const quantity = outcome.applied.filter((entry) => quantityKinds.has(entry.kind))
   if (quantity.length > 1) {
     const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))
     const dropped = quantity.filter((entry) => entry.id !== best.id)
     outcome.applied = outcome.applied.filter((entry) => !dropped.includes(entry))
     outcome.discountCents -= dropped.reduce((sum, entry) => sum + entry.amountCents, 0)
   }
-  outcome.discountCents = Math.min(outcome.discountCents, opts.subtotalCents)
   return outcome
 }
 

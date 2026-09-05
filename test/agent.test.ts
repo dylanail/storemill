@@ -6,10 +6,11 @@ import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { listProducts } from '../src/domain/catalog.ts'
 import { listPromotions } from '../src/domain/promotions.ts'
 import { execute, listTools, ToolRefusal } from '../src/agent/registry.ts'
-import { createRun, getRun, recoverRuns, runToCompletion } from '../src/agent/runtime.ts'
+import { createRun, getRun, recoverRuns, resumeQueuedRuns, runToCompletion } from '../src/agent/runtime.ts'
 import { rulesPlan } from '../src/agent/llm.ts'
 import { onboard } from '../src/agent/onboarding.ts'
 import { ask } from '../src/agent/chat.ts'
+import { listAudit } from '../src/control/todos.ts'
 
 function withStore() {
   const { db, user } = fresh()
@@ -86,7 +87,7 @@ test('branches in a run execute concurrently and failures do not take the run do
     ],
   })
   const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id } })
-  assert.equal(outcome.run.status, 'completed')
+  assert.equal(outcome.run.status, 'partial', 'some done and some failed is not a success')
   assert.equal(outcome.results.length, 3)
   assert.equal(outcome.failures.length, 1)
   assert.equal(listProducts(db, store.id, {}).length, 2)
@@ -188,4 +189,38 @@ test('brand names are always real words, whatever the seed, and stop at the end 
   }
   assert.equal(brandName(readBrief('A clinical skincare brand called Marrow Lab with three products')), 'Marrow Lab')
   assert.equal(brandName(readBrief('a store called "Salt & Cedar Supply" in Lisbon')), 'Salt & Cedar Supply')
+})
+
+test('a queued run is picked up: recovery is not just a status change', async () => {
+  const { db, store } = withStore()
+  const run = createRun(db, {
+    storeId: store.id,
+    prompt: 'interrupted mid-onboarding',
+    steps: [
+      { branch: 'main', tool: 'create_product', args: { title: 'Finished before the crash', priceCents: 100 } },
+      { branch: 'main', tool: 'create_product', args: { title: 'Was in flight', priceCents: 100 } },
+    ],
+  })
+  const steps = getRun(db, run.id)!.steps
+  db.update('agent_steps', steps[0]!.id, { status: 'done', result: { summary: 'done' } })
+  db.update('agent_steps', steps[1]!.id, { status: 'running' })
+  db.run("UPDATE agent_runs SET status = 'running' WHERE id = ?", run.id)
+
+  assert.equal(recoverRuns(db), 1)
+  assert.equal(getRun(db, run.id)?.status, 'queued')
+  assert.equal(resumeQueuedRuns(db), 1, 'and something actually runs the queue')
+  // The resume is deliberately not awaited; the run settles a tick later.
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(getRun(db, run.id)?.status, 'completed')
+  assert.deepEqual(listProducts(db, store.id, {}).map((product) => product.title), ['Was in flight'], 'and the finished step is not repeated')
+})
+
+test('a refused tool call is in the audit log, which is what was attempted', async () => {
+  const { db, store, user } = withStore()
+  const before = listAudit(db, store.id, 50).length
+  await assert.rejects(() => execute('no_such_tool', {}, { db, storeId: store.id, actor: { type: 'agent', id: user.id } }), /no tool called/)
+  await assert.rejects(() => execute('create_product', { subtitle: 'no title' }, { db, storeId: store.id, actor: { type: 'agent', id: user.id } }), /cannot accept/)
+  const rows = listAudit(db, store.id, 50)
+  assert.equal(rows.length, before + 2)
+  assert.ok(rows.every((row) => String(row.action).endsWith('(refused)')))
 })

@@ -2,12 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { BLOCKS, blockDefinition, renderBlock, renderBlocks, type BlockContext } from '../src/pages/blocks.ts'
-import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, getPage, homePage, landingTemplate, liveCheckoutPage, newBlock, PAGE_TEMPLATES, pageTemplate, productTemplate, salesTemplate, scienceTemplate, updatePage } from '../src/pages/store.ts'
+import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, getPage, homePage, landingTemplate, listPageRevisions, liveCheckoutPage, newBlock, PAGE_TEMPLATES, pageTemplate, productTemplate, restorePageRevision, salesTemplate, savePageRevision, scienceTemplate, updatePage } from '../src/pages/store.ts'
 import { clonePage, extractBlocks } from '../src/pages/clone.ts'
 import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } from '../src/domain/bundles.ts'
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
-import { createStore } from '../src/control/stores.ts'
-import { createProduct, getVariant } from '../src/domain/catalog.ts'
+import { createStore, environment } from '../src/control/stores.ts'
+import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
+import { blockPage, htmlPage, notFoundPage, productPage } from '../src/storefront/render.ts'
+import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
 import { completeCart, recordUpsell } from '../src/domain/orders.ts'
@@ -16,6 +18,7 @@ function require_promotions() {
   return { createPromotion }
 }
 import { execute } from '../src/agent/registry.ts'
+import { editorPage } from '../src/admin/editor.ts'
 
 const context: BlockContext = {
   storeName: 'Test Co',
@@ -176,6 +179,9 @@ test('pages are created, updated, and one of them can be the home page', () => {
   const page = createPage(db, store.id, { title: 'Why switch', blocks: [newBlock('headline', { text: 'Hi' })] })
   assert.equal(page.handle, 'why-switch')
   assert.equal(createPage(db, store.id, { title: 'Why switch' }).handle, 'why-switch-2')
+  updatePage(db, store.id, page.id, { isHome: true })
+  assert.equal(homePage(db, store.id), null, 'a draft home is not public')
+  assert.equal(homePage(db, store.id, { preview: true })?.id, page.id, 'but the theme designer previews the selected draft home')
   updatePage(db, store.id, page.id, { status: 'published', isHome: true })
   assert.equal(homePage(db, store.id)?.id, page.id)
   const other = createPage(db, store.id, { title: 'Other', status: 'published' })
@@ -186,18 +192,50 @@ test('pages are created, updated, and one of them can be the home page', () => {
   assert.match(html, /Hi/)
 })
 
+test('every builder save is a named page revision that can be restored', () => {
+  const { db, store } = shop()
+  const page = createPage(db, store.id, { title: 'First draft', blocks: [newBlock('headline', { text: 'Original' })] })
+  assert.equal(listPageRevisions(db, store.id, page.id).length, 1)
+  const changed = updatePage(db, store.id, page.id, { title: 'Second draft', blocks: [newBlock('headline', { text: 'Changed' })] })
+  savePageRevision(db, changed, 'Saved from builder')
+  const revisions = listPageRevisions(db, store.id, page.id)
+  assert.equal(revisions[0]?.version, 2)
+  assert.equal(revisions[0]?.snapshot.title, 'Second draft')
+  const restored = restorePageRevision(db, store.id, page.id, revisions[1]!.id)
+  assert.equal(restored.title, 'First draft')
+  assert.equal(restored.blocks[0]?.settings.text, 'Original')
+  assert.match(listPageRevisions(db, store.id, page.id)[0]!.note, /Restored version 1/)
+})
+
+test('the page builder ships valid, safely embedded client code', () => {
+  const { db, store } = shop()
+  const title = 'A </script><script>alert(1)</script> title'
+  const page = createPage(db, store.id, { title, blocks: [newBlock('headline', { text: title })] })
+  const html = editorPage({ page, storeSlug: store.slug, products: [], revisions: listPageRevisions(db, store.id, page.id) })
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  scripts.forEach((match) => assert.doesNotThrow(() => new Function(match[1] ?? '')))
+  assert.equal(scripts.length, 5)
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/)
+  assert.match(html, /Save history/)
+  assert.match(html, /sandbox="allow-same-origin"/)
+  assert.match(html, /id="preview-draft"/)
+  assert.match(html, /data-width="1200px"/)
+})
+
 /* ---------------------------------------------------------------- clone */
 
 test('cloning inlines stylesheets, makes URLs absolute, drops scripts and keeps the words', async () => {
   const pages: Record<string, { type: string; body: string }> = {
     'https://ref.example.com/landing': {
       type: 'text/html',
-      body: `<!doctype html><html><head><title>Ref Page</title><meta name="description" content="A reference"><base href="/x/">
+      body: `<!doctype html><html><head><title>Ref &ndash; Page &#x2122;</title><meta name="description" content="A reference &amp; source"><base href="/x/">
         <link rel="stylesheet" href="../site.css"><script src="/track.js"></script><meta http-equiv="Content-Security-Policy" content="default-src 'self'"></head>
         <body onload="track()"><h1>Reference headline</h1><img src="img/hero.png" srcset="img/hero.png 1x, img/hero@2x.png 2x"><p>Long enough paragraph to survive extraction into a block.</p><a href="/buy">Buy</a><script>alert(1)</script></body></html>`,
     },
     'https://ref.example.com/site.css': { type: 'text/css', body: 'body{background:url(bg.png)} @import "more.css";' },
     'https://ref.example.com/x/img/hero.png': { type: 'image/png', body: 'PNG' },
+    'https://ref.example.com/x/img/hero@2x.png': { type: 'image/png', body: 'PNG' },
+    'https://ref.example.com/bg.png': { type: 'image/png', body: 'PNG' },
   }
   const fetchImpl = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input)
@@ -208,17 +246,19 @@ test('cloning inlines stylesheets, makes URLs absolute, drops scripts and keeps 
   }) as typeof fetch
 
   const result = await clonePage('https://ref.example.com/landing', { storeId: 'store_clone', fetchImpl })
-  assert.equal(result.title, 'Ref Page')
+  assert.equal(result.title, 'Ref – Page ™')
+  assert.equal(result.description, 'A reference & source')
   assert.equal(result.stylesheets, 1)
   assert.match(result.html, /<style data-cloned-from="https:\/\/ref\.example\.com\/site\.css">/)
-  assert.match(result.html, /url\(https:\/\/ref\.example\.com\/bg\.png\)/, 'css urls resolved against the stylesheet')
+  assert.match(result.html, /url\(\/_uploads\/store_clone\/up_[a-z0-9]+\.png\)/, 'CSS background images are owned too')
   assert.match(result.html, /href="https:\/\/ref\.example\.com\/buy"/, 'links absolute')
   assert.ok(!result.html.includes('<base'), 'base tag removed')
   assert.ok(!result.html.includes('Content-Security-Policy'))
   assert.ok(!/<script/i.test(result.html), 'scripts dropped by default')
   assert.ok(!/onload=/i.test(result.html), 'inline handlers dropped')
-  assert.equal(result.imagesLocalized, 1)
+  assert.equal(result.imagesLocalized, 3)
   assert.match(result.html, /src="\/_uploads\/store_clone\/up_[a-z0-9]+\.png"/, 'the image now lives here')
+  assert.match(result.html, /srcset="\/_uploads\/store_clone\/up_[a-z0-9]+\.png 1x, \/_uploads\/store_clone\/up_[a-z0-9]+\.png 2x"/, 'responsive candidates are localized rather than left on the source CDN')
   assert.ok(result.notes.some((note) => /Dropped 2 scripts/.test(note)))
 
   const kept = await clonePage('https://ref.example.com/landing', { storeId: 'store_clone', fetchImpl, keepScripts: true, localizeImages: false })
@@ -368,4 +408,175 @@ test('the assistant can build a page and a bundle', async () => {
   assert.match(bundle.summary, /3 tiers/)
   assert.ok(bundleFor(db, store.id, glove.id))
   assert.ok(blockDefinition('bundle-offer'))
+})
+
+test('the assistant can read a page back and edit the blocks on it', async () => {
+  // It could add blocks and never touch them again: no way to see what was on
+  // a page, change a headline, reorder it or take a section off. The only edit
+  // available was building the page a second time.
+  const { db, store, user, glove } = shop()
+  const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
+  const created = await execute('create_page', { template: 'advertorial', productId: glove.id }, ctx)
+  const pageId = (created.data as { id: string }).id
+  await execute('add_block', { pageId, type: 'countdown', settings: { text: 'Ends in' } }, ctx)
+
+  const read = await execute('read_page', { pageId }, ctx)
+  const blocks = (read.data as { blocks: Array<{ position: number; id: string; type: string; settings: Record<string, unknown> }> }).blocks
+  assert.equal(blocks.at(-1)?.type, 'countdown')
+  assert.equal(blocks.at(-1)?.settings.text, 'Ends in')
+  assert.equal(blocks[0]?.position, 0, 'every block comes back with the position the edit tools address it by')
+
+  const countdown = blocks.at(-1)!
+  await execute('update_block', { pageId, blockId: countdown.id, settings: { text: 'Ends tonight' } }, ctx)
+  const edited = getPage(db, store.id, pageId)!.blocks.find((block) => block.id === countdown.id)
+  assert.equal(edited?.settings.text, 'Ends tonight')
+  assert.ok(Object.keys(edited?.settings ?? {}).length > 1, 'a partial update merges rather than replacing the settings')
+
+  await execute('move_block', { pageId, blockId: countdown.id, to: 0 }, ctx)
+  assert.equal(getPage(db, store.id, pageId)?.blocks[0]?.id, countdown.id)
+
+  const before = getPage(db, store.id, pageId)!.blocks.length
+  await execute('remove_block', { pageId, position: 0 }, ctx)
+  const after = getPage(db, store.id, pageId)!.blocks
+  assert.equal(after.length, before - 1)
+  assert.ok(!after.some((block) => block.id === countdown.id))
+
+  await assert.rejects(execute('update_block', { pageId, blockId: 'blk_nope', settings: {} }, ctx), /read_page/)
+  await assert.rejects(execute('remove_block', { pageId, position: 99 }, ctx), /read_page/)
+})
+
+test('bundle tiers re-price against the variant the buyer picks', () => {
+  // The widget is rendered once, from the cheapest variant. On a product where
+  // the large size costs more, the three-pack quoted the small size's total
+  // and the cart charged the large one — the page said $240 and the customer
+  // paid $360.
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Sizes', prompt: 'sizes' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, {
+    title: 'Tee',
+    status: 'published',
+    variants: [{ title: 'Small', priceCents: 4000, inventory: 5 }, { title: 'Large', priceCents: 6000, inventory: 5 }],
+  })
+  upsertBundle(db, store.id, { productId: product.id, tiers: [{ quantity: 1, discountPercent: 0, label: 'One' }, { quantity: 3, discountPercent: 20, label: 'Three' }] })
+  const widget = renderBundleWidget(bundleFor(db, store.id, product.id)!, product, 'USD', { variantPriceCents: 4000 })
+  assert.match(widget, /data-discount="20"/, 'the tier carries what it is worth, not only what it costs today')
+  assert.match(widget, /<b data-tier-total>\$96\.00<\/b>/, 'three small at 20% off')
+
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const pdp = productPage(view as never, { product: getProduct(db, store.id, product.id)!, stats: statsFor(db, store.id, product.id), reviews: [], companions: [] })
+  assert.match(pdp, /data-tier-total/, 'and the page can find the number to change')
+  assert.match(pdp, /input\.dataset\.discount/, 'picking a variant re-prices every tier from that variant')
+})
+
+test('the buybox promises only what the store has actually configured', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bare', prompt: 'bare' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Serum', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+
+  const render = (item: typeof product) => productPage(view as never, { product: item, stats: statsFor(db, store.id, item.id), reviews: [], companions: [] })
+  const pdp = render(product)
+  assert.ok(!/delivery by/.test(pdp), 'no supplier means no invented shipping date')
+  assert.ok(!/PayPal/.test(pdp), 'the platform does not implement PayPal, so no page claims it')
+  assert.ok(!/VISA/.test(pdp), 'and with no provider connected the store cannot take a card')
+  assert.ok(!/Repaired in-house/.test(pdp), 'the demo store\'s promises are not this store\'s')
+  assert.match(pdp, /Free shipping over \$200\.00/, 'the threshold is the one on the region')
+
+  updateProduct(db, store.id, product.id, { supplier: { processingDays: 1, shippingDaysMin: 3, shippingDaysMax: 5 } })
+  const withSupplier = render(getProduct(db, store.id, product.id)!)
+  assert.match(withSupplier, /delivery by/, 'once the merchant says how long it takes, the estimate is theirs to show')
+})
+
+test('a review left on the storefront waits for the merchant', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Mod', prompt: 'mod' })
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  createReview(db, store.id, { productId: product.id, rating: 1, body: 'unverifiable', author: 'Passer-by', status: 'pending' })
+  assert.equal(statsFor(db, store.id, product.id).count, 0, 'a pending review is in no rating and on no page')
+})
+
+test('a block setting the owner cleared stays cleared', () => {
+  // Any catalog block that ships copy in a string setting will do.
+  const found = BLOCKS.map((entry) => blockDefinition(entry.type))
+    .filter((definition): definition is NonNullable<typeof definition> => Boolean(definition))
+    .flatMap((definition) =>
+      Object.entries(definition.schema)
+        .filter(([, field]) => field.type === 'string' && typeof (field as { default?: unknown }).default === 'string' && String((field as { default?: unknown }).default).length > 6)
+        .map(([key, field]) => ({ definition, key, fallback: String((field as { default?: unknown }).default) })),
+    )[0]
+  assert.ok(found, 'the catalog ships blocks with stock copy in their string settings')
+  const cleared = renderBlock({ id: 'b1', type: found.definition.type, settings: { [found.key]: '' } }, context)
+  assert.ok(
+    !cleared.includes(found.fallback),
+    `deleting ${found.definition.type}.${found.key} must not bring "${found.fallback}" back at render`,
+  )
+})
+
+test('a split-test version served at the product URL is that product, to a crawler', () => {
+  const { db, store, glove } = shop()
+  const version = createPage(db, store.id, {
+    title: 'The Glove — benefit-led · Coach Mara (premium, focus on the wrist)',
+    kind: 'product',
+    role: 'pdp',
+    productId: glove.id,
+    status: 'published',
+    weight: 100,
+    blocks: [newBlock('headline', { text: 'Buy it' })],
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const asItself = blockPage(view as never, version)
+  assert.match(asItself, /Coach Mara/, 'at its own address it is the version')
+
+  const asProduct = blockPage(view as never, version, {
+    title: `${glove.title} — ${store.name}`,
+    description: glove.subtitle || glove.title,
+    canonical: `/s/${store.slug}/products/${glove.handle}`,
+  })
+  assert.ok(!/Coach Mara/.test(asProduct), 'at the product address the operator\'s internal name is not the title')
+  assert.match(asProduct, new RegExp(`rel="canonical" href="[^"]*/products/${glove.handle}"`), 'and the canonical is the product, not a page nobody links to')
+})
+
+test('a cloned page carries its own meta, not the site it was copied from', () => {
+  const { db, store } = shop()
+  const source = `<!doctype html><html><head><title>Their Brand — Buy Now</title>
+    <meta name="description" content="Their words">
+    <link rel="canonical" href="https://competitor.example/offer">
+    <link rel="stylesheet" href="https://competitor.example/theme.css">
+    <meta property="og:title" content="Their Brand"></head><body><h1>Offer</h1>
+    <a href="/">Return</a><a href="/products/widget?one=1&amp;two=2">Widget</a><a href="https://competitor.example/pages/about#team">About</a>
+    <form action="/contact"><button formaction="/contact/quick">Send</button></form><img src="/logo.png"></body></html>`
+  const page = createPage(db, store.id, {
+    title: 'Our offer',
+    kind: 'landing',
+    mode: 'html',
+    rawHtml: source,
+    sourceUrl: 'https://competitor.example/offer',
+    seo: { title: 'Our offer — Bundle Co', description: 'What we actually sell' },
+    headHtml: '<meta name="robots" content="index">',
+    status: 'published',
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const out = htmlPage(view as never, getPage(db, store.id, page.id)!)
+
+  assert.match(out, /<title>Our offer — Bundle Co<\/title>/)
+  assert.ok(!/Their Brand — Buy Now/.test(out), 'the source title is gone, not sitting beside ours')
+  assert.match(out, /content="What we actually sell"/)
+  assert.ok(!/competitor\.example\/offer"/.test(out.match(/rel="canonical"[^>]*/)?.[0] ?? ''), 'the canonical is ours')
+  assert.match(out, new RegExp(`rel="canonical" href="[^"]*/pages/${page.handle}"`))
+  assert.match(out, /name="robots" content="index"/, 'and the extra head is emitted at all')
+  assert.match(out, new RegExp(`href="/s/${store.slug}/"`), 'return stays in the mounted store instead of opening the Amboras admin')
+  assert.match(out, new RegExp(`href="/s/${store.slug}/products/widget\\?one=1&amp;two=2"`))
+  assert.match(out, new RegExp(`href="/s/${store.slug}/pages/about#team"`), 'same-origin absolute links are rebased too')
+  assert.match(out, new RegExp(`action="/s/${store.slug}/contact"`))
+  assert.doesNotMatch(out, /\sformaction=/, 'copied submit buttons use the store-owned form action, never an unimplemented source endpoint')
+  assert.match(out, /href="https:\/\/competitor\.example\/theme\.css"/, 'stylesheet URLs are not mistaken for navigation')
+  assert.match(out, /src="\/logo\.png"/, 'asset paths are not rebased')
+
+  const missing = notFoundPage({ ...view, env: { ...view.env, brand: { primary: '#123456', paper: '#fefefe', ink: '#102030', displayFont: 'Poppins, sans-serif', bodyFont: 'Inter, sans-serif' } } } as never)
+  assert.match(missing, /That page is not here/)
+  assert.match(missing, /#123456/)
+  assert.match(missing, /family=Poppins/)
+  assert.match(missing, new RegExp(`href="/s/${store.slug}/"`))
 })

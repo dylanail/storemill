@@ -126,6 +126,10 @@ export function ensureShippingProtection(db: Db, storeId: string, priceCents = 2
 export type ResolvedBump = { variantId: string; product: Product; label: string; text: string; priceCents: number }
 
 export function resolveBump(db: Db, storeId: string, funnel: Funnel | null): ResolvedBump | null {
+  // `enabled: false` was honoured here and written by nothing, so a merchant
+  // who did not want to sell shipping protection had no way to stop the
+  // checkout offering it — the fallback below invents the product when there
+  // is no funnel at all.
   const bump = funnel?.bump ?? {}
   if (bump.enabled === false) return null
   let product: Product | null = null
@@ -181,16 +185,17 @@ export function resolveOffer(db: Db, storeId: string, offer: Offer | undefined, 
 
 /**
  * A funnel split test. Every funnel in a group with a weight above zero is in
- * it; a visitor arriving at /go/:group is assigned one by a hash of their
- * session and the group, so they see the same funnel every time, and the
- * entry is an event so each funnel's sessions can be followed to the cart
- * and the order.
+ * it; a visitor arriving at /go/:group is assigned one by a hash of the
+ * storefront's visitor cookie and the group, so they see the same funnel every
+ * time — the analytics session would have re-rolled them at midnight — and the
+ * entry is an event so each funnel's sessions can be followed to the cart and
+ * the order.
  */
-export function pickFunnel(db: Db, storeId: string, group: string, sessionKey: string): Funnel | null {
+export function pickFunnel(db: Db, storeId: string, group: string, visitorKey: string): Funnel | null {
   const live = listFunnels(db, storeId).filter((funnel) => funnel.testGroup === group && funnel.status === 'active' && funnel.weight > 0)
   if (!live.length) return null
   const total = live.reduce((sum, funnel) => sum + funnel.weight, 0)
-  const hash = parseInt(createHash('sha256').update(`${sessionKey}|${group}`).digest('hex').slice(0, 8), 16)
+  const hash = parseInt(createHash('sha256').update(`${visitorKey}|${group}`).digest('hex').slice(0, 8), 16)
   let point = hash % total
   for (const funnel of live) {
     point -= funnel.weight
@@ -210,23 +215,57 @@ export function funnelStats(db: Db, storeId: string, group: string): FunnelStats
   return listFunnels(db, storeId)
     .filter((funnel) => funnel.testGroup === group)
     .map((funnel) => {
-      const sessions = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND type = 'funnel.enter' AND json_extract(meta, '$.funnelId') = ?", storeId, funnel.id).map((row) => row.session_id)
-      if (!sessions.length) return { funnelId: funnel.id, name: funnel.name, weight: funnel.weight, sessions: 0, carts: 0, purchases: 0, revenueCents: 0, revenuePerSessionCents: 0 }
-      const marks = sessions.map(() => '?').join(', ')
-      const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${marks})`, storeId, ...sessions)?.c ?? 0
-      const bought = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${marks})`, storeId, ...sessions)
+      // Bounded by when the session entered this funnel: a shopper who bought
+      // last week and entered the funnel today is not a conversion for it.
+      const entered = db.all<{ session_id: string; at: string }>(
+        "SELECT session_id, MIN(created_at) at FROM analytics_events WHERE store_id = ? AND type = 'funnel.enter' AND json_extract(meta, '$.funnelId') = ? GROUP BY session_id",
+        storeId,
+        funnel.id,
+      )
+      const blank = { funnelId: funnel.id, name: funnel.name, weight: funnel.weight, sessions: 0, carts: 0, purchases: 0, revenueCents: 0, revenuePerSessionCents: 0 }
+      if (!entered.length) return blank
+      const after = entered.map(() => '(session_id = ? AND created_at >= ?)').join(' OR ')
+      const params = entered.flatMap((row) => [row.session_id, row.at])
+      const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND (${after})`, storeId, ...params)?.c ?? 0
+      const bought = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND (${after})`, storeId, ...params)
       const revenue = bought?.total ?? 0
-      return { funnelId: funnel.id, name: funnel.name, weight: funnel.weight, sessions: sessions.length, carts, purchases: bought?.c ?? 0, revenueCents: revenue, revenuePerSessionCents: Math.round(revenue / sessions.length) }
+      return { ...blank, sessions: entered.length, carts, purchases: bought?.c ?? 0, revenueCents: revenue, revenuePerSessionCents: Math.round(revenue / entered.length) }
     })
 }
 
-/** Where a funnel starts: its advertorial if it has one, else its offer page, else the product. */
+/**
+ * Where a funnel starts: its advertorial if it has one, else its offer page,
+ * else the product.
+ *
+ * Only published pages count. Every page generator here writes drafts by
+ * default, so a funnel wired to one sent paid traffic to a URL the storefront
+ * answers with a 404 — the most expensive 404 a dropshipper can serve.
+ */
 export function funnelEntry(db: Db, storeId: string, funnel: Funnel): string {
-  const page = (pageId: string) => (pageId ? db.one<{ handle: string }>('SELECT handle FROM pages WHERE store_id = ? AND id = ?', storeId, pageId)?.handle : undefined)
+  const page = (pageId: string) => (pageId ? db.one<{ handle: string }>("SELECT handle FROM pages WHERE store_id = ? AND id = ? AND status = 'published'", storeId, pageId)?.handle : undefined)
   const advertorial = page(funnel.advertorialPageId)
   if (advertorial) return `/pages/${advertorial}`
   const offer = page(funnel.offerPageId)
   if (offer) return `/pages/${offer}`
   const product = funnel.productId ? db.one<{ handle: string }>('SELECT handle FROM products WHERE store_id = ? AND id = ?', storeId, funnel.productId)?.handle : undefined
   return product ? `/products/${product}` : '/'
+}
+
+/**
+ * The step after this page in its funnel, if it is in one.
+ *
+ * The advertorial's next step is the offer page; the offer page's is the
+ * checkout. Returns null when the page is not a funnel step, or when the step
+ * it points at is not published.
+ */
+export function funnelNextFor(db: Db, storeId: string, pageId: string): string | null {
+  const funnel = listFunnels(db, storeId).find((entry) => entry.advertorialPageId === pageId || entry.offerPageId === pageId)
+  if (!funnel) return null
+  if (funnel.advertorialPageId === pageId) {
+    const offer = funnel.offerPageId
+      ? db.one<{ handle: string }>("SELECT handle FROM pages WHERE store_id = ? AND id = ? AND status = 'published'", storeId, funnel.offerPageId)?.handle
+      : undefined
+    return offer ? `/pages/${offer}` : '/checkout'
+  }
+  return '/checkout'
 }

@@ -122,3 +122,18 @@ test('onboarding researches first and every product ships with a full page', asy
     assert.match(product.heroImage, /ref=%2F_uploads/, `${product.title} imagery is derived from the upload`)
   }
 })
+
+test('the rules writers do not invent a place of manufacture or a repair promise', () => {
+  // Nothing in this sentence says where anything is made.
+  const brief = readBrief('a clinical skincare brand with three products and a very plain white storefront')
+  assert.equal(brief.place, '', 'a place is only ever one the owner named')
+
+  const research = rulesResearch(brief)
+  assert.ok(!/Made in/.test(research.proofPoints.join(' ')), 'and it is not asserted as a proof point')
+  assert.ok(!/Repaired in-house/.test(research.proofPoints.join(' ')), 'nor is a lifetime repair promise')
+  assert.ok(!research.positioning.includes(' in  '), 'nor left as a hole in the positioning')
+
+  const named = readBrief('a hand-stitched boxing gear store, heritage leather atelier in Mexico City')
+  assert.equal(named.place, 'Mexico City', 'a place the owner did name is kept')
+  assert.ok(rulesResearch(named).proofPoints.some((point) => point.includes('Mexico City')))
+})

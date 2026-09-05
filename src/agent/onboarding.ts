@@ -1,4 +1,5 @@
 import type { Db } from '../lib/db.ts'
+import { id } from '../lib/ids.ts'
 import { logger } from '../lib/log.ts'
 import { createStore, getStore, setTheme, type Store } from '../control/stores.ts'
 import { seedDefaultRegion } from '../domain/regions.ts'
@@ -129,9 +130,83 @@ export type OnboardingResult = { store: Store; run: Run; summaries: string[]; fa
  * exists before any tool fires so the preview URL is real from the first
  * second — the merchant can open it and watch products appear.
  */
+/**
+ * Onboarding, watched rather than waited on.
+ *
+ * `onboard` is minutes of work — research, a brand kit, three products with a
+ * model call and an image each, then merchandising — and it used to run inside
+ * the POST. The merchant stared at a spinning tab, anything with a request
+ * timeout in front of the process (Caddy, Railway) returned a gateway error
+ * while the store was built anyway, and the flash afterwards reported success
+ * whether or not the steps had failed.
+ *
+ * The build runs detached and reports progress against a ticket. Tickets are
+ * in memory: they exist for the minutes a build takes, and if the process
+ * restarts mid-build the store row and its runs are still on disk, which is
+ * what `recoverRuns` and `resumeQueuedRuns` pick up at boot.
+ */
+export type BuildTicket = {
+  id: string
+  ownerId: string
+  state: 'working' | 'done' | 'failed'
+  stage: string
+  storeId: string
+  storeName: string
+  summaries: string[]
+  failures: string[]
+  error: string
+  startedAt: number
+}
+
+const tickets = new Map<string, BuildTicket>()
+
+export function startOnboarding(db: Db, input: { ownerId: string; prompt: string; currency?: string; referenceImage?: string; referenceUrl?: string }): BuildTicket {
+  for (const [key, entry] of tickets) if (Date.now() - entry.startedAt > 30 * 60_000) tickets.delete(key)
+  const ticket: BuildTicket = {
+    id: id('build'),
+    ownerId: input.ownerId,
+    state: 'working',
+    stage: 'Researching who buys this',
+    storeId: '',
+    storeName: '',
+    summaries: [],
+    failures: [],
+    error: '',
+    startedAt: Date.now(),
+  }
+  tickets.set(ticket.id, ticket)
+  void onboard(db, input, (stage, store) => {
+    ticket.stage = stage
+    if (store) {
+      ticket.storeId = store.id
+      ticket.storeName = store.name
+    }
+  })
+    .then((result) => {
+      ticket.state = 'done'
+      ticket.stage = 'Built'
+      ticket.storeId = result.store.id
+      ticket.storeName = result.store.name
+      ticket.summaries = result.summaries
+      ticket.failures = result.failures
+    })
+    .catch((error) => {
+      ticket.state = 'failed'
+      ticket.error = error instanceof Error ? error.message : String(error)
+      log.error(`onboarding failed: ${ticket.error}`)
+    })
+  return ticket
+}
+
+export function buildTicket(id: string, ownerId: string): BuildTicket | null {
+  const ticket = tickets.get(id)
+  return ticket && ticket.ownerId === ownerId ? ticket : null
+}
+
 export async function onboard(
   db: Db,
   input: { ownerId: string; prompt: string; currency?: string; referenceImage?: string; referenceUrl?: string },
+  onStage?: (stage: string, store?: { id: string; name: string }) => void,
 ): Promise<OnboardingResult> {
   const brief = readBrief(input.prompt)
   const currency = (input.currency ?? 'USD').toUpperCase()
@@ -145,8 +220,10 @@ export async function onboard(
   if (input.referenceImage) notes.push('The merchant supplied a product photograph; imagery is derived from it.')
 
   // Research first, and on its own: the brand kit and every product page read it.
+  onStage?.('Researching who buys this, what stops them and what they pay')
   const researchModel = modelFor(db, null, 'research')
   const research = await authorResearch(researchModel, brief, { sourceText, notes, currency, hasSite: Boolean(input.referenceUrl && sourceText) })
+  onStage?.('Naming the brand and picking its palette, fonts and mark')
   const kit = await authorBrandKit(modelFor(db, null, 'brand'), brief, research.research, { currency })
   log.info(`research by ${describe(researchModel)}, brand kit by ${kit.source === 'model' ? kit.model : 'rules'}: ${kit.name}`)
 
@@ -172,12 +249,14 @@ export async function onboard(
 
   const actor = { actor: { type: 'agent' as const, id: 'onboarding' }, page: 'onboarding' }
   const steps = planOnboarding(kit, brief, { ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}) })
+  onStage?.('Writing three products with full pages, prices and imagery', store)
   const run = createRun(db, { storeId: store.id, kind: 'onboarding', prompt: input.prompt, steps })
   const outcome = await runToCompletion(db, run.id, actor)
 
   // Phase two reads the world the first phase built. Merchandising cannot be
   // planned up front because it needs the product ids that phase one minted,
   // and inventing a placeholder id to patch later would be a lie in the run log.
+  onStage?.('Setting the welcome code, the free-shipping threshold and the bundle', store)
   const merchandising = createRun(db, {
     storeId: store.id,
     kind: 'onboarding',

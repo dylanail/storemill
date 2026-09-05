@@ -1,5 +1,6 @@
 import type { Product, ProductContent } from '../domain/types.ts'
 import type { Research } from './research.ts'
+import type { MarketAnalysis } from './market.ts'
 import type { Brief } from './copy.ts'
 import { newBlock, salesTemplate, scienceTemplate } from '../pages/store.ts'
 import { blockDefinition, type BlockInstance } from '../pages/blocks.ts'
@@ -113,6 +114,30 @@ export type WriterInput = {
   brief: Brief
   direction: Direction
   format: Format
+  /**
+   * The Market tab's analysis, when the store has run one.
+   *
+   * The prompt below already tells the writer to "name the mechanism from the
+   * research and use the name everywhere" — and the mechanism, the awareness
+   * level, the sophistication stage and the underserved avatar live in the
+   * market analysis, which no writer was given. The course's whole method for
+   * deciding what a page must say was written, displayed on its own tab, and
+   * read by nothing that writes a word.
+   */
+  market?: MarketAnalysis | null
+}
+
+/** The part of the analysis a writer needs, as a line in its prompt. */
+export function marketBrief(market: MarketAnalysis | null | undefined): string {
+  if (!market) return ''
+  const mechanism = market.mechanisms.find((entry) => entry.isNew) ?? market.mechanisms[0]
+  return `Market: awareness ${market.awareness} (${market.awarenessWhy}); sophistication stage ${market.sophistication} (${market.sophisticationWhy}). Lead desire: ${market.leadDesire}. ${
+    mechanism ? `Mechanism${mechanism.isNew ? ' (new)' : ''}: ${mechanism.name} — ${mechanism.how}.` : 'No mechanism named yet.'
+  } ${market.newInformation.length ? `New information to lead with: ${market.newInformation.map((entry) => entry.claim).join('; ')}.` : ''} ${
+    market.underserved.length ? `Underserved: ${market.underserved.map((entry) => `${entry.avatar} — ${entry.angle}`).join('; ')}.` : ''
+  } Stand out via ${market.standOut.via}: ${market.standOut.recommendation}. ${
+    market.languageSnippets.length ? `Words the market uses: ${market.languageSnippets.slice(0, 8).join(' / ')}.` : ''
+  } At stage 3 or above the page needs a reset — a new mechanism, new information or a new identity — not a bigger claim.`
 }
 
 export function reasonsFor(input: WriterInput, count: number): Array<{ headline: string; text: string }> {
@@ -322,6 +347,7 @@ export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInst
       `Format: ${format.name} (${format.kind}) — ${format.description}`,
       `Direction from the owner, verbatim: ${direction.raw || '(none)'}\nRead as: tone ${direction.tone}; audience ${direction.audience || '(unspecified)'}; angle ${direction.angle || '(unspecified)'}; must say: ${direction.mustSay.join(' / ') || '(nothing)'}${direction.avatar ? `; written to the avatar "${direction.avatar}"` : ''}`,
       `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
+      marketBrief(input.market),
       `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
       extra,
       'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), how-it-works steps "title|text|image URL", timeline steps "when|title|text", alternatives "name|why it fails", cost-comparison rows "what|cost", value-stack items "item|value", stats "number|caption", expert quotes "quote|name|title|image URL", studies "journal, year|finding|URL", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro); if the page needs styling or behaviour no block gives (a reveal on scroll, a tab switcher), add one "custom-code" with css and js. Usually additions is empty.',

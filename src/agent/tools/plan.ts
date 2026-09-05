@@ -1,9 +1,10 @@
 import { getStore } from '../../control/stores.ts'
 import { buildProgress, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, SHAPES, type BuildMode } from '../../control/build.ts'
-import { getProduct } from '../../domain/catalog.ts'
+import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { latestResearch } from '../research.ts'
 import { getAvatar, listAvatars } from '../avatars.ts'
-import { latestDoc, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, type MarketAnalysis } from '../market.ts'
+import { latestDoc, planRowRequest, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../market.ts'
+import { draftAds } from '../ads.ts'
 import { modelFor } from '../models.ts'
 import { ripToPage } from '../../pages/rip.ts'
 import { createPage, newBlock } from '../../pages/store.ts'
@@ -140,6 +141,33 @@ export const planTools: Tool[] = defineTools([
     },
   },
   {
+    name: 'draft_ads_from_plan',
+    area: 'ads',
+    description: 'Take a row of the ad plan and write it as ads: its angle, its variations and its format go to the ad writer as they are, and the row moves to "working". Rows are numbered from 0 in the order write_ad_plan returned them.',
+    schema: {
+      row: { type: 'number', integer: true, min: 0, required: true, help: 'Which plan row, from 0.' },
+      productId: { type: 'string', help: 'Defaults to the first published product.' },
+      platform: { type: 'string', enum: ['meta', 'tiktok', 'google', 'youtube'], default: 'meta' },
+    },
+    async handler(args, ctx) {
+      const store = getStore(ctx.db, ctx.storeId)
+      if (!store) throw new Error('No store')
+      const doc = latestDoc<AdPlan>(ctx.db, ctx.storeId, 'ad-plan')
+      const index = args.row as number
+      const row = doc?.body.rows[index]
+      if (!row) throw new Error(doc ? `The plan has ${doc.body.rows.length} rows; there is no row ${index}.` : 'No ad plan yet — write_ad_plan first.')
+      const productId = (args.productId as string) || listProducts(ctx.db, ctx.storeId, { status: 'published', limit: 1 })[0]?.id
+      if (!productId) throw new Error('Publish a product first; an ad has to point at something.')
+      const request = planRowRequest(row, listAvatars(ctx.db, ctx.storeId))
+      const ads = await draftAds(ctx.db, store, { productId, platform: args.platform as 'meta', ...request })
+      if (row.status === 'idea') updatePlanRow(ctx.db, ctx.storeId, index, { status: 'working' })
+      return {
+        summary: `${ads.length} ad${ads.length === 1 ? '' : 's'} drafted from "${row.concept}" (${row.method}, ${row.format}). The row is working; its learnings are what finishes it.`,
+        artifacts: [{ type: 'table', columns: ['Ad', 'Format', 'Hook'], rows: ads.map((ad) => [ad.name, ad.format, ad.body.hooks[0] ?? '']) }, { type: 'link', href: '/admin/ads', label: 'Open the ads' }],
+      }
+    },
+  },
+  {
     name: 'rip_funnel',
     area: 'store',
     description: 'Read a competitor page for its structure and build the same order of sections for our product, with new copy and no images copied. keepAngle keeps its reason to buy in our words; false uses our direction instead.',
@@ -219,7 +247,7 @@ export const planTools: Tool[] = defineTools([
       if (!store) throw new Error('No store')
       const report = auditStore(ctx.db, store)
       const issues = report.pages.flatMap((page) => page.issues.map((issue) => [page.path, issue.severity, issue.detail]))
-      return { summary: `Site score ${report.score}/100 across ${report.pages.length} pages; ${issues.length} findings.`, data: report, artifacts: [{ type: 'table', columns: ['Page', 'Severity', 'Finding'], rows: issues.slice(0, 20) }, { type: 'link', href: '/admin/store?health=1#health', label: 'Full report' }] }
+      return { summary: `Site score ${report.score}/100 across ${report.pages.length} pages of the ${report.environment === 'live' ? 'live site' : 'unpublished draft'}; ${issues.length} findings.`, data: report, artifacts: [{ type: 'table', columns: ['Page', 'Severity', 'Finding'], rows: issues.slice(0, 20) }, { type: 'link', href: '/admin/store?health=1#health', label: 'Full report' }] }
     },
   },
 ])

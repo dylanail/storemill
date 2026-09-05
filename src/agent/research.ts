@@ -1,4 +1,5 @@
 import { json, now, type Db } from '../lib/db.ts'
+import { answersForPrompt, buildState } from '../control/build.ts'
 import { id } from '../lib/ids.ts'
 import { logger } from '../lib/log.ts'
 import { readBrief, type Brief } from './copy.ts'
@@ -173,11 +174,11 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
   const knowledge = KNOWLEDGE[brief.category] ?? GENERIC
   const keywords = knowledge.keywords.length
     ? knowledge.keywords
-    : [`handmade ${brief.category}`, `best ${brief.category}`, `${brief.category} ${brief.place.toLowerCase()}`, `${brief.material} ${brief.category}`, `buy ${brief.category} online`]
+    : [`handmade ${brief.category}`, `best ${brief.category}`, ...(brief.place ? [`${brief.category} ${brief.place.toLowerCase()}`] : []), `${brief.material} ${brief.category}`, `buy ${brief.category} online`]
   const [low, mid, high] = knowledge.anchor
   return {
     category: brief.category,
-    positioning: `${capitalize(brief.category)} for ${brief.audience}, made from ${brief.material} in ${brief.place} — priced above the mass market and below the bespoke makers, and easier to buy from than either.`,
+    positioning: `${capitalize(brief.category)} for ${brief.audience}, made from ${brief.material}${brief.place ? ` in ${brief.place}` : ''} — priced above the mass market and below the bespoke makers, and easier to buy from than either.`,
     audience: knowledge.personas.map((persona) => ({ ...persona })),
     triggers: knowledge.triggers,
     objections: knowledge.objections,
@@ -191,10 +192,12 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
     keywords,
     proofPoints: [
       `${capitalize(brief.material)}, named on the page`,
-      `Made in ${brief.place} in small runs`,
-      'Repaired in-house for the life of the product',
+      // A place of manufacture and a lifetime repair promise are the
+      // merchant's to make, not the scaffolding's. They are here only when the
+      // owner's own sentence said so.
+      ...(brief.place ? [`Made in ${brief.place} in small runs`] : []),
       'Free returns for thirty days',
-      'Built to order; ship date shown before checkout',
+      'Ship date shown before checkout',
     ],
     comparison: {
       us: knowledge.rows.map((row) => row.us),
@@ -250,14 +253,20 @@ const RESEARCH_SYSTEM = `You are a direct-response strategist doing customer res
  * generic record in the prompt produces a generic answer, and the point of
  * the model is to know things about this category the rules do not.
  */
-async function modelResearch(choice: ModelChoice, brief: Brief, sourceText: string, currency: string): Promise<Research> {
+async function modelResearch(choice: ModelChoice, brief: Brief, sourceText: string, currency: string, ownerAnswers = ''): Promise<Research> {
   const prompt = [
     `Brief from the owner: ${brief.prompt}`,
     `Category guess from the brief: ${brief.category === 'goods' ? '(none; decide from the brief)' : brief.category}`,
     `Currency: ${currency}`,
+    // The build asks eight questions about the buyer in step four and runs
+    // research in step five, and the card promises research fills in what the
+    // owner does not know. The answers were written to the store and read only
+    // by the market analysis: research, the step they exist for, never saw
+    // them.
+    ownerAnswers,
     sourceText ? `Source material from the owner's existing site (read it for positioning, claims and price; quote what is useful into sourceNotes):\n${sourceText.slice(0, 12000)}` : 'No source material was given.',
-    `Write the full research record. Personas biggest first with shares summing to 1; triggers are moments, not adjectives; every objection gets the answer a good page would give; the comparison rows are the criteria this brand wins on against the usual alternative.`,
-  ].join('\n\n')
+    `Write the full research record. Personas biggest first with shares summing to 1; triggers are moments, not adjectives; every objection gets the answer a good page would give; the comparison rows are the criteria this brand wins on against the usual alternative. Where the owner has answered a question above, that answer is a fact about their buyer and the record must agree with it; where they said they do not know, that is exactly what this research is for.`,
+  ].filter(Boolean).join('\n\n')
   const parsed = await completeJson<ModelResearch>(choice, { task: 'research', system: RESEARCH_SYSTEM, prompt, schema: RESEARCH_SCHEMA, name: 'customer_research' })
   return normalizeResearch(parsed, brief)
 }
@@ -291,10 +300,14 @@ export type AuthoredResearch = { research: Research; source: ResearchSource; mod
  * A configured model that fails is an error the caller sees, not a silent
  * downgrade to rules.
  */
-export async function authorResearch(choice: ModelChoice | null, brief: Brief, input: { sourceText?: string; notes?: string[]; currency?: string; hasSite?: boolean } = {}): Promise<AuthoredResearch> {
+export async function authorResearch(
+  choice: ModelChoice | null,
+  brief: Brief,
+  input: { sourceText?: string; notes?: string[]; currency?: string; hasSite?: boolean; ownerAnswers?: string } = {},
+): Promise<AuthoredResearch> {
   const notes = input.notes ?? []
   if (!choice) return { research: rulesResearch(brief, notes), source: 'rules', model: '' }
-  const research = await modelResearch(choice, brief, input.sourceText ?? '', input.currency ?? 'USD')
+  const research = await modelResearch(choice, brief, input.sourceText ?? '', input.currency ?? 'USD', input.ownerAnswers ?? '')
   log.info(`research written by ${describe(choice)} for "${brief.prompt.slice(0, 60)}"`)
   return { research: { ...research, sourceNotes: [...notes, ...research.sourceNotes] }, source: input.hasSite ? 'model+site' : 'model', model: choice.model }
 }
@@ -311,7 +324,7 @@ export async function readSite(url: string): Promise<{ text: string; notes: stri
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 6000)
-    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'AmborasResearch/1.0' } })
+    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'storemillResearch/1.0' } })
     clearTimeout(timer)
     if (!response.ok) return { text: '', notes: [`Could not read ${url} (${response.status})`] }
     const html = (await response.text()).slice(0, 400_000)
@@ -356,7 +369,15 @@ export async function runResearch(
   }
   if (input.imageNote) notes.push(input.imageNote)
   const choice = input.model === undefined ? modelFor(db, storeId, 'research') : input.model
-  const authored = await authorResearch(choice, brief, { sourceText, notes, ...(input.currency ? { currency: input.currency } : {}), hasSite: Boolean(input.siteUrl && sourceText) })
+  const state = buildState(db, storeId)
+  const ownerAnswers = Object.keys(state.answers).length ? answersForPrompt(state) : ''
+  const authored = await authorResearch(choice, brief, {
+    sourceText,
+    notes,
+    ...(input.currency ? { currency: input.currency } : {}),
+    hasSite: Boolean(input.siteUrl && sourceText),
+    ...(ownerAnswers ? { ownerAnswers } : {}),
+  })
   return saveResearch(db, storeId, authored, input.prompt)
 }
 

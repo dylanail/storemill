@@ -259,6 +259,52 @@ const AD_SCHEMA = S.obj({
  * avatar, the direction, the real reviews and the swipe file, and writes the
  * copy fresh. Testimonials only ever quote the approved reviews it is given.
  */
+export function unverifiedQuotes(text: string, reviews: Array<{ body: string; author: string }>): string[] {
+  const bag = (value: string) => new Set(value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean))
+  const pool = reviews.map((review) => bag(`${review.body} ${review.author}`))
+  const out: string[] = []
+  for (const match of text.matchAll(/["\u201c\u201d]([^"\u201c\u201d]{12,240})["\u201c\u201d]/g)) {
+    const quote = (match[1] ?? '').trim()
+    const words = [...bag(quote)].filter((word) => word.length > 3)
+    if (words.length < 3) continue
+    const best = pool.length ? Math.max(...pool.map((set) => words.filter((word) => set.has(word)).length / words.length)) : 0
+    if (best < 0.7) out.push(quote)
+  }
+  return out
+}
+
+function withoutInventedQuotes(written: AdCopy, draft: AdCopy, reviews: Array<{ body: string; author: string }>): AdCopy {
+  const dropped: string[] = []
+  const checkText = (value: string, fallback: string) => {
+    const bad = unverifiedQuotes(value, reviews)
+    if (!bad.length) return value
+    dropped.push(...bad)
+    return fallback
+  }
+  const checkList = (values: string[], fallback: string[]) => {
+    const kept = values.filter((value) => {
+      const bad = unverifiedQuotes(value, reviews)
+      dropped.push(...bad)
+      return !bad.length
+    })
+    return kept.length ? kept : fallback
+  }
+  const result: AdCopy = {
+    ...written,
+    hooks: checkList(written.hooks, draft.hooks),
+    primaryText: checkText(written.primaryText, draft.primaryText),
+    headline: checkText(written.headline, draft.headline),
+    description: checkText(written.description, draft.description),
+    headlines: checkList(written.headlines, draft.headlines),
+    descriptions: checkList(written.descriptions, draft.descriptions),
+    script: written.script.some((beat) => unverifiedQuotes(`${beat.line} ${beat.visual}`, reviews).length) ? draft.script : written.script,
+  }
+  return dropped.length ? {
+    ...result,
+    notes: [`An unverified quote was removed from this ad: "${clip(dropped[0] as string, 90)}".`, ...result.notes].slice(0, 4),
+  } : result
+}
+
 async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInput): Promise<AdCopy> {
   if (!choice) return draft
   if (input.format.id === 'testimonial' && !draft.primaryText) return draft
@@ -285,20 +331,23 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       schema: AD_SCHEMA,
       name: 'ad_copy',
     })
-    const clean = (list: string[] | undefined, max: number) => (list ?? []).map((line) => line.trim()).filter(Boolean).slice(0, max)
-    return {
+    const platformLimits = PLATFORMS.find((entry) => entry.id === input.platform)?.limits ?? { primary: 125, headline: 40, description: 30 }
+    const clean = (list: string[] | undefined, max: number, chars = 0) =>
+      (list ?? []).map((line) => (chars ? clip(line.trim(), chars) : line.trim())).filter(Boolean).slice(0, max)
+    const written: AdCopy = {
       hooks: clean(parsed.hooks, 10).length ? clean(parsed.hooks, 10) : draft.hooks,
-      primaryText: input.format.id === 'search' ? '' : parsed.primaryText?.trim() || draft.primaryText,
-      headline: parsed.headline?.trim() || draft.headline,
-      description: parsed.description?.trim() ?? draft.description,
+      primaryText: input.format.id === 'search' ? '' : clip(parsed.primaryText?.trim() || draft.primaryText, platformLimits.primary),
+      headline: clip(parsed.headline?.trim() || draft.headline, platformLimits.headline),
+      description: clip(parsed.description?.trim() ?? draft.description, platformLimits.description),
       cta: parsed.cta?.trim() || draft.cta,
-      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15).length ? clean(parsed.headlines, 15) : draft.headlines) : [],
-      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4).length ? clean(parsed.descriptions, 4) : draft.descriptions) : [],
+      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15, 30).length ? clean(parsed.headlines, 15, 30) : draft.headlines) : [],
+      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4, 90).length ? clean(parsed.descriptions, 4, 90) : draft.descriptions) : [],
       script: input.format.video ? (parsed.script?.length ? parsed.script.slice(0, 8) : draft.script) : [],
       angle: parsed.angle?.trim() || draft.angle,
       avatar: draft.avatar,
       notes: [...clean(parsed.notes, 3), ...draft.notes.filter((note) => /approved reviews|Tiers come from|No bundle/.test(note))].filter(Boolean),
     }
+    return withoutInventedQuotes(written, draft, input.reviews)
   } catch (error) {
     log.warn(`${describe(choice)} could not write the ${input.format.name} ad; keeping the rules draft: ${error instanceof Error ? error.message : String(error)}`)
     return draft
