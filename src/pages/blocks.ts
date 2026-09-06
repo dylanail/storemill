@@ -67,6 +67,8 @@ export type BlockContext = {
   checkout?: {
     /** The contact, delivery, shipping and payment form with the pay button. Carries a `<!--bump-->` marker where the order bump goes. */
     formHtml: string
+    headerHtml?: string
+    footerHtml?: string
     /** Line items, discount code and totals. */
     summaryHtml: string
     /** The express wallet row; empty without a payment provider. */
@@ -634,10 +636,12 @@ export const BLOCKS: BlockDefinition[] = [
     schema: {
       layout: { type: 'string', label: 'Layout', enum: ['two-column', 'stacked'], default: 'two-column', help: 'Two-column puts the order summary beside the form, the way Shopify does. Stacked leaves it out so an Order summary block can go anywhere.' },
       summaryHeadline: { type: 'string', label: 'Summary heading', default: 'Your order' },
+      showHeader: { type: 'boolean', label: 'Show brand and cart header', default: true },
+      showPolicies: { type: 'boolean', label: 'Show policy links', default: true },
       showExpress: { type: 'boolean', label: 'Show express wallets first', default: true },
       showBump: { type: 'boolean', label: 'Show the order bump before payment', default: true },
       buttonLabel: { type: 'string', label: 'Pay button', default: 'Complete order' },
-      note: { type: 'string', label: 'Line under the button', default: '🔒 Secure 256-bit encrypted checkout · 30-day money-back guarantee' },
+      note: { type: 'string', label: 'Line under the button', default: '' },
       ...COMMON,
       width: { ...(COMMON.width as object), default: 'wide' } as never,
     },
@@ -647,13 +651,13 @@ export const BLOCKS: BlockDefinition[] = [
       const total = format(checkout.totalCents, context.currency)
       const two = settings.layout === 'two-column'
       const form = checkout.formHtml.replace('<!--bump-->', settings.showBump ? checkout.bumpHtml : '').replace('<!--pay-label-->', e(settings.buttonLabel || 'Pay now'))
-      return wrap(settings, block, `<div class="checkout checkout--blk${two ? '' : ' checkout--stacked'}" data-checkout>
+      return wrap(settings, block, `${settings.showHeader ? checkout.headerHtml||'' : ''}<div class="checkout checkout--blk${two ? '' : ' checkout--stacked'}" data-checkout aria-label="${checkout.sample ? 'Sample order' : 'Checkout'}">
         <div class="co-main">
-          ${checkout.sample ? '<p class="micro co-sample">Sample order — the editor preview. Visitors see their own cart here.</p>' : ''}
           ${checkout.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${e(checkout.error)}</div>` : ''}
           ${two ? `<details class="co-summary-mobile"><summary><span>Show order summary</span><b>${total}</b></summary>${checkout.summaryHtml}</details>` : ''}
           ${settings.showExpress ? checkout.expressHtml : ''}
           ${form}
+          ${settings.showPolicies ? checkout.footerHtml||'' : ''}
           ${settings.note ? `<p class="micro center">${e(settings.note)}</p>` : ''}
         </div>
         ${two ? `<aside class="co-side">${settings.summaryHeadline ? `<h2 class="co-h">${e(settings.summaryHeadline)}</h2>` : ''}${checkout.summaryHtml}</aside>` : ''}</div>`)

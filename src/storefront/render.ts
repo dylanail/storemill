@@ -1,3 +1,4 @@
+import { CHECKOUT_CSS, CHECKOUT_ICONS, checkoutField, addressFields } from './checkout-ui.ts'
 import { cartDisplayLines } from '../domain/cart-prices.ts'
 import { mapProductGalleries, productGalleryRuntime } from '../pages/product-gallery-runtime.ts'
 import { pageProductData } from '../pages/product-data.ts'
@@ -19,7 +20,7 @@ import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import { convertCents, defaultRegion, type Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
-import { getPage, PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
+import { getPage, listPages, PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
 import { getProduct } from '../domain/catalog.ts'
@@ -66,7 +67,7 @@ function stars(rating: number): string {
 
 export function layout(
   view: StoreView,
-  page: { title: string; description: string; body: string; jsonLd?: Array<Record<string, unknown>>; image?: string; canonical?: string; bare?: boolean; popup?: boolean; head?: string; fonts?: string[] },
+  page: { title: string; description: string; body: string; jsonLd?: Array<Record<string, unknown>>; image?: string; canonical?: string; bare?: boolean; popup?: boolean; head?: string; fonts?: string[]; checkout?: boolean },
 ): string {
   const { store, env } = view
   const brand = Object.keys(env.brand).length ? env.brand : store.brand
@@ -80,8 +81,9 @@ ${fontLink(brand, page.fonts)}
 ${env.theme.customCss ? `<style data-store-css>${env.theme.customCss.replace(/<\/style/gi, '')}</style>` : ''}
 ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
+${page.checkout ? `<style>${CHECKOUT_CSS}</style>` : ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
-</head><body data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
+</head><body class="${page.checkout ? 'checkout-page' : ''}" data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
 <a class="skip" href="#main">Skip to content</a>
 ${view.preview ? previewBar(view.env.kind==='live') : ''}
 ${page.bare ? '' : `${brand.announcement ? `<div class="announce">${escapeHtml(brand.announcement)}</div>` : ''}
@@ -137,6 +139,7 @@ export function blockPage(view: StoreView, page: Page, servedAs?: { title: strin
     bare: true,
     popup: true,
     head: page.headHtml,
+    checkout: true,
     fonts: page.blocks.flatMap((block) => block.settings._font === 'custom' && typeof block.settings._customFont === 'string' ? [block.settings._customFont] : []),
   })
 }
@@ -728,7 +731,7 @@ export type CheckoutInput = {
  * a demo order so the flow can be walked end to end.
  */
 /** The pieces of the checkout, built once from the cart, so the built-in page and a checkout laid out from blocks render the same form. */
-export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string } {
+export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string; shippingHtml: string } {
   const { totals, region } = input
   const cart = view.cart
   const draft = cart?.checkout ?? {}
@@ -748,62 +751,44 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const arrival = firstProduct ? deliveryEstimate(firstProduct.supplier) : null
   const proof = listReviews(view.db, view.store.id, { status: 'approved', limit: 3 }).filter((review) => !items.length || items.some((item) => item.productId === review.productId)).slice(0, 3)
   const pricedLines = cart ? cartDisplayLines(view.db, view.store.id, cart, totals) : []
+  const code = totals.appliedPromotions.find(p => p.code && p.code === cart?.discountCode)?.code || ''
   const summary = `<div class="summary-body">
-    <table class="lines">${items.map((item, index) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
-      <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
-      <td style="text-align:right">${pricedLines[index]?.discountCents ? `<s class="micro">${money(pricedLines[index]!.originalLineCents, view)}</s> ` : ''}${item.unitCents ? money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
-    <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
-    ${totalsBlock(view, totals)}</div>`
+    <table class="lines" aria-label="Order items"><tbody>${items.map((item, index) => `<tr><td><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b aria-label="Quantity ${item.quantity}">${item.quantity}</b></span></td>
+      <td><div>${escapeHtml(item.title)}</div>${/^(default( title)?|standard)$/i.test(item.variantTitle) ? '' : `<div class="micro">${escapeHtml(item.variantTitle)}</div>`}</td>
+      <td>${(pricedLines[index]?.compareAtLineCents || 0) > (pricedLines[index]?.lineCents || 0) ? `<s class="micro">${money(pricedLines[index]!.compareAtLineCents, view)}</s>` : ''}${item.unitCents ? money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</tbody></table>
+    <form method="post" action="${view.base}/checkout/code" class="code" novalidate><div class="field co-field"><input name="code" placeholder=" " aria-label="Discount code"><label>Discount code</label></div><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
+    <p class="co-error" data-code-error role="status"></p>
+    ${code ? `<div class="co-code-chip">${escapeHtml(code)}<button type="button" data-remove-code aria-label="Remove discount ${escapeHtml(code)}">×</button></div>` : ''}
+    ${totalsBlock(view, totals).replace(/(<div class="grand"><span>[^<]*<\/span><span)/, '$1 data-currency="'+escapeHtml(totals.currency)+'"')}</div>`
   const bump = `<section class="co-block" data-owned-bump-slot>${input.bump?bumpHtml(view,input.bump):''}</section>`
-  const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''
-  const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
+  const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : view.preview ? `<div class="express"><div class="eyebrow">Express checkout <span class="co-preview-label">Preview</span></div><div class="co-wallet-preview" aria-label="Express payment previews"><button type="button" disabled class="co-wallet-apple">Apple Pay</button><button type="button" disabled class="co-wallet-google"><b>G</b> Pay</button><button type="button" disabled class="co-wallet-link">link <span>›</span></button></div><p class="co-wallet-help">Available wallets appear when payments are connected.</p><div class="or"><span>or</span></div></div>` : ''
+  const countries = [...new Set((view.regions || [region]).flatMap(r=>r?.countries||[]))]
+  const sameBilling = draft.billingSame !== false
+  const cardPreview = `<div class="co-card-preview" aria-label="Payment form preview">${checkoutField('preview-card','Card number','',{disabled:true})}<div class="two">${checkoutField('preview-expiry','Expiration (MM / YY)','',{disabled:true})}${checkoutField('preview-cvc','Security code','',{disabled:true})}</div>${checkoutField('preview-card-name','Name on card','',{disabled:true})}</div>`
+  const shippingHtml = `${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : 'FREE'}</b></label>`).join('') : '<p class="micro">Shipping is not available for this destination.</p>'}`
+  const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate data-preview="${view.preview}">
       ${funnelSelection(view)}
+      <div class="co-error" id="checkout-error" role="alert"></div>
       <section class="co-block"><h2>${t(view, 'contact', 'Contact')}</h2>
-        <div class="field"><input name="email" type="email" required autocomplete="email" placeholder="Email" value="${escapeHtml(draft.email ?? '')}" aria-label="Email"></div>
-        <label class="micro check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
+        ${checkoutField('email','Email',draft.email||'',{type:'email',required:true,autocomplete:'email'})}
+        <label class="check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
       <section class="co-block"><h2>${t(view, 'delivery', 'Delivery')}</h2>
-        <div class="field"><select name="country" autocomplete="country" aria-label="Country">${(region?.countries.length ? region.countries : ['US']).map((country) => `<option value="${escapeHtml(country)}" ${draft.address?.country === country ? 'selected' : ''}>${escapeHtml(countryName(country))}</option>`).join('')}</select></div>
-        <div class="two"><div class="field"><input name="firstName" required autocomplete="given-name" placeholder="First name" value="${escapeHtml((draft.name ?? '').split(' ')[0] ?? '')}" aria-label="First name"></div>
-          <div class="field"><input name="lastName" required autocomplete="family-name" placeholder="Last name" value="${escapeHtml((draft.name ?? '').split(' ').slice(1).join(' '))}" aria-label="Last name"></div></div>
-        <div class="field"><input name="line1" required autocomplete="address-line1" placeholder="Address" value="${escapeHtml(draft.address?.line1 ?? '')}" aria-label="Address"></div>
-        <div class="field"><input name="line2" autocomplete="address-line2" placeholder="Apartment, suite, etc. (optional)" value="${escapeHtml(draft.address?.line2 ?? '')}" aria-label="Apartment, suite, etc."></div>
-        <div class="two"><div class="field"><input name="city" required autocomplete="address-level2" placeholder="City" value="${escapeHtml(draft.address?.city ?? '')}" aria-label="City"></div>
-          <div class="field"><input name="state" autocomplete="address-level1" placeholder="State / province (optional)" value="${escapeHtml(draft.address?.state ?? '')}" aria-label="State / province"></div></div>
-        <div class="two"><div class="field"><input name="postal" required autocomplete="postal-code" placeholder="Postal code" value="${escapeHtml(draft.address?.postal ?? '')}" aria-label="Postal code"></div>
-          <div class="field"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for delivery updates)" value="${escapeHtml(draft.phone ?? '')}" aria-label="Phone"></div></div></section>
-      <section class="co-block"><h2>Shipping method</h2>${arrival ? `<p class="micro" style="margin-top:-.4rem">🚚 Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}</p>` : ''}
-        <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : option.listCents ? `<s class="micro">${money(option.listCents, view)}</s> Free` : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
+        ${addressFields({...draft.address,name:draft.name},countries)}
+        ${checkoutField('phone','Phone (optional)',draft.phone||'',{type:'tel',autocomplete:'shipping tel'})}
+      </section>
+      <section class="co-block"><h3>Shipping method</h3>
+        <div class="methods" id="methods">${shippingHtml}</div></section>
       <!--bump-->
-      <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
-        ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
-          <p class="micro">${view.preview ? 'Preview checkout. Try your bundle, cart and delivery choices here. Payments and order creation are disabled.' : 'No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.'}</p></div>`}
-        <label class="micro check" style="margin-top:.8rem"><input type="checkbox" name="billingSame" value="true" checked> Billing address same as shipping</label></section>
+      <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro pay-description">All transactions are secure and encrypted.</p>
+        ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="co-error" role="alert"></div>' : `<div class="pay-demo"><div class="row"><strong>${CHECKOUT_ICONS.lock} Credit card</strong><span class="cards" aria-label="Visa, Mastercard, American Express"><i>VISA</i><i class="mc">MC</i><i>AMEX</i></span></div>
+          ${view.preview ? cardPreview : ''}<p class="co-preview-note" ${view.preview?'':'style="padding-top:14px"'}>${view.preview ? 'Preview only. No payment is collected or order placed.' : 'Card payments are currently unavailable. This order will be submitted without a charge.'}</p></div>`}
+        <label class="check" style="margin-top:16px"><input type="checkbox" name="billingSame" value="true" ${sameBilling?'checked':''}> Use shipping address as billing address</label>
+        <fieldset class="co-billing" ${sameBilling?'hidden disabled':''}><legend class="micro">Billing address</legend>${addressFields(draft.billingAddress,countries,true)}</fieldset>
+      </section>
       <button class="btn btn--wide pay" type="submit" id="pay" ${view.preview || view.store.kind === 'funnel' && !items.length ? 'disabled' : ''}><span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
     </form>`
-  const script = `<script>
-(function(){
-  var base = ${JSON.stringify(view.base)};
-  var fmt = ${JSON.stringify({ currency: totals.currency, minor: minorDigits(totals.currency) })};
-  function money(c){ var value=c/Math.pow(10,fmt.minor);try { return new Intl.NumberFormat(${JSON.stringify(view.region?.locale ?? 'en-US')},{style:'currency',currency:fmt.currency}).format(value) } catch(e){ return value.toFixed(fmt.minor) } }
-  function refresh(t){
-    document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
-    document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
-    if (window.__elements) window.__elements.update({ amount: t.totalCents });
-  }
-  var bumps = document.querySelectorAll('.bump input');
-  function sendBump(el){
-    return fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: el.value, on: el.checked }) })
-      .then(function(r){ return r.json() }).then(refresh);
-  }
-  document.addEventListener('change',function(event){var bump=event.target;if(!bump.matches('.bump input'))return;document.querySelectorAll('.bump input').forEach(function(other){other.checked=bump.checked});sendBump(bump);});
-  var ticked = document.querySelector('.bump input:checked');
-  if (ticked) sendBump(ticked);
-  document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
-    fetch(base + '/checkout/shipping', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ shippingOptionId: radio.value }) })
-      .then(function(r){ return r.json() }).then(refresh);
-  })});
-})();
-</script>
+  const script = `<script>window.__CHECKOUT=${JSON.stringify({base:view.base,currency:totals.currency,locale:view.region?.locale||'en-US',preview:view.preview}).replace(/</g,'\\u003c')};
+${readFileSync(new URL('./checkout.js', import.meta.url),'utf8')}</script>
 ${view.store.kind === 'funnel' ? `<script>window.__FUNNEL_CHECKOUT=${JSON.stringify({ base: view.base, preview: view.preview, hasSelection: items.length > 0, currency: totals.currency, minor: minorDigits(totals.currency) }).replace(/</g, '\\u003c')};\n${readFileSync(new URL('./funnel-checkout.js', import.meta.url), 'utf8')}</script>` : ''}
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
   const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
@@ -811,7 +796,7 @@ ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
       <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
       ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
     </div>`
-  return { summary, form, express, bump, script, note, proof: proofHtml }
+  return { summary, form, express, bump, script, note, proof: proofHtml, shippingHtml }
 }
 
 /**
@@ -826,21 +811,19 @@ ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
 export function checkoutPage(view: StoreView, input: CheckoutInput): string {
   const { totals } = input
   const parts = checkoutParts(view, input)
-  const body = `<div class="checkout">
+  const body = `${checkoutHeader(view)}<div class="checkout">
   <div class="co-main">
-    <a class="co-logo" href="${view.base}/">${escapeHtml(view.store.name)}</a>
     ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${escapeHtml(input.error)}</div>` : ''}
     <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${parts.summary}</details>
     ${parts.express}
     ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', t(view, 'pay', 'Pay now'))}
-    <p class="micro center">${parts.note}</p>
-    ${parts.proof}
+    ${checkoutFooter(view)}
   </div>
   <aside class="co-side">${parts.summary}</aside>
 </div>
 ${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}
 ${parts.script}`
-  return layout(view, { title: `Checkout — ${view.store.name}`, description: 'Checkout', body, bare: true })
+  return layout(view, { title: `Checkout — ${view.store.name}`, description: 'Checkout', body, bare: true, checkout: true })
 }
 
 /**
@@ -851,12 +834,16 @@ ${parts.script}`
  */
 export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutInput, opts: { sample?: boolean } = {}): string {
   if(page.productId)view={...view,checkoutProductId:page.productId}
+  // Existing merchant headers/footers retain their chosen placement.
+  page={...page,blocks:page.blocks.map(block=>block.type==='checkout-form'?{...block,settings:{...block.settings,showHeader:block.settings.showHeader??!page.blocks.some(b=>b.type==='header'),showPolicies:block.settings.showPolicies??!page.blocks.some(b=>b.type==='footer')}}:block)}
   const parts = checkoutParts(view, input)
   const brand = Object.keys(view.env.brand).length ? view.env.brand : view.store.brand
   const context: BlockContext = {
     ...blockContextFor(view.db, { ...view.store, brand }, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined),
     checkout: {
       formHtml: parts.form,
+      headerHtml: checkoutHeader(view),
+      footerHtml: checkoutFooter(view),
       summaryHtml: parts.summary,
       expressHtml: parts.express,
       bumpHtml: parts.bump,
@@ -872,11 +859,24 @@ export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutIn
     body: `${renderOwnedPageBody(view, page, context)}${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}${parts.script}`,
     bare: true,
     head: page.headHtml,
+    checkout: true,
     fonts: page.blocks.flatMap((block) => block.settings._font === 'custom' && typeof block.settings._customFont === 'string' ? [block.settings._customFont] : []),
   })
 }
 
+function checkoutHeader(view:StoreView):string {
+  const brand=Object.keys(view.env.brand).length?view.env.brand:view.store.brand
+  return `<header class="co-header"><div class="co-header-in"><a class="co-logo" href="${view.base}/">${brand.logoSvg?`<img src="${escapeHtml(brand.logoSvg)}" alt="${escapeHtml(view.store.name)}">`:escapeHtml(view.store.name)}</a><a class="co-cart-link" href="${view.base}/cart" aria-label="Return to cart">${CHECKOUT_ICONS.bag}</a></div></header>`
+}
+function checkoutFooter(view:StoreView):string {
+  const pages=listPages(view.db,view.store.id).filter(p=>view.preview||p.status==='published')
+  const policies=[['Refund policy',/refund|return/i],['Shipping policy',/shipping/i],['Privacy policy',/privacy/i],['Terms of service',/terms/i]] as const
+  const links=policies.map(([title,pattern])=>{const page=pages.find(p=>pattern.test(p.title+' '+p.handle));const fallback=title==='Privacy policy'?'privacy':title==='Terms of service'?'terms':'';return page||fallback?`<a href="${view.base}/pages/${escapeHtml(page?.handle||fallback)}" target="_blank" rel="noopener">${title}</a>`:''}).join('')
+  return `<p class="co-secure">${CHECKOUT_ICONS.lock} Secure checkout</p><footer class="co-footer">${links}</footer>`
+}
+
 function stripeScript(view: StoreView, publishableKey: string, totals: Totals): string {
+  const region=view.region||defaultRegion(view.db,view.store.id)
   return `<script src="https://js.stripe.com/v3/"></script>
 <script>
 (function(){
@@ -888,30 +888,45 @@ function stripeScript(view: StoreView, publishableKey: string, totals: Totals): 
   if(amount<=0)return;
   if(elements){elements.update({amount:amount});return;}
   elements = stripe.elements({ mode: 'payment', amount: amount, currency: ${JSON.stringify(totals.currency.toLowerCase())}, setupFutureUsage: 'off_session',
-    appearance: { theme: 'stripe', variables: { colorPrimary: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#1a1a1a', borderRadius: '6px', fontFamily: 'inherit' } } });
+    appearance: { theme: 'stripe', variables: { colorPrimary: '#1773b0', colorText: '#1a1a1a', colorBackground: '#ffffff', colorDanger: '#c5280c', borderRadius: '6px', fontFamily: 'Arial, Helvetica, sans-serif', fontSizeBase: '14px', spacingUnit: '4px' } } });
   window.__elements = elements;
-  var payment = elements.create('payment', { layout: 'accordion' }); payment.mount('#payment-element');
-  express = elements.create('expressCheckout', { buttonHeight: 48 }); express.mount('#express-element');
+  var payment = elements.create('payment', { layout: 'accordion', fields:{billingDetails:{address:'never',name:'never',email:'never',phone:'never'}} }); payment.mount('#payment-element');
+  express = elements.create('expressCheckout', { buttonHeight: 48, emailRequired:true, billingAddressRequired:true, shippingAddressRequired:true, allowedShippingCountries:${JSON.stringify(region?.countries||['US'])}, shippingRates:shippingRates() }); express.mount('#express-element');
   express.on('ready', function(ev){ if (!ev.availablePaymentMethods) document.querySelector('.express').style.display = 'none' });
-  express.on('confirm', function(){ pay(true) });
+  express.on('click',function(event){event.resolve({shippingRates:shippingRates()})});
+  express.on('shippingaddresschange',function(event){if(!${JSON.stringify(region?.countries||['US'])}.includes(event.address.country)){event.reject();return;}event.resolve({shippingRates:shippingRates()});});
+  express.on('shippingratechange',async function(event){
+    try{var response=await fetch(base+'/checkout/shipping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({shippingOptionId:event.shippingRate.id})});var data=await response.json();if(!response.ok||data.error)throw new Error(data.error);elements.update({amount:data.totalCents});document.querySelectorAll('#methods input').forEach(function(radio){radio.checked=radio.value===event.shippingRate.id;radio.dataset.confirmed=String(radio.checked)});document.querySelectorAll('.summary-body').forEach(function(el){el.outerHTML=data.summaryHtml});document.querySelectorAll('[data-pay-total],.co-summary-mobile summary b').forEach(function(el){el.textContent=new Intl.NumberFormat(undefined,{style:'currency',currency:data.currency}).format(data.totalCents/Math.pow(10,${minorDigits(totals.currency)}))});event.resolve();}catch(error){event.reject();errorBox.textContent=error.message||'Could not update shipping.';}
+  });
+  express.on('confirm', function(event){
+    var shipping=event.shippingAddress,billing=event.billingDetails||{},address=shipping&&shipping.address;
+    if(!address){errorBox.textContent='Choose a delivery address in your wallet.';event.paymentFailed({reason:'fail'});return;}
+    var name=(shipping.name||billing.name||'').split(' ');
+    var details=Object.assign(draft(),{email:billing.email||'',firstName:name.shift()||'',lastName:name.join(' '),line1:address.line1||'',line2:address.line2||'',city:address.city||'',state:address.state||'',postal:address.postal_code||'',country:address.country,phone:billing.phone||'',billingSame:'false',billingFirstName:(billing.name||'').split(' ')[0],billingLastName:(billing.name||'').split(' ').slice(1).join(' '),billingLine1:billing.address?.line1||address.line1,billingLine2:billing.address?.line2||'',billingCity:billing.address?.city||address.city,billingState:billing.address?.state||address.state,billingPostal:billing.address?.postal_code||address.postal_code,billingCountry:billing.address?.country||address.country});
+    pay(details,billing,event);
+  });
   }
   var form = document.getElementById('checkout-form'), button = document.getElementById('pay'), errorBox = document.getElementById('payment-error');
+  function shippingRates(){return Array.from(document.querySelectorAll('#methods input')).sort(function(a,b){return Number(b.checked)-Number(a.checked)}).map(function(radio){return {id:radio.value,amount:Number(radio.dataset.amount),displayName:radio.closest('label').querySelector('span').textContent}})}
   function draft(){ var d = new FormData(form); var o = {}; d.forEach(function(v,k){ o[k] = v }); return o }
   var paying = false;
-  async function pay(){
+  async function pay(walletDraft,walletBilling,walletEvent){
     if (paying) return;
     if (!elements || form.dataset.funnelSelectionReady==='false') { errorBox.textContent='Choose a package before continuing to payment.'; return; }
     paying = true; button.disabled = true; errorBox.textContent = '';
     form.dataset.paymentInProgress='true';
     try {
-      var prepared = await fetch(base + '/checkout/prepare', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(draft()) }).then(function(r){ return r.json() });
+      var prepared = await fetch(base + '/checkout/prepare', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(walletDraft||draft()) }).then(function(r){ return r.json() });
       if (!prepared.ok) throw new Error(prepared.error || 'Check your details');
       var submitted = await elements.submit(); if (submitted.error) throw new Error(submitted.error.message);
       var intent = await fetch(base + '/checkout/intent', { method:'POST' }).then(function(r){ return r.json() });
       if (!intent.clientSecret) throw new Error(intent.error || 'Could not start the payment');
-      var result = await stripe.confirmPayment({ elements: elements, clientSecret: intent.clientSecret, confirmParams: { return_url: location.origin + base + '/checkout/complete' } });
+      var data=walletDraft||draft(),same=data.billingSame==='true',prefix=same?'':'billing';
+      function value(key){return data[prefix?prefix+key.charAt(0).toUpperCase()+key.slice(1):key]||'';}
+      var billing=walletBilling||{name:[value('firstName'),value('lastName')].filter(Boolean).join(' '),email:data.email,phone:data.phone,address:{line1:value('line1'),line2:value('line2'),city:value('city'),state:value('state'),postal_code:value('postal'),country:value('country')}};
+      var result = await stripe.confirmPayment({ elements: elements, clientSecret: intent.clientSecret, confirmParams: { return_url: location.origin + base + '/checkout/complete', payment_method_data:{billing_details:billing} } });
       if (result.error) throw new Error(result.error.message);
-    } catch (error) { errorBox.textContent = error.message || 'Payment could not start. Check your connection and try again.'; }
+    } catch (error) { errorBox.textContent = error.message || 'Payment could not start. Check your connection and try again.'; if(walletEvent)walletEvent.paymentFailed({reason:'fail'}); }
     finally { paying = false; delete form.dataset.paymentInProgress; button.disabled = form.dataset.funnelSelectionReady==='false'; }
   }
   form.addEventListener('submit', function(ev){ ev.preventDefault(); if (!form.reportValidity()) return; pay() });

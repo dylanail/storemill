@@ -7,7 +7,7 @@ import { convertCents, defaultRegion, getRegion, minorUnitRate, rateFor } from '
 import type { Address, LineItem, Totals } from './types.ts'
 
 export type CheckoutAdvertising = { url:string; ip:string; userAgent:string; fbp?:string; fbc?:string; ttp?:string; ttclid?:string }
-export type CheckoutDraft = { preview?: boolean; email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
+export type CheckoutDraft = { preview?: boolean; email?: string; name?: string; phone?: string; address?: Address; billingSame?: boolean; billingAddress?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
 
 export type Cart = {
   id: string

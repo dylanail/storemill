@@ -371,6 +371,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump', priced)
     }
     try {
+      saveCheckoutDraft(current.db,current.store.id,cart.id,draft)
       const order = completeCart(current.db, current.store.id, cart.id, {
         email: draft.email ?? '',
         ...(draft.name ? { name: draft.name } : {}),
@@ -595,17 +596,49 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!cart.items.length || !bump || bump.variantId !== variantId) throw badRequest('That order add-on is not available')
     const priced = bump.priceCents
     const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump', priced) : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
-    const amounts = totals(current.db, current.store.id, updated)
-    return { ...amounts, totalsHtml: view.totalsBlock({ ...current, cart: updated, totals: amounts }, amounts) }
+    const amounts = paymentTotals(current.db, current.store.id, updated)
+    const shown={...current,cart:updated,totals:amounts}
+    const parts=view.checkoutParts(shown,checkoutInputFor(shown))
+    return { ...amounts, totalsHtml: view.totalsBlock(shown, amounts), summaryHtml:parts.summary,shippingHtml:parts.shippingHtml }
+  })
+
+  /** Checkout codes stay in checkout and only persist when they actually apply. */
+  router.post('/checkout/code', async ctx => {
+    const current=open(ctx),cart=ensureCart(ctx,current),body=await ctx.body()
+    const code=String(body.code||'').trim().toUpperCase().slice(0,100)
+    if(body.email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(body.email))) saveCheckoutDraft(current.db,current.store.id,cart.id,{email:String(body.email).trim().toLowerCase()})
+    const proposed={...getCart(current.db,current.store.id,cart.id)!,discountCode:code}
+    const amounts=paymentTotals(current.db,current.store.id,proposed)
+    if(code&&!amounts.appliedPromotions.some(p=>p.code===code)) throw badRequest('This discount code is not valid for the items in your order.')
+    const updated=applyCode(current.db,current.store.id,cart.id,code)
+    const shown={...current,cart:updated,totals:amounts}
+    const parts=view.checkoutParts(shown,checkoutInputFor(shown))
+    return {ok:true,...amounts,summaryHtml:parts.summary,shippingHtml:parts.shippingHtml}
+  })
+
+  /** Keep contact details when switching to a configured delivery country/market. */
+  router.post('/checkout/country',async ctx=>{
+    const current=open(ctx),cart=ensureCart(ctx,current),body=await ctx.body()
+    const country=String(body.country||'').toUpperCase()
+    const region=listRegions(current.db,current.store.id).find(r=>r.countries.includes(country))
+    if(!region)throw badRequest('Shipping is not available for this country.')
+    saveCheckoutDraft(current.db,current.store.id,cart.id,readCheckoutForm(body))
+    if(cart.regionId!==region.id)setCartRegion(current.db,current.store.id,cart.id,region.id)
+    setCookie(ctx.res,`${REGION_COOKIE}_${current.store.id}`,region.id,{maxAge:60*60*24*365})
+    return {ok:true}
   })
 
   router.post('/checkout/shipping', async (ctx) => {
     const current = open(ctx)
     const cart = ensureCart(ctx, current)
     const body = await ctx.body()
-    const updated = setShipping(current.db, current.store.id, cart.id, String(body.shippingOptionId ?? ''))
-    const amounts = totals(current.db, current.store.id, updated)
-    return { ...amounts, totalsHtml: view.totalsBlock({ ...current, cart: updated, totals: amounts }, amounts) }
+    const shippingId=String(body.shippingOptionId ?? '')
+    if(!regionOf(current)?.shipping.some(option=>option.id===shippingId))throw badRequest('Choose an available shipping method.')
+    const updated = setShipping(current.db, current.store.id, cart.id, shippingId)
+    const amounts = paymentTotals(current.db, current.store.id, updated)
+    const shown={...current,cart:updated,totals:amounts}
+    const parts=view.checkoutParts(shown,checkoutInputFor(shown))
+    return { ...amounts, totalsHtml: view.totalsBlock(shown, amounts), summaryHtml:parts.summary,shippingHtml:parts.shippingHtml }
   })
 
   /** Saves the contact and address before Stripe confirms, so the order can be written when the payment returns. */
@@ -617,6 +650,10 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!cart.items.length) return { ok: false, error: 'Choose a package before continuing to payment' }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(draft.email ?? '')) return { ok: false, error: 'Enter a valid email address' }
     if (!draft.address?.line1 || !draft.address.city || !draft.address.postal) return { ok: false, error: 'Fill in the delivery address' }
+    const region=regionOf(current)
+    if(region?.countries.length&&!region.countries.includes(draft.address.country))return {ok:false,error:'Choose an available delivery country.'}
+    if(body.shippingOptionId&&!region?.shipping.some(option=>option.id===String(body.shippingOptionId)))return {ok:false,error:'Choose an available shipping method.'}
+    if(!draft.billingSame&&(!draft.billingAddress.line1||!draft.billingAddress.city||!draft.billingAddress.postal))return {ok:false,error:'Fill in the billing address.'}
     const advertising = !current.preview && current.advertising ? {
       url: ctx.url.origin + current.base + '/checkout',
       ip: current.advertising.ip || '', userAgent: current.advertising.userAgent || '',
@@ -879,13 +916,11 @@ export function storefrontNotFound(ctx: Ctx, store: Store, preview: boolean) {
 
 function readCheckoutForm(body: Record<string, unknown>) {
   const name = [body.firstName, body.lastName].map((part) => String(part ?? '').trim()).filter(Boolean).join(' ') || String(body.name ?? '').trim()
-  return {
-    email: String(body.email ?? '').trim().toLowerCase(),
-    name,
-    phone: String(body.phone ?? '').trim(),
-    marketing: body.marketing === 'true',
-    address: { name, line1: String(body.line1 ?? '').trim(), ...(body.line2 === undefined ? {} : { line2: String(body.line2 ?? '').trim() }), ...(body.state === undefined ? {} : { state: String(body.state ?? '').trim() }), city: String(body.city ?? '').trim(), postal: String(body.postal ?? '').trim(), country: String(body.country ?? 'US').trim().toUpperCase(), phone: String(body.phone ?? '').trim() },
-  }
+  const address={name,line1:String(body.line1??'').trim(),line2:String(body.line2??'').trim(),state:String(body.state??'').trim(),city:String(body.city??'').trim(),postal:String(body.postal??'').trim(),country:String(body.country??'US').trim().toUpperCase(),phone:String(body.phone??'').trim()}
+  // Legacy clients without billing fields retain the shipping-address default.
+  const billingSame=body.billingSame==='true'||body.billingSame===true||!Object.keys(body).some(key=>key.startsWith('billing')&&key!=='billingSame')&&body.billingSame===undefined
+  const billingAddress=billingSame?address:{name:[body.billingFirstName,body.billingLastName].filter(Boolean).join(' ').trim(),line1:String(body.billingLine1??'').trim(),line2:String(body.billingLine2??'').trim(),state:String(body.billingState??'').trim(),city:String(body.billingCity??'').trim(),postal:String(body.billingPostal??'').trim(),country:String(body.billingCountry??'US').trim().toUpperCase()}
+  return {email:String(body.email??'').trim().toLowerCase(),name,phone:String(body.phone??'').trim(),marketing:body.marketing==='true',address,billingSame,billingAddress}
 }
 
 /** Everything the checkout renders from, in one place: totals, region, the payment provider and the funnel's bump. */

@@ -7,10 +7,7 @@ export function ensureCopiedCheckout(db: Db, storeId: string): Page | null {
   return createPage(db, storeId, {
     title: 'Checkout', handle: 'checkout', kind: 'checkout', role: 'checkout', status: 'draft',
     blocks: [
-      newBlock('header', { cta: '', showNav: false }),
-      newBlock('checkout-steps', { steps: 'Cart\nInformation\nPayment', current: 2 }),
-      newBlock('checkout-form', { layout: 'two-column', showBump: true, showExpress: true, buttonLabel: 'Pay now', note: '' }),
-      newBlock('footer', {}),
+      newBlock('checkout-form', { layout: 'two-column', summaryHeadline: '', showBump: true, showExpress: true, buttonLabel: 'Pay now', note: '' }),
     ],
     seo: { title: 'Checkout' },
   })
