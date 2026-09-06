@@ -3,6 +3,8 @@
   if(!config||!form)return;
   const error=document.getElementById('checkout-error'),pay=document.getElementById('pay');
   let pending=0;
+  window.__checkoutBusy=()=>pending>0;
+  if(location.protocol==='https:')document.querySelectorAll('[data-checkout-security]').forEach(el=>el.textContent='Secure checkout · Encrypted connection');
   const draft=()=>Object.fromEntries(new FormData(form));
   const money=(c,currency=config.currency)=>new Intl.NumberFormat(config.locale,{style:'currency',currency}).format(c/10**new Intl.NumberFormat('en',{style:'currency',currency}).resolvedOptions().maximumFractionDigits);
   function refresh(data){

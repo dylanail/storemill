@@ -44,7 +44,7 @@ test('stores and funnels are separate top-level assets', () => {
 
 test('a URL creates an editable asset and strips source scripts', async () => {
   const { db, user } = fresh()
-  const source = '<!doctype html><html><head><title>North Star | Shop</title><meta name="description" content="A useful shop"></head><body><h1>North Star</h1><img src="https://cdn.northstar.example/logo.png"><a href="/products/widget?variant=2">Widget</a><script>window.tracker=true</script></body></html>'
+  const source = '<!doctype html><html><head><title>North Star | Shop</title><meta name="description" content="A useful shop"></head><body><h1>North Star</h1><header><img class="logo" src="https://cdn.northstar.example/logo.png"></header><a href="/products/widget?variant=2">Widget</a><script>window.tracker=true</script></body></html>'
   const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
   const fetchImpl = (async (input: string | URL | Request) => {
     const target = String(input)
@@ -73,6 +73,7 @@ test('a URL creates an editable asset and strips source scripts', async () => {
   assert.equal(storeImport.pages.length, 3)
   assert.ok(storeImport.pages.some(page => page.role === 'checkout'))
   assert.equal(storeImport.products.length, 1)
+  assert.ok(getStore(db,storeImport.store.id)?.brand.logoSvg?.startsWith(`/_uploads/${storeImport.store.id}/`), 'the brand logo belongs to the final store, not the temporary import')
   const product = storeImport.products[0]!
   assert.equal(product.title, 'North Star Widget')
   assert.equal(product.variants[0]?.priceCents, 2900)

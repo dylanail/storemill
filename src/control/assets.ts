@@ -2,6 +2,7 @@ import { readSourceCommerce, bindSourceProducts, type SourceProduct } from '../p
 import { createPromotion } from '../domain/promotions.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { sourceThemeFromHtml, fontFacesFromHtml } from '../pages/source-theme.ts'
+import { logoFromClone } from '../pages/source-logo.ts'
 import type { Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { relocateUploads } from '../lib/uploads.ts'
@@ -184,7 +185,7 @@ export async function importAssetFromUrl(
     kind: input.kind,
     currency: input.currency,
   })
-  const clonedBrand = brandFromClone(homeClone.html)
+  const clonedBrand = brandFromClone(homeClone.html.split(`/_uploads/${pendingId}/`).join(`/_uploads/${store.id}/`))
   if (Object.keys(clonedBrand).length) updateStore(db, store.id, { brand: clonedBrand })
   relocateUploads(pendingId, store.id)
   const rehome = (value: string) => value.split(`/_uploads/${pendingId}/`).join(`/_uploads/${store.id}/`)
@@ -382,8 +383,9 @@ function selectorFont(html: string, wanted: RegExp): string | undefined {
 }
 
 export function brandFromClone(html: string): Partial<Brand> {
+  const logo = logoFromClone(html)
   const captured=sourceThemeFromHtml(html)
-  if(Object.keys(captured).length) return { ...captured, sourceTheme:captured, fonts:fontFamiliesFromClone(html), fontFaces:fontFacesFromHtml(html) } as Partial<Brand>
+  if(Object.keys(captured).length) return { ...captured, ...(logo ? { logoSvg: logo } : {}), sourceTheme:captured, fonts:fontFamiliesFromClone(html), fontFaces:fontFacesFromHtml(html) } as Partial<Brand>
   const variable = (...names: string[]) => {
     for (const name of names) {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -411,7 +413,7 @@ export function brandFromClone(html: string): Partial<Brand> {
   const bodyFont = fontFamilyName(variable('font-body-family', 'body-font'))
     ?? selectorFont(html, /(?:^|[\s,>+~])body(?:$|[\s,.#:[>+~])/i)
   const fonts = [...new Set([displayFont, bodyFont, ...declared].filter((entry): entry is string => Boolean(entry)))]
-  return { ...(primary ? { primary } : {}), ...(secondary ? { secondary } : {}), ...(paper ? { paper } : {}), ...(ink ? { ink } : {}), ...(displayFont ? { displayFont } : {}), ...(bodyFont ? { bodyFont } : {}), ...(fonts.length ? { fonts } : {}) }
+  return { ...(logo ? { logoSvg: logo } : {}), ...(primary ? { primary } : {}), ...(secondary ? { secondary } : {}), ...(paper ? { paper } : {}), ...(ink ? { ink } : {}), ...(displayFont ? { displayFont } : {}), ...(bodyFont ? { bodyFont } : {}), ...(fonts.length ? { fonts } : {}) }
 }
 
 /** Read the useful, same-site links from a cloned header into the global menu. */
