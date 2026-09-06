@@ -34,7 +34,7 @@ await test('direct block dragging and responsive column editing',async t=>{
     await context.route('**/*',route=>route.request().url().startsWith(origin)||route.request().url().startsWith('data:')?route.continue():route.abort());
     const page=await context.newPage(),errors=[];page.setDefaultTimeout(6000);page.on('pageerror',e=>errors.push(e.message));
     const canvas=()=>page.frameLocator('#edit-frame');
-    async function open(next='html'){mode=next;saved=null;await page.goto(origin+'/editor');if(mode==='html')await page.waitForFunction(()=>window.__PAGE_EDITOR?.getModel().length>0);else await page.locator('.canvas-block').first().waitFor();}
+    async function open(next='html',fixture=null){mode=next;saved=fixture;await page.goto(origin+'/editor');if(mode==='html')await page.waitForFunction(()=>window.__PAGE_EDITOR?.getModel().length>0);else await page.locator('.canvas-block').first().waitFor();}
     async function select(selector){await page.locator('#edit-frame').evaluate((el,s)=>window.__PAGE_EDITOR.select(el.contentDocument.querySelector(s).getAttribute('data-pb-id')),selector);}
     async function undo(){await page.locator('#undo').click();if(mode==='html')await page.waitForFunction(()=>!document.getElementById('save').disabled);}
     async function save(){await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Saved');}
@@ -50,6 +50,42 @@ await test('direct block dragging and responsive column editing',async t=>{
     const geometry=selector=>canvas().locator(selector).evaluate(el=>[...el.children].map(c=>{const b=c.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width};}));
     async function setWidth(index,value){const input=page.getByRole('spinbutton',{name:`Column ${index} width percent`,exact:true});await input.fill(String(value));await input.press('Tab');}
 
+    await t.test('Layers hover reveals the matching imported component without selecting or editing it',async()=>{
+      const fixture=imported.replace('<section id="details">','<section id="details" style="margin-top:1400px">');
+      await open('html',{rawHtml:fixture});await select('.hero picture');
+      const selected=await page.evaluate(()=>window.__PAGE_EDITOR.getSelected());
+      const target=canvas().locator('#details h2'),id=await target.getAttribute('data-pb-id');
+      await page.getByLabel('Find a layer',{exact:true}).fill('Made for every day');
+      const row=page.locator('[data-node="'+id+'"]'),outline=page.locator('.hover-outline');
+      for(const device of ['Desktop','Tablet','Mobile']){
+        await page.getByTitle(device,{exact:true}).click();await row.hover();
+        await outline.waitFor({state:'visible'});assert.match(await row.getAttribute('class'),/hovered/);
+        const expected=await target.boundingBox(),actual=await outline.boundingBox();
+        for(const key of ['x','y','width','height'])assert.ok(Math.abs(expected[key]-actual[key])<3,device+' '+key);
+        assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.getSelected()),selected);
+        await page.locator('#title').hover();await outline.waitFor({state:'hidden'});
+        assert.doesNotMatch(await row.getAttribute('class'),/hovered/);
+      }
+      await row.locator('.tree-select').focus();await outline.waitFor({state:'visible'});
+      await page.locator('#title').focus();await outline.waitFor({state:'hidden'});
+      assert.deepEqual(await page.evaluate(()=>window.__PAGE_EDITOR.getHistory()),[]);
+      assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.serialize()),fixture);
+      await page.getByTitle('Desktop',{exact:true}).click();
+    });
+    await t.test('native Layers hover and focus identify offscreen blocks without changing selection or content',async()=>{
+      const blocks=[...initialBlocks,...Array.from({length:8},(_,i)=>newBlock('headline',{text:'Additional block '+i}))];
+      await open('blocks',{blocks});
+      const last=blocks.length-1,row=page.locator('[data-layer="'+last+'"]'),card=page.locator('.canvas-block').nth(last);
+      await row.hover();assert.match(await card.getAttribute('class'),/layer-highlight/);
+      assert.equal(await page.locator('.canvas-block.sel').count(),0);
+      assert.ok(await page.locator('#stage').evaluate(el=>el.scrollTop)>0);
+      await row.locator('.layer-main strong').hover();assert.match(await card.getAttribute('class'),/layer-highlight/);
+      await page.locator('#title').hover();assert.doesNotMatch(await card.getAttribute('class'),/layer-highlight/);
+      await row.locator('.layer-main').focus();assert.match(await card.getAttribute('class'),/layer-highlight/);
+      await page.locator('#title').focus();assert.doesNotMatch(await card.getAttribute('class'),/layer-highlight/);
+      assert.equal(await page.locator('#undo').isDisabled(),true);
+      await save();assert.deepEqual(saved.blocks,blocks);
+    });
     await t.test('first gesture moves unselected text, supports undo and survives save/reload',async()=>{
       await open();assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.getSelected()),null);
       await drag(canvas().locator('.hero h1'),canvas().locator('.hero .price'));

@@ -18,3 +18,6 @@
 @media(max-width:640px){.visual-builder .html-canvas{height:calc(55vh - 116px)}}
 
 .layer-row.drop-inside{background:#deebff;outline:2px solid #2563eb;outline-offset:-2px}.move-dialog{border:1px solid #cbd5e1;border-radius:10px;width:480px;max-width:90vw;padding:20px;color:#263247}.move-dialog::backdrop{background:#17223677}.move-dialog h2{margin-top:0}.move-dialog select{display:block;width:100%;padding:9px;margin:8px 0 18px}.move-dialog form>div{display:flex;gap:8px;justify-content:flex-end}
+
+/* Layer hover is editor chrome; it never changes saved component styles. */
+.hover-outline{border:2px solid #5a95ef;background:#2563eb0a}.canvas-block.layer-highlight{outline:2px solid #5a95ef;outline-offset:-2px}.canvas-block.layer-highlight:after{content:"";position:absolute;inset:0;background:#2563eb0a;pointer-events:none}.canvas-block.layer-highlight .block-label{opacity:1}.layer.layer-highlight{background:#edf4ff;box-shadow:inset 0 0 0 1px #c7dbfa}

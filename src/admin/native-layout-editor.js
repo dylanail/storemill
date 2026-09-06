@@ -30,6 +30,36 @@ function nativeColumnsPreview(block) {
 if (state.mode === 'blocks') {
   let gesture = null, animation = null, suppressUntil = 0;
   const stage = $('stage');
+  const layerList=$('layers');
+  let layerHoverFrom=null;
+  function clearLayerHover(from) {
+    if(from&&layerHoverFrom!==from)return;
+    layerHoverFrom=null;
+    document.querySelectorAll('.layer-highlight').forEach(el=>el.classList.remove('layer-highlight'));
+  }
+  function hoverLayer(row,from) {
+    if(!row||gesture?.active)return;
+    clearLayerHover();
+    const card=list.querySelector('[data-i="'+row.dataset.layer+'"]');
+    if(!card)return;
+    layerHoverFrom=from;row.classList.add('layer-highlight');card.classList.add('layer-highlight');
+    const r=card.getBoundingClientRect(),viewport=stage.getBoundingClientRect();
+    if(r.bottom<=viewport.top||r.top>=viewport.bottom)card.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+  }
+  layerList.addEventListener('mouseover',event=>{
+    const row=event.target.closest('[data-layer]');
+    if(row&&!row.contains(event.relatedTarget))hoverLayer(row,'pointer');
+  });
+  layerList.addEventListener('mouseout',event=>{
+    const row=event.target.closest('[data-layer]');
+    if(row&&!row.contains(event.relatedTarget))clearLayerHover('pointer');
+  });
+  layerList.addEventListener('focusin',event=>hoverLayer(event.target.closest('[data-layer]'),'focus'));
+  layerList.addEventListener('focusout',event=>{
+    if(!event.target.closest('[data-layer]')?.contains(event.relatedTarget))clearLayerHover('focus');
+  });
+  layerList.addEventListener('dragstart',()=>clearLayerHover());
+  window.addEventListener('blur',()=>clearLayerHover());
   function stop() {
     if(animation !== null)cancelAnimationFrame(animation);animation=null;
     if(gesture?.target.hasPointerCapture?.(gesture.pointer))gesture.target.releasePointerCapture(gesture.pointer);
