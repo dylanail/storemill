@@ -1372,8 +1372,8 @@ document.querySelectorAll('.buyform').forEach(function(form){var total=form.quer
   if(option&&option.dataset.price){var price=Number(option.dataset.price),currency=form.dataset.currency||'USD',digits=Number(form.dataset.minorDigits||2);
     function money(cents){return new Intl.NumberFormat(undefined,{style:'currency',currency:currency}).format(cents/Math.pow(10,digits))}
     var base=form.parentElement.querySelector('[data-variant-price]');if(base)base.textContent=money(price);if(total)total.textContent=money(price);
-    form.querySelectorAll('.tier').forEach(function(card){var input=card.querySelector('input[name=quantity]');if(!input)return;var quantity=Number(input.value)||1,full=price*quantity,amount=Math.round(full*(1-Number(input.dataset.discount||0)/100));input.dataset.total=money(amount);
-      var value=card.querySelector('[data-tier-total]'),compare=card.querySelector('[data-tier-compare]'),unit=card.querySelector('[data-tier-unit]');if(value)value.textContent=money(amount);if(compare)compare.textContent=money(full);if(unit)unit.textContent=money(Math.round(amount/quantity))+' each';});
+    form.querySelectorAll('.tier').forEach(function(card){var input=card.querySelector('input[name=quantity]');if(!input)return;var quote=JSON.parse(input.dataset.variantPrices||'{}')[option.value];if(!quote)return;input.dataset.total=quote.total;
+      var value=card.querySelector('[data-tier-total]'),compare=card.querySelector('[data-tier-compare]'),unit=card.querySelector('[data-tier-unit]');if(value)value.textContent=quote.total;if(compare){compare.textContent=quote.compare;compare.hidden=!quote.compare}if(unit)unit.textContent=quote.each;});
   }
   var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total
 }form.addEventListener('change',sync);sync()});

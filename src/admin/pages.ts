@@ -1,3 +1,4 @@
+import { discountPage } from './discount-page.ts'
 import { productGalleryMedia } from '../pages/product-data.ts'
 import { listImports } from '../control/asset-import-jobs.ts'
 import { mediaRebrandStyle, rebrandHistory } from './media-rebrand-page.ts'
@@ -10,7 +11,6 @@ import type { Db } from '../lib/db.ts'
 import { listCollections, listProducts, lowStock } from '../domain/catalog.ts'
 import { listCustomers, segment } from '../domain/customers.ts'
 import { listOrders, getOrder } from '../domain/orders.ts'
-import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions, type Region } from '../domain/regions.ts'
 import { environment, type Store } from '../control/stores.ts'
@@ -27,7 +27,6 @@ import { PROMPT_LIBRARY } from '../agent/chat.ts'
 import { listRuns } from '../agent/runtime.ts'
 import { latestResearch } from '../agent/research.ts'
 import { listPages, type Page, PAGE_TEMPLATES } from '../pages/store.ts'
-import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
 import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
@@ -408,29 +407,7 @@ export function collectionsPage(ctx: Ctx): string {
     || '<p class="muted">No collections. Ask the assistant to organise the catalog.</p>'}</div>`
 }
 
-export function promotionsPage(ctx: Ctx): string {
-  const promotions = listPromotions(ctx.db, ctx.store.id)
-  const bundles = listBundles(ctx.db, ctx.store.id)
-  const products = listProducts(ctx.db, ctx.store.id, { limit: 200 })
-  const regions = listRegions(ctx.db, ctx.store.id)
-  const productIds = products.map((product) => `${product.title}: ${product.id}`).join(' · ')
-  return `${flash(ctx)}<div class="head"><div><h1>Discounts</h1><p class="muted" style="margin:.25rem 0 0">Codes, automatic offers, cross-product BOGO, mix-and-match and fixed-price bundles.</p></div></div>
-  <details class="card create-panel"><summary><strong>Create promotion</strong><span class="muted">Advanced rules</span></summary><form method="post" action="/admin/promotions" style="margin-top:1rem">
-    <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="title" required placeholder="Build your own kit"></div><div class="field" style="flex:1"><label>Type</label><select name="kind"><option value="percentage">Percentage off</option><option value="fixed">Fixed amount off</option><option value="free_shipping">Free shipping</option><option value="bogo">Buy X, get Y</option><option value="mix_match">Mix and match</option><option value="fixed_bundle">Fixed-price bundle</option><option value="tiered">Quantity tiers</option></select></div><div class="field" style="width:120px"><label>Value</label><input type="number" min="0" name="value" value="10"></div></div>
-    <div class="row"><div class="field" style="flex:1"><label>Code (blank for automatic)</label><input name="code" placeholder="KIT20"></div><label class="check"><input type="checkbox" name="automatic" value="true"> Automatic</label><label class="check"><input type="checkbox" name="combinable" value="true"> Can combine</label><label class="check"><input type="checkbox" name="firstOrderOnly" value="true"> First order only</label></div>
-    <div class="row"><div class="field" style="flex:1"><label>Eligible product IDs</label><input name="productIds" placeholder="Comma separated"></div><div class="field" style="flex:1"><label>Buy product IDs</label><input name="buyProductIds" placeholder="For cross-product BOGO"></div><div class="field" style="flex:1"><label>Get product IDs</label><input name="getProductIds" placeholder="Reward products"></div></div>
-    <div class="field"><label>Quantity tiers (for tiered promotions)</label><input name="tiers" placeholder="2|10, 3|20 — quantity|percent"></div>
-    <div class="row"><div class="field"><label>Minimum subtotal</label><input type="number" min="0" name="minSubtotalCents" placeholder="10000"></div><div class="field"><label>Minimum quantity</label><input type="number" min="0" name="minQuantity"></div><div class="field"><label>Buy qty</label><input type="number" min="1" name="buyQuantity"></div><div class="field"><label>Get qty</label><input type="number" min="1" name="getQuantity"></div><div class="field"><label>Distinct products</label><input type="number" min="1" name="requiredDistinctProducts"></div><div class="field"><label>Bundle price</label><input type="number" min="0" name="bundlePriceCents"></div><div class="field"><label>Use limit</label><input type="number" min="1" name="maxUses"></div><div class="field"><label>Market</label><select name="regionId"><option value="">All markets</option>${regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.name)}</option>`).join('')}</select></div></div>
-    <p class="muted" style="font-size:11px">Product reference: ${escapeHtml(productIds || 'Add products first.')}</p><button class="btn primary" type="submit">Create promotion</button></form></details>
-  <div class="card" style="padding:0"><table class="data"><thead><tr><th>Promotion</th><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Used</th><th></th></tr></thead><tbody>
-  ${promotions.length ? promotions.map((promotion) => `<tr><td>${escapeHtml(promotion.title)}</td>
-    <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
-    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'fixed_bundle' ? format(promotion.rules.bundlePriceCents ?? promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : promotion.kind === 'tiered' ? `${promotion.rules.tiers?.length ?? 0} tiers${promotion.rules.bundleProductId ? ' · <a href="/admin/bundles">View bundle prices</a>' : ''}${(bundles.find(bundle => bundle.productId === promotion.rules.bundleProductId)?.tiers || promotion.rules.tiers || []).filter(t => t.unitPriceCents !== undefined).map(t => { const product = products.find(product => product.id === promotion.rules.bundleProductId); const original = ('compareAtTotalCents' in t && typeof t.compareAtTotalCents === 'number' ? t.compareAtTotalCents : (product?.variants[0]?.compareAtCents || product?.variants[0]?.priceCents || 0) * t.quantity); return `<br>Buy ${t.quantity}: ${format(t.unitPriceCents! * t.quantity, ctx.store.currency)}${original > t.unitPriceCents! * t.quantity ? ` <s>${format(original, ctx.store.currency)}</s>` : ''}`; }).join('')}` : `${promotion.value}%`}</td>
-    <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
-    <td style="text-align:right"><form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/${promotion.status === 'active' ? 'disable' : 'enable'}"><button class="btn">${promotion.status === 'active' ? 'Disable' : 'Enable'}</button></form></td></tr>`).join('')
-    : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
-  </tbody></table></div>`
-}
+export function promotionsPage(ctx: Ctx): string { return flash(ctx)+discountPage(ctx.db,ctx.store) }
 
 /* ------------------------------------------------------------------ analytics */
 
@@ -841,38 +818,7 @@ function blockForm(block?: CustomBlock): string {
 
 /* --------------------------------------------------------------- bundles */
 
-export function bundlesPage(ctx: Ctx): string {
-  const bundles = listBundles(ctx.db, ctx.store.id)
-  const products = listProducts(ctx.db, ctx.store.id, { limit: 250 })
-  const titles = new Map(products.map((product) => [product.id, product]))
-  const tiersField = (tiers: typeof DEFAULT_TIERS) => tiers.map((tier) => `${tier.quantity}|${tier.discountPercent}|${tier.label}|${tier.badge ?? ''}|${tier.freeShipping ? 'ship' : ''}|${tier.giftVariantId ?? ''}|${tier.giftLabel ?? ''}`).join('\n')
-  const variantOptions = products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}">${escapeHtml(product.title)} — ${escapeHtml(variant.title)}</option>`)).join('')
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Bundles</h1>
-    <p class="muted" style="margin:.25rem 0 0">Quantity breaks on the product page: buy 1, buy 2 and save, buy 3 and save more with free shipping and a gift. The tiers are enforced in the cart, not just drawn on the page.</p></div></div>
-  <div class="grid2"><div>
-    ${bundles.length ? bundles.map((bundle) => { const product = titles.get(bundle.productId); return `<div class="card"><div class="row" style="justify-content:space-between"><h2>${escapeHtml(product?.title ?? bundle.productId)}</h2><span class="tag ${bundle.status === 'active' ? 'ok' : ''}">${bundle.status}</span></div>
-      <form method="post" action="/admin/bundles/${escapeHtml(bundle.id)}/prices"><table class="data" style="margin:.5rem 0"><thead><tr><th>Tier</th><th>Qty</th><th>Sale total (${escapeHtml(ctx.store.currency)})</th><th>Original total</th><th>Badge</th></tr></thead><tbody>${bundle.tiers.map((tier, index) => {
-        const unit = Math.min(...(product?.variants.map(v => v.priceCents) || [0]));
-        const total = tier.unitPriceCents !== undefined ? tier.unitPriceCents * tier.quantity : Math.round(unit * tier.quantity * (1 - tier.discountPercent / 100));
-        const compare = tier.compareAtTotalCents ?? Math.max(...(product?.variants.map(v => v.compareAtCents || v.priceCents) || [unit])) * tier.quantity;
-        const digits = minorDigits(ctx.store.currency), amount = (n: number) => (n / 10 ** digits).toFixed(digits);
-        return `<tr><td>${escapeHtml(tier.label)}</td><td>${tier.quantity}</td><td><input aria-label="${escapeHtml(tier.label)} sale total" name="sale${index}" type="number" min="0.01" step="${digits ? '0.01' : '1'}" value="${amount(total)}" required style="min-width:90px;width:100%"></td><td><input aria-label="${escapeHtml(tier.label)} original total" name="compare${index}" type="number" min="0" step="${digits ? '0.01' : '1'}" value="${amount(compare)}" required style="min-width:90px;width:100%"></td><td>${escapeHtml(tier.badge || '—')}</td></tr>`;
-      }).join('')}</tbody></table><button class="btn" type="submit">Save bundle prices</button><p class="muted">Sale totals are enforced automatically in cart and checkout. Original totals show the comparison price.</p></form>
-      <div class="row"><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product?.handle ?? '')}" target="_blank" rel="noopener">See it on the page ↗</a>
-        <form method="post" action="/admin/bundles/${escapeHtml(bundle.id)}/delete"><button class="btn">Remove</button></form></div></div>` }).join('')
-      : '<div class="card"><p class="muted">No bundles yet. Create one on the right — it appears on that product page and in any "Bundle offer" block.</p></div>'}
-  </div>
-  <form method="post" action="/admin/bundles" class="card"><h2>Create or replace a bundle</h2>
-    <div class="field" style="margin-top:.6rem"><label>Product</label><select name="productId" required>${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')}</select></div>
-    <div class="field"><label>Widget title</label><input name="title" value="Bundle & save"></div>
-    <div class="field"><label>Tiers — one per line: quantity | % off | label | badge | ship (for free shipping) | gift variant id | gift label</label>
-      <textarea name="tiers" rows="4">${escapeHtml(tiersField(DEFAULT_TIERS))}</textarea></div>
-    <div class="field"><label>Gift variant on the top tier (optional)</label><select name="giftVariantId"><option value="">— none —</option>${variantOptions}</select></div>
-    <div class="field"><label>Gift label</label><input name="giftLabel" placeholder="Free hand wraps"></div>
-    <div class="row"><div class="field" style="flex:1"><label>Layout</label><select name="layout"><option value="stacked">Stacked</option><option value="row">Side by side</option></select></div>
-      <div class="field" style="flex:1"><label>Accent colour</label><input name="accent" placeholder="#7a4a2b"></div></div>
-    <button class="btn primary" type="submit">Save bundle</button></form></div>`
-}
+export function bundlesPage(ctx: Ctx): string { return flash(ctx)+discountPage(ctx.db,ctx.store,true) }
 
 /* -------------------------------------------------------------- payments */
 

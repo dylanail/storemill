@@ -1,5 +1,6 @@
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { quantityPrice } from './quantity-pricing.ts'
 import { percentOf } from '../lib/money.ts'
 import type { LineItem, Promotion } from './types.ts'
 
@@ -106,16 +107,16 @@ export function applyPromotions(
   db: Db,
   storeId: string,
   items: LineItem[],
-  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean; regionId?: string; currencyRate?: number } = { subtotalCents: 0 },
+  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean; regionId?: string; currencyRate?: number; promotions?: Promotion[] } = { subtotalCents: 0 },
 ): PromotionOutcome {
   const at = now()
-  const all = listPromotions(db, storeId).filter((promotion) => isLive(promotion, at))
+  const all = (opts.promotions ?? listPromotions(db, storeId)).filter((promotion) => isLive(promotion, at))
   const code = (opts.code ?? '').trim().toUpperCase()
   const candidates = all
     .filter((promotion) => (promotion.automatic && !promotion.code) || (code && promotion.code === code))
     .filter((promotion) => !promotion.rules.maxUses || promotion.usageCount < promotion.rules.maxUses)
     .filter((promotion) => !promotion.rules.regionIds?.length || Boolean(opts.regionId && promotion.rules.regionIds.includes(opts.regionId)))
-    .sort((a, b) => (b.rules.priority ?? 0) - (a.rules.priority ?? 0))
+    .sort((a, b) => Number(b.rules.combinable===false)-Number(a.rules.combinable===false)||(b.rules.priority ?? 0) - (a.rules.priority ?? 0))
 
   const collectionsByProduct = new Map<string, string[]>()
   if (items.length) {
@@ -157,27 +158,20 @@ export function applyPromotions(
         if (units >= (promotion.rules.buyQuantity ?? 2)) amount = percentOf(eligibleTotal, promotion.value)
         break
       case 'tiered': {
-        const tiers = [...(promotion.rules.tiers ?? [])].filter(tier => Number.isSafeInteger(tier.quantity) && tier.quantity > 0).sort((a, b) => b.quantity - a.quantity)
-        const exactUnits = eligible.filter(item => promotion.rules.productIds?.includes(item.productId)).reduce((sum,item) => sum + item.quantity, 0)
-        const hit = tiers.find((tier) => (tier.unitPriceCents === undefined ? units : exactUnits) >= tier.quantity)
-        if (hit?.unitPriceCents !== undefined) {
-          // Exact copied offers have a verified product scope and positive price.
-          // Never turn malformed/unscoped rules into an order-wide discount.
-          if (promotion.rules.productIds?.length && Number.isSafeInteger(hit.unitPriceCents) && hit.unitPriceCents > 0) {
-            const unit = Math.round(hit.unitPriceCents * (opts.currencyRate ?? 1))
-            if (Number.isSafeInteger(unit) && unit > 0) amount = eligible.filter(item => promotion.rules.productIds!.includes(item.productId)).reduce((sum, item) => sum + Math.max(0, item.unitCents - unit) * item.quantity, 0)
-          }
-        } else if (hit) amount = percentOf(eligibleTotal, hit.percent)
+        const tiers=(promotion.rules.tiers||[]).filter(tier=>Number.isSafeInteger(tier.quantity)&&tier.quantity>0)
+        const valid=tiers.filter(tier=>[tier.unitPriceCents,tier.totalPriceCents].every(price=>price===undefined||Boolean(promotion.rules.productIds?.length&&Number.isSafeInteger(price)&&price>0)))
+        const converted=valid.map(tier=>({...tier,...(tier.unitPriceCents!==undefined?{unitPriceCents:Math.round(tier.unitPriceCents*(opts.currencyRate??1))}:{}),...(tier.totalPriceCents!==undefined?{totalPriceCents:Math.round(tier.totalPriceCents*(opts.currencyRate??1))}:{})}))
+        if(units)amount=Math.max(0,eligibleTotal-quantityPrice(converted,units,eligibleTotal/units,promotion.rules.quantityMode))
         break
       }
       case 'bogo': {
         const buy = promotion.rules.buyQuantity ?? 1
         const free = promotion.rules.getQuantity ?? 1
         const buying = promotion.rules.buyProductIds?.length
-          ? items.filter((item) => promotion.rules.buyProductIds?.includes(item.productId) && !item.giftOf)
+          ? items.filter((item) => promotion.rules.buyProductIds?.includes(item.productId) && !item.giftOf && item.source !== 'order-bump')
           : eligible
         const rewards = promotion.rules.getProductIds?.length
-          ? items.filter((item) => promotion.rules.getProductIds?.includes(item.productId) && !item.giftOf)
+          ? items.filter((item) => promotion.rules.getProductIds?.includes(item.productId) && !item.giftOf && item.source !== 'order-bump')
           : eligible
         const buyUnits = buying.reduce((sum, item) => sum + item.quantity, 0)
         const sets = promotion.rules.getProductIds?.length ? Math.floor(buyUnits / buy) : Math.floor(buyUnits / (buy + free))
@@ -197,7 +191,10 @@ export function applyPromotions(
       case 'fixed_bundle': {
         const required = promotion.rules.minQuantity ?? promotion.rules.buyQuantity ?? 2
         const target = Math.round((promotion.rules.bundlePriceCents ?? promotion.value) * (opts.currencyRate ?? 1))
-        if (units >= required && target >= 0) amount = Math.max(0, eligibleTotal - target)
+        if (units >= required && target >= 0) {
+          const prices=eligible.flatMap(item=>Array.from({length:item.quantity},()=>item.unitCents)).sort((a,b)=>b-a)
+          for(let offset=0;offset+required<=prices.length;offset+=required)amount+=Math.max(0,prices.slice(offset,offset+required).reduce((sum,unit)=>sum+unit,0)-target)
+        }
         break
       }
     }
@@ -246,7 +243,20 @@ export function promotionLineDiscounts(db: Db, storeId: string, items: LineItem[
     const indices = items.map((item, index) => eligible.includes(item) ? index : -1).filter(index => index >= 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
     const tier = rule.kind === 'tiered' ? [...(rule.rules.tiers || [])].sort((a,b) => b.quantity-a.quantity).find(tier => units >= tier.quantity) : undefined
-    const weights = indices.map(index => tier?.unitPriceCents !== undefined
+    // Only complete sets are discounted. Preserve the normal line price of
+    // an unrelated spare item instead of spreading set savings across it.
+    let setWeights: number[] | undefined
+    if(rule.kind==='fixed_bundle'){
+      setWeights=items.map(()=>0)
+      const required=rule.rules.minQuantity??rule.rules.buyQuantity??2
+      const target=Math.round((rule.rules.bundlePriceCents??rule.value)*currencyRate)
+      const units=indices.flatMap(index=>Array.from({length:items[index]!.quantity},()=>({index,price:items[index]!.unitCents}))).sort((a,b)=>b.price-a.price)
+      for(let offset=0;offset+required<=units.length;offset+=required){
+        const group=units.slice(offset,offset+required),full=group.reduce((sum,item)=>sum+item.price,0),saving=Math.max(0,full-target)
+        for(const item of group)setWeights[item.index]!+=full?saving*item.price/full:0
+      }
+    }
+    const weights = indices.map(index => setWeights ? Math.min(setWeights[index]!,items[index]!.unitCents*items[index]!.quantity-discounts[index]!) : tier?.unitPriceCents !== undefined
       ? Math.min(items[index]!.unitCents * items[index]!.quantity - discounts[index]!, Math.max(0, items[index]!.unitCents - Math.round(tier.unitPriceCents * currencyRate)) * items[index]!.quantity)
       : items[index]!.unitCents * items[index]!.quantity - discounts[index]!)
     let remaining = appliedRule.amountCents
