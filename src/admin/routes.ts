@@ -1,3 +1,6 @@
+import { pageRevisionToken } from '../pages/revision-token.ts'
+import { startHealthFix, healthFix, undoHealthFix } from '../storefront/health-fixes.ts'
+import { duplicateWholeFunnel } from '../pages/funnel-clone.ts'
 import { rebrandForm, rebrandReview } from './media-rebrand-page.ts'
 import { startRebrand, getRebrand, applyRebrand, undoRebrand, cancelRebrand } from '../control/media-rebrand.ts'
 import type { RebrandSpec } from '../control/media-render.ts'
@@ -736,6 +739,12 @@ export function adminRouter(): Router {
     const url = String(body.url ?? '').trim()
     if (!/^https?:\/\//i.test(url)) return back(ctx, '!Paste a full URL, starting with https://')
     try {
+      if (body.scope === 'funnel') {
+        const imported = await importAssetFromUrl(db(), current.user.id, { url, kind: 'funnel', currency: current.store.currency, additionalUrls: String(body.additionalUrls ?? '').split(/\r?\n/).map(value => value.trim()).filter(Boolean) })
+        setCookie(ctx.res, STORE_COOKIE, imported.store.id)
+        recordAudit(db(), { storeId: imported.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_funnel', target: url, diff: { pages: imported.pages.length, complete: imported.report.complete } })
+        return redirect(`/admin/pages/${imported.page.id}/copy-report`)
+      }
       const result = await clonePage(url, { storeId: current.store.id, keepScripts: body.keepScripts === 'true' })
       const role = pageRole(body.role ?? 'page'), productId = String(body.productId ?? '')
       if (productId && !getProduct(db(), current.store.id, productId)) throw new Error('Choose a product from this site')
@@ -895,11 +904,13 @@ export function adminRouter(): Router {
     const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
     const custom = new Set(customDefinitions(db(), current.store.id).map((definition) => definition.type))
     const carried = new Set((getPage(db(), current.store.id, ctx.params.id as string)?.blocks ?? []).map((block) => block.type))
+    if(blocks.some(block=>!block||typeof block.type!=='string'||!block.settings||typeof block.settings!=='object'||Array.isArray(block.settings)))return {error:'Invalid page blocks'}
     const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type) && !carried.has(block.type))
     if (unknown) return { error: `Unknown block type ${unknown.type}` }
     const seo = (body.seo ?? {}) as Record<string, unknown>
     const found = getPage(db(), current.store.id, ctx.params.id as string)
     if (!found) throw notFound('No such page')
+    if(body.revision && body.revision!==pageRevisionToken(found))return {error:'This page changed in another tab or an AI job. Your edits remain here; reload the saved page before overwriting it.'}
     let role: Page['role']
     try { role = pageRole(body.role ?? found.role) } catch { return { error: 'Choose a valid page type' } }
     const productId = String(body.productId ?? found.productId)
@@ -925,11 +936,15 @@ export function adminRouter(): Router {
       createdAt: revision.createdAt,
       status: revision.snapshot.status,
     }))
-    return { ok: true, handle: updated.handle, updatedAt: updated.updatedAt, status: updated.status, revisions }
+    return { ok: true, revision: pageRevisionToken(updated), handle: updated.handle, updatedAt: updated.updatedAt, status: updated.status, revisions }
   })
 
-  router.post('/admin/pages/:id/revisions/:revision/restore', (ctx) => {
+  router.post('/admin/pages/:id/revisions/:revision/restore', async (ctx) => {
     const current = session(ctx)
+    const body=await ctx.body()
+    const found=getPage(db(),current.store.id,ctx.params.id as string)
+    if(!found)throw notFound('No such page')
+    if(body.revision && body.revision!==pageRevisionToken(found))return {error:'This page changed in another tab or an AI job. Reload before restoring a version.'}
     try {
       restorePageRevision(db(), current.store.id, ctx.params.id as string, ctx.params.revision as string)
       return { ok: true }
@@ -1139,6 +1154,7 @@ export function adminRouter(): Router {
     upsertFunnel(db(), current.store.id, {
       ...(body.id ? { id: String(body.id) } : {}),
       name: String(body.name ?? 'Funnel'),
+      ...(body.status ? { status: body.status==='paused' ? 'paused' as const : 'active' as const } : {}),
       productId: String(body.productId ?? ''),
       advertorialPageId: String(body.advertorialPageId ?? ''),
       offerPageId: String(body.offerPageId ?? ''),
@@ -1149,6 +1165,13 @@ export function adminRouter(): Router {
       weight: Number(body.weight ?? 0) || 0,
     })
     return back(ctx, 'Funnel saved.')
+  })
+
+  router.post('/admin/funnels/:id/clone', (ctx) => {
+    const current = session(ctx)
+    const result = duplicateWholeFunnel(db(), current.store.id, ctx.params.id as string)
+    recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_funnel', target: result.funnel.id, diff: { pages: result.pages.map(page => page.id) } })
+    return redirect(`/admin/funnels?flash=${encodeURIComponent(`Cloned ${result.pages.length} pages and all offer settings. The copy is paused and outside split tests.`)}`)
   })
 
   router.post('/admin/funnels/:id/delete', (ctx) => {
@@ -1343,7 +1366,26 @@ export function adminRouter(): Router {
     return back(ctx, `Review ${status}.`)
   })
 
+  router.get('/admin/speed', (ctx) => {
+    const current=session(ctx)
+    return page(ctx,current,'speed','Store Speed',plan.healthCard(ctxFor(current,ctx),true))
+  })
+  router.post('/admin/speed/fix', async(ctx)=>{
+    const current=session(ctx),body=await ctx.body()
+    try{return {id:startHealthFix(db(),current.store.id,String(body.path??''),String(body.check??''),current.user.id)}}catch(error){return {error:error instanceof Error?error.message:String(error)}}
+  })
+  router.get('/admin/speed/fixes/:id',(ctx)=>{
+    const current=session(ctx),job=healthFix(db(),current.store.id,String(ctx.params.id))
+    if(!job)throw notFound('No such fix')
+    return job
+  })
+  router.post('/admin/speed/fixes/:id/undo',(ctx)=>{
+    const current=session(ctx)
+    try{undoHealthFix(db(),current.store.id,String(ctx.params.id));return {ok:true}}catch(error){return {error:error instanceof Error?error.message:String(error)}}
+  })
+
   router.get('/admin/store', (ctx) => {
+    if(ctx.query.get('health')==='1')return redirect('/admin/speed')
     const current = session(ctx)
     return page(ctx, current, 'store', 'Theme & navigation', pages.storePage(ctxFor(current, ctx), history(db(), current.store.id, 10), ctx.query.get('health') === '1'))
   })

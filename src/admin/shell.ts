@@ -50,6 +50,7 @@ export const NAV: NavItem[] = [
   { key: 'orders', href: '/admin/orders', label: 'Orders', icon: 'orders', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', icon: 'products', area: 'products' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', icon: 'customers', area: 'customers' },
+  { key: 'speed', href: '/admin/speed', label: 'Store Speed', icon: 'analytics', area: 'store' },
 ]
 
 function groupsFor(kind: Store['kind']): Array<{ label: string; icon: IconName; children: NavItem[] }> {

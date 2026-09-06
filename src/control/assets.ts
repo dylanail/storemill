@@ -232,6 +232,7 @@ export async function importAssetFromUrl(
   pages.forEach((created) => updatePage(db, store.id, created.id, { rawHtml: rewriteCopiedLinks(created.rawHtml, created.sourceUrl, routes) }))
   if (input.kind === 'funnel') upsertFunnel(db, store.id, {
     name: `${store.name} funnel`,
+    steps: pages.map(page => ({ pageId: page.id, label: page.title })),
     offerPageId: pages.find((created) => created.role === 'offer' || created.role === 'pdp')?.id ?? page.id,
     advertorialPageId: pages.find((created) => created.role === 'advertorial')?.id ?? '',
     productId: products.length === 1 ? products[0]?.id ?? '' : '',

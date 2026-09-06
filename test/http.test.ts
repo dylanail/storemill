@@ -195,12 +195,13 @@ test('every admin page renders', async () => {
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
     '/admin/promotions', '/admin/analytics', '/admin/cro', '/admin/reviews', '/admin/store', '/admin/marketing',
     '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
-    '/admin/build', '/admin/market', '/admin/creative', '/admin/store?health=1',
+    '/admin/build', '/admin/market', '/admin/creative', '/admin/speed',
   ]) {
     const response = await call(path)
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
     assert.match(response.text, /id="assistant-launcher"/, `${path} carries the assistant launcher`)
   }
+  assert.equal((await call('/admin/store?health=1')).location,'/admin/speed')
   const settings = await call('/admin/settings')
   assert.match(settings.text, /Customer event pixels/)
   assert.match(settings.text, /17TRACK/)

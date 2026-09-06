@@ -1,7 +1,8 @@
+import './lib/env.ts'
+import { recoverHealthFixes } from './storefront/health-fixes.ts'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { drainRebrands } from './control/media-rebrand.ts'
-import './lib/env.ts'
 import { brandAsset } from './brand/index.ts'
 import { createServer } from 'node:http'
 import { getDb } from './lib/db.ts'
@@ -186,6 +187,7 @@ const db = getDb()
 recoverRuns(db)
 resumeQueuedRuns(db)
 recoverAssistantQueue(db)
+recoverHealthFixes(db)
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
 setInterval(() => void sweepMarketingFlows(db, { origin }).catch(() => undefined), 5 * 60_000).unref()
 setInterval(() => void dispatchServerEvents(db).catch(() => undefined), 15_000).unref()

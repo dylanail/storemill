@@ -94,8 +94,10 @@
     if (semantic[tag]) return {type:semantic[tag],why:'Semantic '+tag+' element'};
     if (el.getAttribute('data-pb-native')) return {type:el.getAttribute('data-pb-native'),why:'Added in editor'};
     if (el.matches('[data-section-id],[data-section-type],[data-element_type="section"]') || /(?:^|\s)(?:shopify-section|elsection|el-section|elementor-top-section|section|hero)(?:\s|$)/.test(tokens)) return {type:'Section',why:'Imported page section'};
-    if (['flex','inline-flex'].includes(s.display) && el.children.length > 1) return {type:s.flexDirection.startsWith('column')?'Column':'Row',why:'Visible flex layout'};
-    if (['grid','inline-grid'].includes(s.display) && el.children.length > 1) return {type:'Grid',why:'Grid layout'};
+    if (['flex','inline-flex'].includes(s.display)) return {type:s.flexDirection.startsWith('column')?'Column':'Row',why:'Visible flex layout'};
+    if (['grid','inline-grid'].includes(s.display)) return {type:'Grid',why:'Grid layout'};
+    if (/\b(?:column|col|cell)(?:[-_\s]|$)/.test(tokens)) return {type:'Column',why:'Imported column container'};
+    if (!el.children.length && !text && ['div','aside'].includes(tag)) return {type:'Container',why:'Empty editable container'};
     if (el.children.length === 1 && !own && (!s.backgroundImage || s.backgroundImage === 'none') && ['rgba(0, 0, 0, 0)','transparent',''].includes(s.backgroundColor) && (!s.borderTopWidth || s.borderTopWidth === '0px') && (!s.boxShadow || s.boxShadow === 'none')) return {type:'Wrapper',why:'Single child without a visible surface'};
     if (isText(el)) return {type:parseFloat(s.fontSize)>=24 && text.length<160?'Heading':'Text',why:'Text content and typography'};
     if (/\b(hero|section|banner)\b/.test(tokens) || el.parentElement === doc.body) return {type:'Section',why:'Page region'};
@@ -130,7 +132,11 @@
       }
     });
     if (!get(selected)) selected = null;
-    renderLayers(); draw();
+    syncEmptyTargets();renderLayers(); draw();
+  }
+  function syncEmptyTargets(){
+    doc.querySelectorAll('[data-pb-empty-target]').forEach(el=>el.removeAttribute('data-pb-empty-target'));
+    model.forEach(n=>{if(['Row','Column','Columns','Grid','Container','Section'].includes(n.type)&&!n.el.textContent.trim()&&!n.el.querySelector('img,svg,video,iframe,input,button,select,textarea,hr')&&!isLocked(n))n.el.setAttribute('data-pb-empty-target','');});
   }
   function meaningful(n) { return n && (allNodes || (!n.collapsed && n.type !== 'Wrapper')); }
   function parentOf(n) { let p=get(n?.parent); while(p && !meaningful(p)) p=get(p.parent); return p; }
@@ -181,6 +187,8 @@
     const drags=[...(root.matches?.('[data-pb-drag-original]')?[root]:[]),...root.querySelectorAll('[data-pb-drag-original]')];
     drags.forEach(el=>{const old=el.getAttribute('data-pb-drag-original');if(old==='absent')el.removeAttribute('draggable');else el.setAttribute('draggable',old);el.removeAttribute('data-pb-drag-original');});
     root.querySelectorAll('[data-store-theme-node]').forEach(el=>el.removeAttribute('data-store-theme-node'));
+    root.querySelectorAll('[data-pb-empty-target]').forEach(el=>el.removeAttribute('data-pb-empty-target'));
+    root.removeAttribute?.('data-pb-empty-target');
     root.querySelectorAll('[data-pb-peek]').forEach(el=>el.removeAttribute('data-pb-peek'));
     root.querySelectorAll('[data-pb-cart-editing]').forEach(el=>el.removeAttribute('data-pb-cart-editing'));
     root.removeAttribute?.('data-pb-cart-editing');
@@ -302,8 +310,8 @@
       el.querySelector('.tree-select').onclick=()=>select(id,true);
       el.onmouseenter=()=>{hovered=id;draw();};el.onmouseleave=()=>{hovered=null;draw();};
       el.ondragstart=e=>startDrag(e,get(id));el.ondragend=endDrag;
-      el.ondragover=e=>{if(!drag)return;e.preventDefault();const r=el.getBoundingClientRect();setDrop(get(id),e.clientY<r.top+r.height/2?'before':'after');el.classList.toggle('drop-before',drop?.valid&&drop.mode==='before');el.classList.toggle('drop-after',drop?.valid&&drop.mode==='after');};
-      el.ondragleave=()=>el.classList.remove('drop-before','drop-after');el.ondrop=e=>{e.preventDefault();performDrop();};
+      el.ondragover=e=>{if(!drag)return;e.preventDefault();const r=el.getBoundingClientRect();const target=get(id),fraction=(e.clientY-r.top)/r.height;setDrop(target,fraction>.25&&fraction<.75&&legal(target,get(drag))?'inside':fraction<.5?'before':'after');el.classList.toggle('drop-inside',drop?.valid&&drop.mode==='inside');el.classList.toggle('drop-before',drop?.valid&&drop.mode==='before');el.classList.toggle('drop-after',drop?.valid&&drop.mode==='after');};
+      el.ondragleave=()=>el.classList.remove('drop-before','drop-after','drop-inside');el.ondrop=e=>{e.preventDefault();performDrop();};
     });
     const path=[];let n=current();while(n){if(meaningful(n))path.unshift(n);n=get(n.parent);}
     breadcrumbs.innerHTML=path.length?path.map(n=>'<button type="button" data-crumb="'+n.id+'">'+esc(metadata.nodes[n.id]?.name||n.type)+'</button>').join('<span>›</span>'):'<span>Click any element on the page to begin</span>';
@@ -358,7 +366,7 @@
     const size='<div class="v-grid">'+styleField(n,'width','Width','px')+styleField(n,'max-width','Maximum width','px')+styleField(n,'min-height','Minimum height','px')+styleField(n,'height','Height','px')+'</div>'+(img?styleField(n,'object-fit','Image fit','',[['contain','Fit inside'],['cover','Fill area'],['fill','Stretch']]):'');
     const originalMedia=mediaRules(n);
     const visibility=(originalMedia.length?'<p class="site-media">Original responsive rules (read-only):<br>'+originalMedia.map(esc).join('<br>')+'</p>':'')+'<div class="notice">'+(breakpoint==='desktop'?'Desktop changes apply at every size unless a smaller size overrides them.':'Changes here override '+names[breakpoint]+' and smaller screens.')+'</div><button class="btn wide" type="button" data-action="visibility">'+(hidden(n.el)?'Show at '+names[breakpoint]:'Hide at '+names[breakpoint])+'</button>'+(hidden(n.el)||showHidden.has(n.id)?'<button class="btn wide" type="button" data-action="peek">'+(showHidden.has(n.id)?'Stop showing hidden layer':'Show hidden layer while editing')+'</button>':'');
-    props.innerHTML='<div class="inspector-selection"><span class="selection-type">'+esc(n.type)+'</span><select aria-label="Element type" id="retag">'+[...structureTypes,...contentTypes,'Custom','Wrapper'].map(t=>'<option '+(n.type===t?'selected':'')+'>'+t+'</option>').join('')+'</select></div><div class="inspector-tabs" role="tablist"><button role="tab" data-tab="content" aria-selected="'+(focusedTab==='content')+'">Content</button><button role="tab" data-tab="design" aria-selected="'+(focusedTab==='design')+'">Design</button></div><fieldset '+(locked?'disabled':'')+'>'+scope+columnPanel(n)+spacing+'<div '+(focusedTab==='content'?'':'hidden')+'>'+accordion('Content',content,true)+(structural?accordion('Layout',layout,true):'')+'</div><div '+(focusedTab==='design'?'':'hidden')+'><div class="breakpoint-notice">Editing '+names[breakpoint]+(breakpoint==='desktop'?' · applies to all sizes':' · responsive override')+'</div>'+(structural?'':accordion('Layout',layout))+accordion('Size',size,img!==null)+((canText||structural)?accordion('Typography',typography,canText):'')+accordion('Background & shape',background,true)+accordion('Visibility',visibility,true)+'</div></fieldset>'+accordion('Organize & advanced',field('Layer name','id="layer-name"',metadata.nodes[n.id]?.name||'')+'<button class="btn wide" type="button" data-action="lock">'+(metadata.nodes[n.id]?.locked?'Unlock layer':'Lock layer')+'</button><p class="muted">'+esc(n.why)+'. Renaming and changing type do not rewrite your markup.</p><code>'+esc('<'+n.el.localName+(n.el.id?' id="'+n.el.id+'"':'')+'>')+'</code>'+field('Element HTML','id="element-code"',n.el.innerHTML,'textarea')+'<button class="btn wide" data-action="apply-code">Apply HTML</button>')+'<div class="prop-actions"><button class="btn" data-action="duplicate" '+(locked?'disabled':'')+'>Duplicate</button><button class="btn" data-action="library">Save section</button><button class="btn danger" data-action="delete" '+(locked?'disabled':'')+'>Delete</button></div>';
+    props.innerHTML='<div class="inspector-selection"><span class="selection-type">'+esc(n.type)+'</span><select aria-label="Element type" id="retag">'+[...structureTypes,...contentTypes,'Custom','Wrapper'].map(t=>'<option '+(n.type===t?'selected':'')+'>'+t+'</option>').join('')+'</select></div><div class="inspector-tabs" role="tablist"><button role="tab" data-tab="content" aria-selected="'+(focusedTab==='content')+'">Content</button><button role="tab" data-tab="design" aria-selected="'+(focusedTab==='design')+'">Design</button></div><fieldset '+(locked?'disabled':'')+'>'+scope+columnPanel(n)+spacing+'<div '+(focusedTab==='content'?'':'hidden')+'>'+accordion('Content',content,true)+(structural?accordion('Layout',layout,true):'')+'</div><div '+(focusedTab==='design'?'':'hidden')+'><div class="breakpoint-notice">Editing '+names[breakpoint]+(breakpoint==='desktop'?' · applies to all sizes':' · responsive override')+'</div>'+(structural?'':accordion('Layout',layout))+accordion('Size',size,img!==null)+((canText||structural)?accordion('Typography',typography,canText):'')+accordion('Background & shape',background,true)+accordion('Visibility',visibility,true)+'</div></fieldset>'+accordion('Organize & advanced',field('Layer name','id="layer-name"',metadata.nodes[n.id]?.name||'')+'<button class="btn wide" type="button" data-action="lock">'+(metadata.nodes[n.id]?.locked?'Unlock layer':'Lock layer')+'</button><p class="muted">'+esc(n.why)+'. Renaming and changing type do not rewrite your markup.</p><code>'+esc('<'+n.el.localName+(n.el.id?' id="'+n.el.id+'"':'')+'>')+'</code>'+field('Element HTML','id="element-code"',n.el.innerHTML,'textarea')+'<button class="btn wide" data-action="apply-code">Apply HTML</button>')+'<div class="prop-actions"><button class="btn" data-action="move-to">Move to…</button><button class="btn" data-action="fit-content">Fit to content</button><button class="btn" data-action="duplicate" '+(locked?'disabled':'')+'>Duplicate</button><button class="btn" data-action="library">Save section</button><button class="btn danger" data-action="delete" '+(locked?'disabled':'')+'>Delete</button></div>';
     const scopeInput=props.querySelector('#style-scope');if(scopeInput)scopeInput.onchange=()=>{styleScope=scopeInput.value;announce(styleScope==='one'?'Design changes apply only to this layer':'Design changes apply to '+peers.length+' similar layers');};
     props.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{commit();focusedTab=b.dataset.tab;renderInspector();});
     props.querySelectorAll('[data-child]').forEach(b=>b.onclick=()=>select(b.dataset.child,true));
@@ -556,6 +564,8 @@
     if(name==='peek'){showHidden.has(n.id)?showHidden.delete(n.id):showHidden.add(n.id);doc.querySelectorAll('[data-pb-peek]').forEach(el=>el.removeAttribute('data-pb-peek'));showHidden.forEach(id=>{let node=get(id);while(node){const s=computed(node.el);if(node.id===id||s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0)node.el.setAttribute('data-pb-peek','');node=get(node.parent);}});renderInspector();draw();return;}
     if(name==='lock'){operation('toggle layer lock',()=>nodeMeta(n.id).locked=!nodeMeta(n.id).locked);return;}
     if(isLocked(n)||n.type==='Page'){announce('Select an unlocked content layer or section.');return;}
+    if(name==='move-to'){openMove(n);return;}
+    if(name==='fit-content'){operation('fit content',()=>{['height','min-height','padding-top','padding-bottom','margin-top','margin-bottom'].forEach(key=>{n.el.style.removeProperty(key);setStyle(n.id,key,key==='height'?'auto':'0px')});});return;}
     if(name==='copy'){copySelection();return;}
     if(name==='delete'&&n.el.matches('button[type="submit"],input[type="submit"]')&&n.el.closest('form')?.querySelectorAll('[type="submit"]').length===1){if(!confirm('This is the form’s only submit button. Delete it?'))return;}
     operation(name==='duplicate'?'duplicate '+n.type.toLowerCase():name,()=>{
@@ -567,6 +577,13 @@
       if(name==='apply-code')n.el.innerHTML=props.querySelector('#element-code').value;
       if(name==='unbind'){const binding=nodeMeta(n.id).binding;if(binding){n.el.innerHTML=binding.fallbackHtml;[...n.el.attributes].forEach(a=>{if(a.name!==ID&&a.name!=='id')n.el.removeAttribute(a.name);});Object.entries(binding.fallbackAttributes).forEach(([k,v])=>{if(k!==ID&&k!=='id')n.el.setAttribute(k,v);});n.el.setAttribute(ID,n.id);[...(imageElement(n)?.closest('picture')?.querySelectorAll('source')||[])].forEach((el,i)=>{const attrs=binding.fallbackSources?.[i];if(attrs){[...el.attributes].forEach(a=>el.removeAttribute(a.name));Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));}});if(binding.field==='image'&&binding.fallbackOverrides)metadata.overrides[n.id]=binding.fallbackOverrides;delete nodeMeta(n.id).binding;syncBindingRuntime();}}
     });
+  }
+  const moveDialog=document.createElement('dialog');moveDialog.className='move-dialog';moveDialog.innerHTML='<form method="dialog"><h2>Move element</h2><label>Destination container<select aria-label="Destination container"></select></label><div><button class="btn" value="cancel">Cancel</button><button type="button" class="btn primary" data-move-apply>Move inside</button></div></form>';document.body.appendChild(moveDialog);
+  function openMove(n){
+    const select=moveDialog.querySelector('select');select.replaceChildren();
+    model.forEach(destination=>{if(legal(destination,n)){const option=document.createElement('option');option.value=destination.id;let depth=0,parent=get(destination.parent);while(parent){depth++;parent=get(parent.parent);}option.textContent='— '.repeat(depth)+destination.type+' · '+nodeName(destination);select.appendChild(option);}});
+    if(!select.options.length){announce('No available container can hold this element.');return;}
+    moveDialog.querySelector('[data-move-apply]').onclick=()=>{const destination=get(select.value);if(!legal(destination,n))return;operation('move element',()=>{destination.el.appendChild(n.el);selected=n.id;});moveDialog.close();announce('Element moved into '+nodeName(destination));};moveDialog.showModal();
   }
   function startDrag(event,n) {
     if(!n||isLocked(n)||inline){event.preventDefault();return;}
@@ -598,6 +615,8 @@
       const bounds=target.el.getBoundingClientRect();
       setDrop(target,e.clientY<bounds.top+bounds.height/2?'before':'after');return;
     }
+    const empty=e.target?.closest('[data-pb-empty-target]');
+    if(empty){const destination=get(empty.getAttribute(ID));if(destination&&legal(destination,moving)){dwell=null;setDrop(destination,'inside');return;}}
     const r=target.el.getBoundingClientRect(),same=target.el.parentElement===moving.el.parentElement;
     const inner=structureTypes.includes(target.type)&&e.clientX>r.left+12&&e.clientX<r.right-12&&e.clientY>r.top+12&&e.clientY<r.bottom-12;
     if(inner){
@@ -636,7 +655,7 @@
   }
   document.addEventListener('pointermove',pointerMove);document.addEventListener('pointerup',pointerUp);
   document.addEventListener('pointercancel',()=>{if(pointerDrag){pointerDrag=null;endDrag();}});
-  function endDrag(){drag=null;drop=null;dwell=null;sectionDrag=null;chrome.classList.remove('moving');layers.querySelectorAll('.drop-before,.drop-after').forEach(n=>n.classList.remove('drop-before','drop-after'));renderLayers();renderInspector();draw();}
+  function endDrag(){drag=null;drop=null;dwell=null;sectionDrag=null;chrome.classList.remove('moving');layers.querySelectorAll('.drop-before,.drop-after,.drop-inside').forEach(n=>n.classList.remove('drop-before','drop-after','drop-inside'));renderLayers();renderInspector();draw();}
   function performDrop() {
     if(!drop?.valid){announce('That element cannot be moved here.');endDrag();return;}
     const n=get(drag),target=get(drop.target),mode=drop.mode;
@@ -756,7 +775,7 @@
     loading=false;
     doc.querySelectorAll('['+TEMP+']').forEach(n=>n.remove());
     const freeze=doc.createElement('style');freeze.setAttribute(TEMP,'1');freeze.textContent='*,*::before,*::after{animation-play-state:paused!important;transition:none!important;scroll-behavior:auto!important} [data-pb-peek]{display:block!important;visibility:visible!important;opacity:1!important} [data-pb-editing]{cursor:text!important;outline:none!important}';doc.head.appendChild(freeze);
-    freeze.textContent+=' [data-pb-column]:empty{min-height:96px;outline:1px dashed #93c5fd;outline-offset:-1px}[data-pb-column]:empty:before{content:"Drop content here";display:block;padding:24px 12px;color:#64748b;font:13px sans-serif} [data-pb-cart-editing]{display:flex!important;visibility:visible!important;opacity:1!important;transform:none!important;position:fixed!important;inset:0!important;z-index:9999!important;max-width:100vw!important} [data-pb-cart-editing] .drawer__inner{transform:none!important;visibility:visible!important;max-width:100vw!important}';
+    freeze.textContent+=' [data-pb-empty-target]{min-height:64px!important;min-width:48px!important;outline:1px dashed #93c5fd!important;outline-offset:-1px} [data-pb-empty-target]:before{content:"Drop content here";display:block;padding:16px;color:#64748b;font:12px sans-serif} [data-pb-column]:empty{min-height:96px;outline:1px dashed #93c5fd;outline-offset:-1px}[data-pb-column]:empty:before{content:"Drop content here";display:block;padding:24px 12px;color:#64748b;font:13px sans-serif} [data-pb-cart-editing]{display:flex!important;visibility:visible!important;opacity:1!important;transform:none!important;position:fixed!important;inset:0!important;z-index:9999!important;max-width:100vw!important} [data-pb-cart-editing] .drawer__inner{transform:none!important;visibility:visible!important;max-width:100vw!important}';
     applySourceTheme(doc,window.__BRAND||{},{temporary:true,fontDocument:document});
     setupCanvasState(freeze);
     cartEditor.hidden=!doc.querySelector('cart-drawer,#CartDrawer,#cart-drawer,.cart-drawer,[data-cart-drawer]');cartEditor.textContent='Edit cart drawer';

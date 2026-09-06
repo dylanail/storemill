@@ -720,6 +720,9 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE UNIQUE INDEX media_rebrands_request ON media_rebrands(store_id, request_key) WHERE request_key <> '';
     `,
   },
+  { name: '024_funnel_steps_and_health_fixes', sql: `ALTER TABLE funnels ADD COLUMN steps TEXT NOT NULL DEFAULT '[]';
+    CREATE TABLE health_fixes (id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE, path TEXT NOT NULL, check_name TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', before_state TEXT NOT NULL DEFAULT '{}', after_state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE UNIQUE INDEX health_fixes_running ON health_fixes(store_id, path, check_name) WHERE status = 'running';` },
 ]
 
 function migrate(db: Db) {

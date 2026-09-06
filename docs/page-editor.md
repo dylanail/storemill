@@ -22,7 +22,7 @@ Select an imported row/grid, a newly added **Columns** group, or a native **Mult
 
 Use the Desktop, Tablet, and Mobile buttons to edit each layout separately. Changing an imported desktop row starts tablet with at most two columns and mobile with one; customize these independently. Native blocks use their storefront breakpoints (tablet <=820px, mobile <=520px). Imported HTML uses the visual editor breakpoints below.
 
-New Columns groups provide empty drop areas. Increasing their desktop column count adds containers; reducing it moves content into the final remaining container. Imported and native multicolumn content is preserved and wraps to additional rows. Locked columns and original inline `!important` layout declarations remain protected. Counts, weights, and device settings support Undo, Save/reload, and existing template reuse.
+Empty imported flex/grid rows and columns remain legal drop targets even after their last child moves out. Their dashed canvas drop areas are temporary and never enter saved/public HTML. Layers supports dropping inside containers; **Move to…** provides a destination picker without dragging. **Fit to content** explicitly clears fixed vertical sizing/spacing, with Undo. New Columns groups provide empty drop areas. Increasing their desktop column count adds containers; reducing it moves content into the final remaining container. Imported and native multicolumn content is preserved and wraps to additional rows. Locked columns and original inline `!important` layout declarations remain protected. Counts, weights, and device settings support Undo, Save/reload, and existing template reuse.
 
 ## Source preservation and history
 
@@ -34,7 +34,7 @@ Style changes use per-element rules in an editor-owned stylesheet, never shared 
 
 Original inline `!important` declarations are reported when they prevent an override; they are not silently rewritten. Code remains available for this uncommon case. The inspector also lists relevant imported media-query conditions read-only.
 
-Content edits, styling, bindings, insertion, duplication, deletion, and dragging all enter one undo path. Continuous text input is one committed undo step. Selection is restored with undo/redo. Session history holds up to 80 operations; the existing server-side save history provides durable revisions. Source saves flush pending canvas refreshes. A response to an older save cannot mark newer edits as saved.
+Content edits, styling, bindings, insertion, duplication, deletion, and dragging all enter one undo path. Continuous text input is one committed undo step. Selection is restored with undo/redo. Session history holds up to 80 operations; the existing server-side save history provides durable revisions. Source saves flush pending canvas refreshes. A response to an older save cannot mark newer edits as saved. Saves are serialized, and revision tokens reject saves/restores when another tab or AI repair has changed the saved page. Restoring a version asks before discarding unsaved edits.
 
 ## Responsive design
 

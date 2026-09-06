@@ -16,3 +16,5 @@
 .visual-builder .canvas-scale{font-size:11px;color:#6d7175}.canvas-state{display:flex;align-items:center;gap:6px;margin-left:auto;margin-right:12px;font-size:11px;color:#6d7175}.canvas-state select{border:1px solid #d7dce1;border-radius:5px;background:#fff;padding:5px;font:11px Inter,sans-serif;max-width:160px}
 @media(max-width:940px){.visual-builder .stage{padding:12px}.visual-builder .html-canvas{height:calc(100vh - 170px)}.canvas-state>span{display:none}}
 @media(max-width:640px){.visual-builder .html-canvas{height:calc(55vh - 116px)}}
+
+.layer-row.drop-inside{background:#deebff;outline:2px solid #2563eb;outline-offset:-2px}.move-dialog{border:1px solid #cbd5e1;border-radius:10px;width:480px;max-width:90vw;padding:20px;color:#263247}.move-dialog::backdrop{background:#17223677}.move-dialog h2{margin-top:0}.move-dialog select{display:block;width:100%;padding:9px;margin:8px 0 18px}.move-dialog form>div{display:flex;gap:8px;justify-content:flex-end}

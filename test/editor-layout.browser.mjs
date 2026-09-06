@@ -63,6 +63,32 @@ await test('direct block dragging and responsive column editing',async t=>{
       assert.equal(await canvas().locator('.hero .column:first-child picture img').count(),1);assert.equal(await canvas().locator('.hero .column:first-child picture source').count(),1);
       await undo();assert.equal(await canvas().locator('.hero .column:nth-child(2) img').count(),1);
     });
+    await t.test('an imported column accepts its last image back after moving it out, with undo and reload',async()=>{
+      await open();await drag(canvas().locator('.hero img'),canvas().locator('.hero .price'),{x:100,y:100});
+      const empty=canvas().locator('.hero .column').nth(1);
+      assert.equal(await empty.getAttribute('data-pb-empty-target'),'');
+      const type=await empty.evaluate(el=>window.parent.__PAGE_EDITOR.getModel().find(n=>n.id===el.getAttribute('data-pb-id')).type);
+      assert.equal(type,'Column');
+      const box=await empty.boundingBox();
+      await drag(canvas().locator('.hero .column:first-child img'),empty,{x:80,y:80},{x:box.width/2,y:box.height/2});
+      assert.equal(await canvas().locator('.hero .column:nth-child(2) picture img').count(),1);
+      assert.equal(await empty.getAttribute('data-pb-empty-target'),null);
+      await save();assert.doesNotMatch(saved.rawHtml,/data-pb-empty-target|Drop content here/);
+      await undo();assert.equal(await canvas().locator('.hero .column:first-child picture img').count(),1);
+      await reload();assert.equal(await canvas().locator('.hero .column:nth-child(2) picture img').count(),1);
+    });
+    await t.test('keyboard destination picker moves into empty containers and fit-content is undoable',async()=>{
+      await open();await select('.hero picture');
+      await page.getByRole('button',{name:'Move to…',exact:true}).click();
+      const destination=await canvas().locator('#details .row').getAttribute('data-pb-id');
+      await page.getByLabel('Destination container',{exact:true}).selectOption(destination);
+      await page.getByRole('button',{name:'Move inside',exact:true}).click();
+      assert.equal(await canvas().locator('#details .row picture').count(),1);
+      await undo();assert.equal(await canvas().locator('.hero picture').count(),1);
+      await select('.hero');await page.getByRole('button',{name:'Fit to content',exact:true}).click();
+      assert.equal(await canvas().locator('.hero').evaluate(el=>getComputedStyle(el).paddingTop),'0px');
+      await undo();assert.equal(await canvas().locator('.hero').evaluate(el=>getComputedStyle(el).paddingTop),'40px');
+    });
     await t.test('direct drag of a horizontal column uses left/right ordering',async()=>{
       await open();const a=canvas().locator('.hero .column').first(),b=canvas().locator('.hero .column').nth(1);const rect=await b.boundingBox(),first=await a.boundingBox();
       await drag(a,b,{x:first.width-5,y:first.height-5},{x:rect.width-4,y:rect.height-5});

@@ -28,6 +28,7 @@ export type Funnel = {
   upsell: Offer
   downsell: Offer
   thankyou: { headline?: string; showRelated?: boolean; showTracking?: boolean }
+  steps: Array<{ pageId: string; label: string }>
   status: 'active' | 'paused'
   /** Funnels in the same group split the traffic that arrives at /go/:group by weight. */
   testGroup: string
@@ -48,6 +49,7 @@ function rowToFunnel(row: Row): Funnel {
     upsell: json(row.upsell, {}),
     downsell: json(row.downsell, {}),
     thankyou: json(row.thankyou, {}),
+    steps: json(row.steps, []),
     status: row.status as Funnel['status'],
     testGroup: (row.test_group as string) ?? '',
     weight: (row.weight as number) ?? 0,
@@ -80,6 +82,7 @@ export function upsertFunnel(db: Db, storeId: string, input: Partial<Omit<Funnel
   const timestamp = now()
   const values = {
     name: input.name,
+    steps: input.steps ?? existing?.steps ?? [],
     product_id: input.productId ?? existing?.productId ?? '',
     advertorial_page_id: input.advertorialPageId ?? existing?.advertorialPageId ?? '',
     offer_page_id: input.offerPageId ?? existing?.offerPageId ?? '',
