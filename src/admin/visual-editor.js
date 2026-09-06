@@ -256,16 +256,12 @@
     if(inherits)while(p){if(['desktop',...(breakpoint!=='desktop'?['tablet']:[]),...(breakpoint==='mobile'?['mobile']:[])].some(bp=>rules(p.id,bp)[key]))return{label:'From '+nodeName(p).slice(0,18)};p=parentOf(p);}
     return {label:'Original site'};
   }
-  function setHover(id, from, reveal=false) {
+  function setHover(id, from) {
     if(loading||drag||inline)return;
     const n=get(id);
     hovered=n?.id||null;hoverFrom=hovered?from:null;
     layers.querySelectorAll('.hovered').forEach(row=>row.classList.remove('hovered'));
     if(n)layers.querySelector('[data-node="'+CSS.escape(n.id)+'"]')?.classList.add('hovered');
-    if(reveal&&n&&!hidden(n.el)){
-      const r=n.el.getBoundingClientRect(),win=doc.defaultView;
-      if(r.bottom<=0||r.top>=win.innerHeight||r.right<=0||r.left>=win.innerWidth)n.el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
-    }
     draw();
   }
   function clearHover(from) {
@@ -326,9 +322,9 @@
       const id=el.dataset.node;
       el.querySelector('.tree-toggle').onclick=()=>{expanded.has(id)?expanded.delete(id):expanded.add(id);renderLayers();};
       el.querySelector('.tree-select').onclick=()=>select(id,true);
-      el.onmouseenter=()=>setHover(id,'layer-pointer',true);
+      el.onmouseenter=()=>setHover(id,'layer-pointer');
       el.onmouseleave=()=>clearHover('layer-pointer');
-      el.addEventListener('focusin',()=>setHover(id,'layer-focus',true));
+      el.addEventListener('focusin',()=>setHover(id,'layer-focus'));
       el.addEventListener('focusout',e=>{if(!el.contains(e.relatedTarget))clearHover('layer-focus');});
       el.ondragstart=e=>startDrag(e,get(id));el.ondragend=endDrag;
       el.ondragover=e=>{if(!drag)return;e.preventDefault();const r=el.getBoundingClientRect();const target=get(id),fraction=(e.clientY-r.top)/r.height;setDrop(target,fraction>.25&&fraction<.75&&legal(target,get(drag))?'inside':fraction<.5?'before':'after');el.classList.toggle('drop-inside',drop?.valid&&drop.mode==='inside');el.classList.toggle('drop-before',drop?.valid&&drop.mode==='before');el.classList.toggle('drop-after',drop?.valid&&drop.mode==='after');};

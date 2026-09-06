@@ -43,8 +43,6 @@ if (state.mode === 'blocks') {
     const card=list.querySelector('[data-i="'+row.dataset.layer+'"]');
     if(!card)return;
     layerHoverFrom=from;row.classList.add('layer-highlight');card.classList.add('layer-highlight');
-    const r=card.getBoundingClientRect(),viewport=stage.getBoundingClientRect();
-    if(r.bottom<=viewport.top||r.top>=viewport.bottom)card.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
   }
   layerList.addEventListener('mouseover',event=>{
     const row=event.target.closest('[data-layer]');

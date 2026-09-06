@@ -50,7 +50,11 @@ await test('direct block dragging and responsive column editing',async t=>{
     const geometry=selector=>canvas().locator(selector).evaluate(el=>[...el.children].map(c=>{const b=c.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width};}));
     async function setWidth(index,value){const input=page.getByRole('spinbutton',{name:`Column ${index} width percent`,exact:true});await input.fill(String(value));await input.press('Tab');}
 
-    await t.test('Layers hover reveals the matching imported component without selecting or editing it',async()=>{
+    const previewPosition=()=>page.evaluate(()=>{
+      const stage=document.getElementById('stage'),frame=document.getElementById('edit-frame')?.contentWindow;
+      return {page:[window.scrollX,window.scrollY],stage:[stage.scrollLeft,stage.scrollTop],canvas:frame?[frame.scrollX,frame.scrollY]:null};
+    });
+    await t.test('Layers hover and focus highlight imported components without scrolling the preview',async()=>{
       const fixture=imported.replace('<section id="details">','<section id="details" style="margin-top:1400px">');
       await open('html',{rawHtml:fixture});await select('.hero picture');
       const selected=await page.evaluate(()=>window.__PAGE_EDITOR.getSelected());
@@ -58,7 +62,16 @@ await test('direct block dragging and responsive column editing',async t=>{
       await page.getByLabel('Find a layer',{exact:true}).fill('Made for every day');
       const row=page.locator('[data-node="'+id+'"]'),outline=page.locator('.hover-outline');
       for(const device of ['Desktop','Tablet','Mobile']){
-        await page.getByTitle(device,{exact:true}).click();await row.hover();
+        await page.getByTitle(device,{exact:true}).click();
+        await page.locator('#edit-frame').evaluate(el=>el.contentWindow.scrollTo(0,100));
+        const before=await previewPosition();
+        assert.ok(await target.evaluate(el=>el.getBoundingClientRect().top>window.innerHeight),'Target begins below the preview');
+        await row.hover();assert.deepEqual(await previewPosition(),before,device+' hover keeps preview position');
+        assert.match(await row.getAttribute('class'),/hovered/);assert.equal(await outline.isVisible(),false);
+        await row.locator('.tree-select').focus();assert.deepEqual(await previewPosition(),before,device+' focus keeps preview position');
+        await page.locator('#title').focus();await page.locator('#title').hover();
+        await target.scrollIntoViewIfNeeded();const visiblePosition=await previewPosition();
+        await row.hover();assert.deepEqual(await previewPosition(),visiblePosition,device+' visible highlight keeps preview position');
         await outline.waitFor({state:'visible'});assert.match(await row.getAttribute('class'),/hovered/);
         const expected=await target.boundingBox(),actual=await outline.boundingBox();
         for(const key of ['x','y','width','height'])assert.ok(Math.abs(expected[key]-actual[key])<3,device+' '+key);
@@ -70,21 +83,34 @@ await test('direct block dragging and responsive column editing',async t=>{
       await page.locator('#title').focus();await outline.waitFor({state:'hidden'});
       assert.deepEqual(await page.evaluate(()=>window.__PAGE_EDITOR.getHistory()),[]);
       assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.serialize()),fixture);
+      await page.locator('#edit-frame').evaluate(el=>el.contentWindow.scrollTo(0,0));
+      await row.locator('.tree-select').click();
+      assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.getSelected()),id);
+      assert.ok((await previewPosition()).canvas[1]>100,'Explicit selection still reveals an offscreen component');
       await page.getByTitle('Desktop',{exact:true}).click();
     });
-    await t.test('native Layers hover and focus identify offscreen blocks without changing selection or content',async()=>{
+    await t.test('native Layers hover and focus highlight blocks without scrolling the preview',async()=>{
       const blocks=[...initialBlocks,...Array.from({length:8},(_,i)=>newBlock('headline',{text:'Additional block '+i}))];
       await open('blocks',{blocks});
       const last=blocks.length-1,row=page.locator('[data-layer="'+last+'"]'),card=page.locator('.canvas-block').nth(last);
+      await page.locator('#stage').evaluate(el=>el.scrollTop=100);const before=await previewPosition();
+      assert.ok(await card.evaluate(el=>el.getBoundingClientRect().top>document.getElementById('stage').getBoundingClientRect().bottom),'Target begins below the preview');
       await row.hover();assert.match(await card.getAttribute('class'),/layer-highlight/);
       assert.equal(await page.locator('.canvas-block.sel').count(),0);
-      assert.ok(await page.locator('#stage').evaluate(el=>el.scrollTop)>0);
+      assert.deepEqual(await previewPosition(),before,'Hover keeps preview position');
       await row.locator('.layer-main strong').hover();assert.match(await card.getAttribute('class'),/layer-highlight/);
       await page.locator('#title').hover();assert.doesNotMatch(await card.getAttribute('class'),/layer-highlight/);
       await row.locator('.layer-main').focus();assert.match(await card.getAttribute('class'),/layer-highlight/);
+      assert.deepEqual(await previewPosition(),before,'Focus keeps preview position');
       await page.locator('#title').focus();assert.doesNotMatch(await card.getAttribute('class'),/layer-highlight/);
+      await card.scrollIntoViewIfNeeded();const visiblePosition=await previewPosition();
+      await row.hover();assert.match(await card.getAttribute('class'),/layer-highlight/);
+      assert.deepEqual(await previewPosition(),visiblePosition,'Visible highlight keeps preview position');
       assert.equal(await page.locator('#undo').isDisabled(),true);
       await save();assert.deepEqual(saved.blocks,blocks);
+      await page.locator('#stage').evaluate(el=>el.scrollTop=0);await row.locator('.layer-main').click();
+      assert.equal(await card.getAttribute('class'),'canvas-block sel');
+      assert.ok((await previewPosition()).stage[1]>100,'Explicit selection still reveals an offscreen block');
     });
     await t.test('first gesture moves unselected text, supports undo and survives save/reload',async()=>{
       await open();assert.equal(await page.evaluate(()=>window.__PAGE_EDITOR.getSelected()),null);

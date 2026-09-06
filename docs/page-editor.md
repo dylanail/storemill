@@ -13,7 +13,7 @@ The imported-page editor uses the existing saved HTML, page revisions, and produ
 - Content contains text, images, destinations, product connections, and layout for containers. Design contains responsive sizing, typography, appearance, and visibility.
 - Replace an image by URL or upload. Replacement clears stale responsive image sources. Undo restores the prior picture sources, image attributes, dimensions, and selection.
 - Add sections or add content after/inside a selection. The chooser filters invalid types and can match the nearest similar element's typography, colors, and spacing. Saved HTML sections can be inserted again.
-- Hover or keyboard-focus a Layers item to highlight its matching canvas component. Offscreen components scroll into view; leaving clears the temporary highlight without changing selection, history, or saved content. This works for imported HTML and native blocks.
+- Hover or keyboard-focus a Layers item to highlight its matching canvas component without scrolling the preview. Click a Layers item to select it and bring it into view. Leaving clears the temporary highlight without changing selection, history, or saved content. This works for imported HTML and native blocks.
 - Search Layers, expand hierarchy, rename, change inferred type, lock, or temporarily show hidden content. Renaming and type changes are organizational metadata.
 - Ctrl/Cmd+D duplicates; Delete removes; Ctrl/Cmd+C/X/V copies, cuts, or pastes editor elements; arrows reorder; Shift+Enter selects the parent; Enter selects a child. Text fields keep their native editing shortcuts.
 
