@@ -1,3 +1,4 @@
+import { productGalleryRuntime } from './product-gallery-runtime.ts'
 import { columnLayoutStyle } from './column-layout.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { format, minorDigits } from '../lib/money.ts'
@@ -30,6 +31,7 @@ export type BlockContext = {
     title: string
     subtitle: string
     image: string
+    media?: Array<{url:string;alt:string;kind?:'image'|'video';poster?:string}>
     priceCents: number
     variants: Array<{ id: string; title: string; priceCents: number }>
     options: Array<{ title: string; values: Array<{ value: string; swatch?: string }> }>
@@ -1085,11 +1087,15 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Text & media',
     icon: '▤',
     description: 'One big image with thumbnails under it, the way a product page opens. Click a thumbnail to swap.',
-    schema: { images: { type: 'string', label: 'Image URLs (one per line)', multiline: true, required: true, default: '' }, alt: { type: 'string', label: 'Alt text', default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never },
-    render: (settings, _context, block) => {
-      const images = list(settings.images)
-      if (!images.length) return wrap(settings, block, '<div class="ph">Add image URLs, one per line</div>')
-      return wrap(settings, block, `<div class="gal" data-gallery><img class="gal-main" src="${e(images[0])}" alt="${e(settings.alt)}" loading="eager">${images.length > 1 ? `<div class="gal-thumbs">${images.map((src, index) => `<button type="button" class="${index ? '' : 'on'}" data-src="${e(src)}" aria-label="Image ${index + 1}"><img src="${e(src)}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}</div>`)
+    schema: { productId: {type:'string',label:'Product',default:''}, gallery: {type:'string',label:'Gallery configuration',default:''}, images: { type: 'string', label: 'Image URLs (one per line)', multiline: true, default: '' }, alt: { type: 'string', label: 'Alt text', default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never },
+    render: (settings, context, block) => {
+      let gallery: {mode:string;productId?:string;items:Array<{url:string;alt:string;kind?:string}>;settings?:Record<string,unknown>}
+      try {gallery=JSON.parse(String(settings.gallery||''))}catch{gallery={mode:settings.productId?'product':'custom',productId:String(settings.productId||''),items:list(settings.images).map(url=>({url,alt:String(settings.alt||'')})),settings:{}}}
+      if(gallery.mode==='product'){
+        const product=context.products.find(item=>item.id===gallery.productId)
+        if(product)gallery.items=product.media?.length?product.media:product.image?[{url:product.image,alt:product.title}]:[]
+      }
+      return wrap(settings, block, `<div class="gal" data-gallery data-pb-gallery="${e(JSON.stringify(gallery))}"><div data-pg-track>${gallery.items.map(item=>`<div data-pg-slide><img src="${e(item.url)}" alt="${e(item.alt)}"></div>`).join('')}</div>${gallery.items.length>1?`<div class="gal-thumbs" data-pg-thumbs>${gallery.items.map((item,index)=>`<button type="button" class="${index?'':'on'}" data-src="${e(item.url)}" data-pg-thumb="${index}" aria-label="Show slide ${index+1}"><img src="${e(item.url)}" alt=""></button>`).join('')}</div>`:''}</div>`)
     },
   },
   {
@@ -1331,7 +1337,7 @@ export function defaultsFor(definition: BlockDefinition): Record<string, unknown
 }
 
 /** The runtime the blocks need: countdowns, lazy video, before/after, sticky bar, share. Small, inline, dependency-free. */
-export const BLOCK_RUNTIME = `(function(){
+export const BLOCK_RUNTIME = `${productGalleryRuntime}\n(function(){
 function pad(n){return String(Math.max(0,n)).padStart(2,'0')}
 document.querySelectorAll('.countdown').forEach(function(el){
   var ends; if(el.dataset.mode==='fixed'&&el.dataset.ends){ends=Date.parse(el.dataset.ends)}
@@ -1356,7 +1362,7 @@ document.querySelectorAll('[data-quiz]').forEach(function(quiz){var steps=quiz.q
   function go(n){steps.forEach(function(s,i){s.hidden=i!==n});if(bar){bar.setAttribute('aria-valuenow',String(n+1));bar.setAttribute('aria-label','Question '+(n+1)+' of '+total);bar.firstElementChild.style.width=Math.round((n+1)/total*100)+'%'}var l=steps[n]&&steps[n].querySelector('legend');l&&l.focus&&(l.tabIndex=-1,l.focus())}
   quiz.querySelectorAll('.qopt').forEach(function(opt){opt.addEventListener('click',function(){var step=opt.closest('.qstep'),n=Number(step.dataset.step);answers.push(opt.dataset.answer);window.__track&&window.__track('quiz.step',{step:n,answer:opt.dataset.answer});
     if(n<total){go(n)}else{steps.forEach(function(s){s.hidden=true});var r=quiz.querySelector('.qresult');r.hidden=false;if(bar)bar.hidden=true;var cta=r.querySelector('[data-quiz-cta]');if(cta&&cta.getAttribute('href')&&cta.getAttribute('href').charAt(0)!=='#'){try{var u=new URL(cta.getAttribute('href'),location.href);u.searchParams.set('quiz',answers.join(','));cta.setAttribute('href',u.pathname+u.search)}catch(e){}}var h=r.querySelector('h2');h&&(h.tabIndex=-1,h.focus());window.__track&&window.__track('quiz.complete',{answers:answers.join(',')})}})});});
-document.querySelectorAll('[data-gallery]').forEach(function(g){var main=g.querySelector('.gal-main'),thumbs=g.querySelectorAll('.gal-thumbs button');thumbs.forEach(function(b){b.addEventListener('click',function(){main.src=b.dataset.src;thumbs.forEach(function(o){o.classList.toggle('on',o===b)})})})});
+document.querySelectorAll('[data-gallery]').forEach(function(g){if(g.hasAttribute('data-pb-gallery'))return;var main=g.querySelector('.gal-main'),thumbs=g.querySelectorAll('.gal-thumbs button');thumbs.forEach(function(b){b.addEventListener('click',function(){main.src=b.dataset.src;thumbs.forEach(function(o){o.classList.toggle('on',o===b)})})})});
 document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('button [data-total]');function sync(){
   var select=form.querySelector('select[name=variantId]'),option=select&&select.selectedOptions[0];
   if(option&&option.dataset.price){var price=Number(option.dataset.price),currency=form.dataset.currency||'USD',digits=Number(form.dataset.minorDigits||2);

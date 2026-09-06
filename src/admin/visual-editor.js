@@ -78,10 +78,13 @@
   function ownText(el) { return [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim(); }
   function isText(el) { return !!el.textContent.trim() && !el.querySelector('div,section,article,form,ul,ol,table,img,svg,video,iframe,input,select,button,h1,h2,h3,h4,h5,h6,p,blockquote,details') && el.textContent.length < 12000; }
 
+  /* GALLERY_EDITOR_HELPERS */
+
   function infer(el) {
     const tag = el.localName, s = computed(el), text = el.textContent.trim().replace(/\s+/g, ' '), own = ownText(el);
     const tokens = (el.id + ' ' + (typeof el.className === 'string' ? el.className : '')).toLowerCase();
     const semantic = { body:'Page',h1:'Heading',h2:'Heading',h3:'Heading',h4:'Heading',h5:'Heading',h6:'Heading',p:'Text',blockquote:'Rich text',img:'Image',svg:'Icon',button:'Button',a:'Link',video:'Video',iframe:'Video',ul:'List',ol:'List',hr:'Divider',form:'Form',input:'Input',textarea:'Input',select:'Select',section:'Section',header:'Section',footer:'Section',nav:'Section',article:'Section',main:'Container',figure:'Group',picture:'Group',li:'Group',details:'FAQ' };
+    if (detectedGalleries.includes(el)||el.hasAttribute('data-pb-gallery')) return {type:'Product gallery',why:'Product images and thumbnail carousel'};
     if (el === doc.body) return {type:'Page', why:'Document body'};
     if ((tag === 'button' || tag === 'a' || el.getAttribute('role') === 'button') && /^(add to (cart|bag)|add .+ to (cart|bag))/i.test(text)) return {type:'Add to cart',why:'Cart action label'};
     if ((tag === 'button' || tag === 'a') && /^(buy now|buy it now|checkout)/i.test(text)) return {type:'Buy now',why:'Purchase action label'};
@@ -105,6 +108,7 @@
   }
 
   function analyze() {
+    if(galleryEngine){detectedGalleries=galleryEngine.roots();for(const root of detectedGalleries){const c=galleryEngine.config(root);if(c&&!galleryViews.has(root))galleryViews.set(root,galleryEngine.render(root,c));}}
     model = new Map();
     const seen = new Set();
     [doc.body, ...doc.body.querySelectorAll('*')].forEach(el => {
@@ -154,6 +158,8 @@
   function hit(event) {
     let el = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
     if (!el || !doc.body.contains(el)) return null;
+    const gallery=detectedGalleries.find(root=>root.contains(el));
+    if(gallery)return get(gallery.getAttribute(ID));
     let n = get(el.closest('['+ID+']')?.getAttribute(ID));
     let p = n;
     while (p) { if (interactiveTypes.includes(p.type)) return p; p = get(p.parent); }
@@ -357,7 +363,7 @@
       const text=meaningfulTexts[0];if(text){text.textContent=value;meaningfulTexts.slice(1).forEach(t=>t.textContent='');}else el.appendChild(doc.createTextNode(value));
     }
   }
-  function imageElement(n) { return n.el.localName==='img'?n.el:(n.type==='Product gallery'||n.el.localName==='picture')?n.el.querySelector('img'):null; }
+  function imageElement(n) { return n.el.localName==='img'?n.el:(n.el.localName==='picture')?n.el.querySelector('img'):null; }
   /* MEDIA_EDITOR_HELPERS */
   function renderInspector() {
     const n=current();
@@ -368,7 +374,7 @@
     const canInline=canText&&!n.el.querySelector('img,svg,button,input,select');
     const structural=structureTypes.includes(n.type), styles=rules(n.id), peers=similar(n);
     const scope=peers.length>1?'<label class="v-field"><span>Apply design changes to</span><select id="style-scope"><option value="one">Only this layer</option><option value="similar" '+(styleScope==='similar'?'selected':'')+'>All '+peers.length+' layers with the same classes</option></select></label>':'';
-    let content='';
+    let content=n.type==='Product gallery'?'<div data-gallery-editor></div>':'';
     if(locked)content+='<div class="notice">This layer is locked. Unlock it to make changes.</div>';
     if(img)content+='<div class="image-preview"><img src="'+esc(img.getAttribute('src')||'')+'" alt="Selected image"></div>'+field('Image URL','data-attribute="src"',img.getAttribute('src')||'','url','Replacing an image also clears its old responsive sources.')+field('Image description','data-attribute="alt"',img.getAttribute('alt')||'')+'<button class="btn wide" type="button" data-action="upload">Upload replacement</button>';
     content+=mediaControls(n);
@@ -376,7 +382,7 @@
     if(n.el.localName==='a')content+=field('Destination','data-attribute="href"',n.el.getAttribute('href')||'','text','Use a page path, #section or full URL.');
     if(n.el.localName==='input'||n.el.localName==='textarea')content+=field('Placeholder','data-attribute="placeholder"',n.el.getAttribute('placeholder')||'');
     if(n.type==='Quantity')content+='<div class="v-grid">'+field('Minimum','data-attribute="min"',n.el.getAttribute('min')||'1','number')+field('Maximum','data-attribute="max"',n.el.getAttribute('max')||'','number')+'</div>';
-    if(structural&&!canText&&!img){const kids=childrenOf(n);content+='<p class="muted">'+kids.length+' items in this '+esc(n.type.toLowerCase())+'. Select an item to edit its content.</p><div class="child-chips">'+kids.slice(0,10).map(c=>'<button data-child="'+c.id+'">'+esc(c.type)+'</button>').join('')+'</div>';}
+    if(structural&&!canText&&!img&&n.type!=='Product gallery'){const kids=childrenOf(n);content+='<p class="muted">'+kids.length+' items in this '+esc(n.type.toLowerCase())+'. Select an item to edit its content.</p><div class="child-chips">'+kids.slice(0,10).map(c=>'<button data-child="'+c.id+'">'+esc(c.type)+'</button>').join('')+'</div>';}
     if(canText||img||['Add to cart','Buy now'].includes(n.type))content+=bindingControls(n,binding);
     const layout='<div class="layout-presets"><button type="button" data-layout="row">Horizontal</button><button type="button" data-layout="column">Vertical</button><button type="button" data-layout="grid">Grid</button></div>'+styleField(n,'display','Arrangement','',[['block','Flow'],['flex','Flexible row / stack'],['grid','Grid']])+styleField(n,'flex-direction','Direction','',[['row','Horizontal'],['column','Vertical']])+'<div class="v-grid">'+styleField(n,'gap','Gap','px')+styleField(n,'grid-template-columns','Columns')+'</div>'+styleField(n,'justify-content','Horizontal alignment','',[['flex-start','Start'],['center','Center'],['flex-end','End'],['space-between','Space between']])+styleField(n,'align-items','Vertical alignment','',[['stretch','Stretch'],['flex-start','Start'],['center','Center'],['flex-end','End']]);
     const spacing='<section class="padding-controls" aria-label="Padding"><div class="padding-heading"><strong>Padding</strong><label><input type="checkbox" data-link-padding '+(paddingLinks.get(n.id)?'checked':'')+'> Link sides</label></div><p>Space inside this '+esc(n.type.toLowerCase())+' · '+names[breakpoint]+'</p><div class="spacing-box">'+paddingSides.map(side=>styleField(n,'padding-'+side,side[0].toUpperCase()+side.slice(1),'px')).join('')+'</div><small>Type a number for pixels, or use %, rem or em.</small></section>';
@@ -413,7 +419,7 @@
     props.querySelectorAll('[data-layout]').forEach(b=>b.onclick=()=>operation('change layout',()=>{setStyle(n.id,'display',b.dataset.layout==='grid'?'grid':'flex');setStyle(n.id,'flex-direction',b.dataset.layout==='grid'?'':b.dataset.layout);if(b.dataset.layout==='grid')setStyle(n.id,'grid-template-columns','repeat(2,minmax(0,1fr))');}));
     props.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>operation('reset '+b.dataset.reset,()=>setStyle(n.id,b.dataset.reset,'')));
     props.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>action(b.dataset.action));
-    mountVisualColumns(n);mountVisualMedia(n);
+    mountVisualColumns(n);mountVisualMedia(n);mountVisualGallery(n);
     setupBindings(n);
     floating.innerHTML='<button type="button" data-move-handle title="Drag to move" aria-label="Drag selected element">↕</button><button type="button" data-float="'+(img?'replace':canInline?'write':'design')+'">'+(img?'Replace image':canInline?'Edit text':'Design')+'</button><button type="button" data-float="padding" title="Edit padding">Padding</button><button type="button" data-float="up" title="Move up" aria-label="Move up">↑</button><button type="button" data-float="down" title="Move down" aria-label="Move down">↓</button><button type="button" data-float="duplicate" title="Duplicate" aria-label="Duplicate">⧉</button><button type="button" data-float="delete" title="Delete" aria-label="Delete">×</button>';
     floating.querySelector('[data-move-handle]').onpointerdown=e=>beginPointerDrag(e,n,true);
@@ -489,7 +495,7 @@
   }
   function syncBindingRuntime() {
     doc.querySelector('script[data-pb-bindings]')?.remove();
-    const bindings=Object.entries(metadata.nodes).filter(([,m])=>m.binding).map(([id,m])=>({id,productId:m.binding.productId,field:m.binding.field}));if(!bindings.length)return;
+    const bindings=Object.entries(metadata.nodes).filter(([,m])=>m.binding&&m.binding.field!=='gallery').map(([id,m])=>({id,productId:m.binding.productId,field:m.binding.field}));if(!bindings.length)return;
     const runtime=doc.createElement('script');runtime.setAttribute('data-pb-bindings','1');
     runtime.textContent='('+hydrateProducts.toString()+')('+JSON.stringify(bindings).replace(/</g,'\\u003c')+');';doc.body.appendChild(runtime);
   }
@@ -535,7 +541,7 @@
   }
   function legal(parent,node) {
     if(!parent||!node||isLocked(parent)||isLocked(node)||node.type==='Page'||parent.id===node.id||node.el.contains(parent.el))return false;
-    if(parent.type==='Page')return node.type==='Section';
+    if(parent.type==='Page')return ['Section','Product gallery'].includes(node.type);
     if(!structureTypes.includes(parent.type)&&parent.type!=='List')return false;
     if(parent.type==='Form')return ['Input','Select','Checkbox','Quantity','Button','Add to cart','Buy now','Text','Heading','Group'].includes(node.type);
     if(node.type==='Section')return ['Page','Section','Container'].includes(parent.type);
@@ -557,6 +563,7 @@
     if(documentIds.size){let css='';function read(rules){for(const r of rules){if(r.selectorText&&[...documentIds.keys()].some(id=>r.selectorText.includes('#'+CSS.escape(id)))){let selector=r.selectorText;documentIds.forEach((to,from)=>selector=selector.replaceAll('#'+CSS.escape(from),'#'+CSS.escape(to)));css+=selector+'{'+r.style.cssText+'}';}else if(r.cssRules){const previous=css;css='';read(r.cssRules);const nested=css;css=previous+(nested?r.cssText.slice(0,r.cssText.indexOf('{')+1)+nested+'}':'');}}}for(const sheet of doc.styleSheets){if(sheet.ownerNode?.hasAttribute(TEMP)||sheet.ownerNode?.hasAttribute(OVERRIDES))continue;try{read(sheet.cssRules);}catch{}}
       if(css){const style=doc.createElement('style');style.setAttribute('data-pb-copy-styles','1');style.textContent=css;el.appendChild(style);}}
     el.querySelectorAll('style').forEach(style=>{let css=style.textContent;oldIds.forEach((to,from)=>{css=css.replaceAll('['+ID+'="'+from+'"]','['+ID+'="'+to+'"]');});style.textContent=css;});
+    oldIds.forEach(id=>{const original=metadata.nodes[id]?.galleryOriginal;if(!original)return;let raw=JSON.stringify(original);for(const [before,after] of [...documentIds,...oldIds].sort((a,b)=>b[0].length-a[0].length))raw=raw.split(before).join(after);metadata.nodes[id].galleryOriginal=JSON.parse(raw);});
     clean(el);return el;
   }
   function copySelection(cut=false) {
@@ -688,6 +695,7 @@
   /* COLUMN_LAYOUT_HELPERS */
 
   const templates={
+    'Product gallery':['div','Product gallery','<div data-pg-track></div>'],
     Section:['section','Section','<div data-pb-native="Container"><h2>Your next chapter</h2><p>Add a story, an offer or a reason to believe.</p></div>'],
     Heading:['h2','Heading','A headline that says it simply'],Text:['p','Text','Tell your story. Make every word count.'],Button:['a','Button','Shop now'],Image:['img','Image',''],Container:['div','Container',''],Row:['div','Row',''],Columns:['div','Columns','<div data-pb-native="Column" data-pb-column></div><div data-pb-native="Column" data-pb-column></div>'],Divider:['hr','Divider',''],FAQ:['details','FAQ','<summary>Your question</summary><p>A helpful answer.</p>'],Price:['span','Price','$49.00']
   };
@@ -700,7 +708,7 @@
     const allowed=Object.entries(templates).filter(([type])=>legal(parent,{id:'new',type,el:doc.createElement('div')}));
     if(parent?.type==='Page')allowed.sort((a,b)=>a[0]==='Section'?-1:1);
     if(n?.type==='Button')allowed.sort((a,b)=>a[0]==='Button'?-1:1);
-    insert.innerHTML='<div class="insert-heading"><div><h2>Add to your page</h2><p>'+esc(parent?'Inside '+nodeName(parent):'Select a container first')+'</p></div><button class="btn" data-close>Close</button></div><div class="insert-grid">'+allowed.map(([type])=>'<button data-insert="'+type+'"><strong>'+type+'</strong><span>'+({Section:'A new page section',Heading:'Make a clear statement',Text:'A paragraph of copy',Button:'A link or call to action',Image:'Your image',Container:'Group content together',Row:'Place items side by side',Columns:'Adjustable columns for your content',Divider:'Separate content',FAQ:'Question and answer',Price:'A product price'}[type])+'</span></button>').join('')+'</div><label class="check"><input id="match-style" type="checkbox" checked> Match the nearest similar element’s style</label>';
+    insert.innerHTML='<div class="insert-heading"><div><h2>Add to your page</h2><p>'+esc(parent?'Inside '+nodeName(parent):'Select a container first')+'</p></div><button class="btn" data-close>Close</button></div><div class="insert-grid">'+allowed.map(([type])=>'<button data-insert="'+type+'"><strong>'+type+'</strong><span>'+({'Product gallery':'Product photos, videos and connected slides',Section:'A new page section',Heading:'Make a clear statement',Text:'A paragraph of copy',Button:'A link or call to action',Image:'Your image',Container:'Group content together',Row:'Place items side by side',Columns:'Adjustable columns for your content',Divider:'Separate content',FAQ:'Question and answer',Price:'A product price'}[type])+'</span></button>').join('')+'</div><label class="check"><input id="match-style" type="checkbox" checked> Match the nearest similar element’s style</label>';
     insert.querySelector('[data-close]').onclick=()=>insert.close();
     insert.querySelectorAll('[data-insert]').forEach(b=>b.onclick=()=>insertElement(b.dataset.insert,parent,n,insert.querySelector('#match-style').checked));
     insert.showModal();
@@ -716,6 +724,7 @@
       const initial={Section:{'padding-top':'64px','padding-bottom':'64px','padding-left':'32px','padding-right':'32px'},Heading:{'font-size':'36px','line-height':'1.15'},Text:{'font-size':'18px','line-height':'1.6'},Button:{'display':'inline-block','padding-top':'12px','padding-bottom':'12px','padding-left':'24px','padding-right':'24px','background-color':'#2563eb','color':'#ffffff','border-radius':'6px'},Row:{display:'flex',gap:'24px'},Columns:{display:'grid',gap:'24px'},Container:{'min-height':'80px'},Image:{width:'100%','max-width':'800px'}}[type]||{};
       Object.entries(initial).forEach(([k,v])=>setStyle(id,k,v));
       if(match){const sibling=[...model.values()].filter(c=>c.type===type&&c.el!==el).sort((a,b)=>Math.abs(a.el.getBoundingClientRect().top-el.getBoundingClientRect().top)-Math.abs(b.el.getBoundingClientRect().top-el.getBoundingClientRect().top))[0];if(sibling){const s=computed(sibling.el);['font-family','font-size','font-weight','line-height','color','background-color','border-radius','padding-top','padding-right','padding-bottom','padding-left'].forEach(k=>setStyle(id,k,s.getPropertyValue(k)));}}
+      if(type==='Product gallery'){el.setAttribute('data-pb-gallery',JSON.stringify({mode:'custom',productId:$('page-product').value||'',items:[],settings:{}}));syncGalleryRuntime();}
       if(type==='Columns'){analyze();applyVisualColumns(get(id),2,[50,50],'desktop');}
       breakpoint=atBreakpoint;selected=id;
     });insert.close();if(type==='Image')props.querySelector('[data-attribute="src"]')?.focus();
@@ -764,6 +773,7 @@
 
   function keydown(e) {
     if(e.target.closest?.('.editor-media'))return;
+    if(e.target.closest?.('[data-pg-prev],[data-pg-next],[data-pg-thumb],video')?.closest('[data-pb-gallery]'))return;
     if(e.key==='Escape'&&pointerDrag){pointerDrag.target.releasePointerCapture?.(pointerDrag.pointer);pointerDrag=null;endDrag();e.preventDefault();return;}
     if(!insert.open&&document.querySelector('.drawer:not([hidden]),.preview-overlay:not([hidden])'))return;
     const key=e.key.toLowerCase(),mod=e.metaKey||e.ctrlKey;
@@ -797,14 +807,14 @@
     const freeze=doc.createElement('style');freeze.setAttribute(TEMP,'1');freeze.textContent='*,*::before,*::after{animation-play-state:paused!important;transition:none!important;scroll-behavior:auto!important} [data-pb-peek]{display:block!important;visibility:visible!important;opacity:1!important} [data-pb-editing]{cursor:text!important;outline:none!important}';doc.head.appendChild(freeze);
     freeze.textContent+=' [data-pb-empty-target]{min-height:64px!important;min-width:48px!important;outline:1px dashed #93c5fd!important;outline-offset:-1px} [data-pb-empty-target]:before{content:"Drop content here";display:block;padding:16px;color:#64748b;font:12px sans-serif} [data-pb-column]:empty{min-height:96px;outline:1px dashed #93c5fd;outline-offset:-1px}[data-pb-column]:empty:before{content:"Drop content here";display:block;padding:24px 12px;color:#64748b;font:13px sans-serif} [data-pb-cart-editing]{display:flex!important;visibility:visible!important;opacity:1!important;transform:none!important;position:fixed!important;inset:0!important;z-index:9999!important;max-width:100vw!important} [data-pb-cart-editing] .drawer__inner{transform:none!important;visibility:visible!important;max-width:100vw!important}';
     applySourceTheme(doc,window.__BRAND||{},{temporary:true,fontDocument:document});
-    setupCanvasState(freeze);
+    attachGalleries();setupCanvasState(freeze);
     cartEditor.hidden=!doc.querySelector('cart-drawer,#CartDrawer,#cart-drawer,.cart-drawer,[data-cart-drawer]');cartEditor.textContent='Edit cart drawer';
     doc.querySelectorAll('video,audio').forEach(el=>{el.pause();});
     analyze();syncOverrides();select(selected);renderLibrary();fit();historyButtons();$('save').disabled=false;$('publish').disabled=false;
-    doc.addEventListener('click',e=>{if(suppressCanvasClick){suppressCanvasClick=false;e.preventDefault();e.stopImmediatePropagation();return;}if(inline&&get(inline.id)?.el.contains(e.target))return;e.preventDefault();e.stopImmediatePropagation();const n=hit(e);if(n)select(n.id);},true);
+    doc.addEventListener('click',e=>{if(suppressCanvasClick){suppressCanvasClick=false;e.preventDefault();e.stopImmediatePropagation();return;}if(inline&&get(inline.id)?.el.contains(e.target))return;if(e.target.closest('[data-pg-prev],[data-pg-next],[data-pg-thumb],video')?.closest('[data-pb-gallery]'))return;e.preventDefault();e.stopImmediatePropagation();const n=hit(e);if(n)select(n.id);},true);
     doc.addEventListener('dblclick',e=>{e.preventDefault();e.stopImmediatePropagation();const n=hit(e);if(!n)return;select(n.id);if(imageElement(n))action('replace');else if(textTypes.includes(n.type))beginInline();else select(childrenOf(n)[0]?.id||n.id);},true);
     doc.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();},true);
-    doc.addEventListener('pointerdown',e=>{suppressCanvasClick=false;if(inline&&get(inline.id)?.el.contains(e.target))return;const n=hit(e);if(n)beginPointerDrag(e,n);if(e.target.closest('input,select,textarea,button,a'))e.preventDefault();},true);
+    doc.addEventListener('pointerdown',e=>{suppressCanvasClick=false;if(e.target.closest('[data-pg-prev],[data-pg-next],[data-pg-thumb],video')?.closest('[data-pb-gallery]'))return;if(inline&&get(inline.id)?.el.contains(e.target))return;const n=hit(e);if(n)beginPointerDrag(e,n);if(e.target.closest('input,select,textarea,button,a'))e.preventDefault();},true);
     doc.addEventListener('mouseover',e=>{if(drag||inline)return;const n=hit(e);hoveredSection=sectionOf(n)?.id||null;setHover(n?.id,'canvas');},true);
     doc.addEventListener('mouseleave',()=>clearHover('canvas'));
     doc.addEventListener('keydown',keydown,true);

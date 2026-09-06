@@ -133,3 +133,21 @@ function mountNativeMedia(block) {
     });input.closest('.f').appendChild(group);
   }
 }
+
+function mountNativeGallery(block) {
+  if(block.type!=='gallery')return;
+  props.querySelectorAll('[data-k="images"],[data-k="alt"],[data-k="productId"],[data-k="gallery"]').forEach(el=>el.closest('.f')?.remove());
+  const host=document.createElement('div');props.prepend(host);
+  const getConfig=()=>{try{if(block.settings.gallery)return JSON.parse(block.settings.gallery);}catch{}return {mode:block.settings.productId?'product':'custom',productId:block.settings.productId||'',items:String(block.settings.images||'').split('\n').filter(Boolean).map(url=>({url,alt:block.settings.alt||'',kind:'image'})),settings:{}};};
+  const before=JSON.stringify(getConfig()),config=getConfig();
+  if(config.mode==='product'&&config.productId)window.__EDITOR_GALLERY.product(config.productId).then(product=>{
+    if(!host.isConnected||state.blocks.find(item=>item.id===block.id)!==block||JSON.stringify(getConfig())!==before)return;
+    const next={...config,items:product.media||[],productRevision:product.mediaRevision};
+    if(JSON.stringify(next)!==before){block.settings.gallery=JSON.stringify(next);render();edit();}
+  }).catch(()=>{});
+  window.__EDITOR_GALLERY.mount(host,{
+    get:getConfig,valid:()=>state.blocks.find(item=>item.id===block.id)===block&&JSON.stringify(getConfig())===before,
+    apply:(config)=>{push();block.settings.gallery=JSON.stringify(config);block.settings.productId=config.mode==='product'?config.productId:'';block.settings.images=config.items.map(item=>item.url).join('\n');render();edit();setDirty(true);},
+    productUpdated:(id,items)=>{for(const item of state.blocks){if(item===block||item.type!=='gallery'||item.settings.productId!==id)continue;try{const config=JSON.parse(item.settings.gallery);config.items=items;item.settings.gallery=JSON.stringify(config);}catch{}}},
+  });
+}

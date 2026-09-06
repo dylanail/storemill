@@ -1,3 +1,5 @@
+import { mapProductGalleries, productGalleryRuntime } from '../pages/product-gallery-runtime.ts'
+import { pageProductData } from '../pages/product-data.ts'
 import { metaEventsHtml, type MetaEvent } from '../analytics/meta-browser.ts'
 import type { ServerEventInput } from '../analytics/server-events.ts'
 import { previewBar } from './preview-bar.ts'
@@ -154,6 +156,16 @@ function renderOwnedPageBody(view: StoreView, page: Page, context: BlockContext)
 export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput): string {
   if(checkout&&page.productId)view={...view,checkoutProductId:page.productId}
   let html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
+  if(html.includes('data-pb-gallery')){
+    html=mapProductGalleries(html,gallery=>{
+      if(gallery.mode!=='product'||!gallery.productId)return gallery
+      const product=getProduct(view.db,view.store.id,gallery.productId)
+      return product&&(view.preview||(product.status==='published'&&!product.metadata.hidden))?{...gallery,items:pageProductData(product,view.store.currency).media}:gallery
+    })
+    html=html.replace(/<script\b[^>]*data-pg-runtime[^>]*>[\s\S]*?<\/script>/gi,'')
+    const runtime='<script data-pg-runtime>'+productGalleryRuntime.replace(/<\/script/gi,'<\\/script')+'</script>'
+    html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>runtime+'</body>'):html+runtime
+  }
   html = rebaseClonedNavigation(html, view, page.sourceUrl)
   if (page.sourceUrl || checkout || page.role === 'cart' || /data-pb-imported-section/.test(html)) {
     html = protectImportedForms(html, view.base, { previewPaymentFields: view.preview && page.role === 'checkout' && !checkout })
@@ -313,7 +325,9 @@ export function productPage(
 ): string {
   const { product, stats, reviews, companions } = input
   const content = product.content
-  const media = [product.heroImage, ...product.media.map((entry) => entry.url)].filter(Boolean)
+  const productMedia=pageProductData(product,view.store.currency).media
+  const videos=productMedia.filter(entry=>entry.kind==='video')
+  const media = [product.heroImage, ...productMedia.filter(entry=>entry.kind!=='video').map((entry) => entry.url)].filter(Boolean)
   const unique = [...new Set(media)]
   const cheapest = product.variants.reduce((best, variant) => (variant.priceCents < best.priceCents ? variant : best), product.variants[0]!)
   const url = `${view.base}/products/${product.handle}`
@@ -349,6 +363,7 @@ export function productPage(
     ${unique.length > 1 ? `<div class="thumbs">${unique
         .map((src, index) => `<button type="button" aria-current="${index === 0}" aria-label="Show image ${index + 1}" data-src="${escapeHtml(src)}"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"></button>`)
         .join('')}</div>` : ''}
+    ${videos.map(video=>`<video controls playsinline preload="metadata" src="${escapeHtml(video.url)}" aria-label="${escapeHtml(video.alt||product.title)}" style="width:100%;margin-top:12px;border-radius:var(--radius)"${video.poster?` poster="${escapeHtml(video.poster)}"`:''}></video>`).join('')}
   </div>
   <div class="buybox">
     <div class="crumbs"><a href="${view.base}/">Home</a> / <a href="${view.base}/collections/all">Shop</a> / ${escapeHtml(product.title)}</div>

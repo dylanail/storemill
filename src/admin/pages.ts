@@ -45,7 +45,7 @@ import { domainsFor } from '../control/domains.ts'
 import { listFlows, recentFlowDeliveries } from '../email/flows.ts'
 import { serverEventSummary } from '../analytics/server-events.ts'
 import { listAssistantQueue } from '../agent/queue.ts'
-import { listStoreMedia, storeCoverImage } from '../control/media.ts'
+import { listStoreMedia, storeCoverImage, mediaKind } from '../control/media.ts'
 import { listBlogs } from '../domain/content.ts'
 import { PHOTO_BRIEFS, shotOf } from '../creative/briefs.ts'
 import { qualifyCatalogProduct, readQualifyNotes } from '../domain/qualify.ts'
@@ -240,7 +240,7 @@ export function productDetail(ctx: Ctx, productId: string): string {
     <div class="card"><h2>Media</h2><div class="grid3" style="grid-template-columns:repeat(2,1fr);margin-top:.6rem">
       ${(product.media.length ? product.media : product.heroImage ? [{ url: product.heroImage, alt: product.title }] : [])
         .slice(0, 4)
-        .map((entry) => `<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
+        .map((entry) => mediaKind(entry.url)==='video'?`<div><video src="${escapeHtml(entry.url)}" controls playsinline preload="metadata" aria-label="${escapeHtml(entry.alt)}" style="width:100%;border-radius:8px"></video></div>`:`<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
         .join('')}</div>
       <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
         <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>

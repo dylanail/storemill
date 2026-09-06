@@ -107,7 +107,7 @@ for(const width of [1440,820,390,320])await suite.test('generated pages, buttons
   await t.test('block buy box uses selected variant and native FAQ expands',async()=>{
    await page.goto(base+'/pages/'+interactive.handle);
    if(width<=900){await page.locator('[data-nav-toggle]').click();assert.equal(await page.locator('nav.main').isVisible(),true);await page.keyboard.press('Escape');}
-   await page.getByRole('button',{name:'Image 2',exact:true}).click();assert.match(await page.locator('.gal-main').getAttribute('src'),/view=two/);
+   await page.locator('[data-pg-thumb="1"]').click();assert.equal(await page.locator('[data-pg-thumb="1"]').getAttribute('aria-current'),'true');assert.match(await page.locator('[data-pg-slide="1"] img').getAttribute('src'),/view=two/);
    await page.locator('.buyform select[name=variantId]').selectOption(product.variants[1].id);assert.match(await page.locator('.buyform [data-total]').textContent(),/69\.00/);assert.match(await page.locator('[data-variant-price]').textContent(),/69\.00/);
    const faq=page.locator('details').filter({hasText:'How does it fit?'}).first();const initial=await faq.getAttribute('open');await faq.locator('summary').click();assert.notEqual(await faq.getAttribute('open'),initial);
    await page.locator('.buyform button[type=submit]').click();await page.waitForURL('**/cart');assert.match(await page.locator('main').textContent(),/Large/);await fits(page,'Block cart');

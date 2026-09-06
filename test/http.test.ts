@@ -432,6 +432,15 @@ test('editor product data is store-scoped and exposes only public catalog fields
   assert.equal(preview.status, 200)
   assert.equal(JSON.parse(preview.text).title, 'Bound product')
   assert.doesNotMatch(preview.text, /do-not-expose|supplier|metadata/)
+  const mediaData=JSON.parse(preview.text)
+  assert.deepEqual(mediaData.media,[])
+  assert.equal(typeof mediaData.mediaRevision,'string')
+  assert.equal((await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:'stale',media:[]}})).status,409)
+  assert.equal((await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[{url:'javascript:alert(1)'}]}})).status,409)
+  const mediaSave=await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})
+  assert.equal(mediaSave.status,200)
+  assert.equal((await call(`/admin/pages/not-a-page/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})).status,404)
+
   const publicData = await call(`/s/${slug}/api/page-products/${product.id}`)
   assert.equal(publicData.status, 200)
   assert.equal(JSON.parse(publicData.text).price, '$49.00')
@@ -443,6 +452,7 @@ test('editor product data is store-scoped and exposes only public catalog fields
     const foreign = createProduct(db, otherStore.id, { title: 'Other store', status: 'published' })
     assert.equal((await call(`/s/${slug}/api/page-products/${foreign.id}`)).status, 404)
     assert.equal((await call(`/admin/pages/${pageId}/product-data/${foreign.id}`)).status, 404)
+    assert.equal((await call(`/admin/pages/${pageId}/product-media/${foreign.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})).status,409)
   }
 })
 

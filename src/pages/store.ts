@@ -1,3 +1,4 @@
+import { productGalleryMedia } from './product-data.ts'
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { handle as toHandle, id } from '../lib/ids.ts'
 import { bundleFor, renderBundleWidget } from '../domain/bundles.ts'
@@ -622,6 +623,7 @@ export function blockContextFor(db: Db, store: Store, base: string, localized?: 
       title: product.title,
       subtitle: product.subtitle,
       image: product.heroImage,
+      media: productGalleryMedia(product),
       priceCents: Math.min(...product.variants.map((variant) => variant.priceCents)),
       variants: product.variants.map((variant) => ({ id: variant.id, title: variant.title, priceCents: variant.priceCents })),
       options: product.options,

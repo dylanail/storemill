@@ -1,3 +1,4 @@
+import { mapProductGalleries } from './product-gallery-runtime.ts'
 import { json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { getProduct } from '../domain/catalog.ts'
@@ -57,6 +58,7 @@ export function templateBlocks(blocks: BlockInstance[], productId = '', sourceSl
 
 export function templateHtml(rawHtml: string, productId = '', sourceSlug = ''): string {
   const ids = new Set<string>()
+  rawHtml=mapProductGalleries(rawHtml,gallery=>({...gallery,productId:productId||'',mode:gallery.mode==='product'&&productId?'product':'custom'}))
   let html = rawHtml.replace(/(<script\b(?=[^>]*\bdata-pb-document\b)[^>]*>)([\s\S]*?)(<\/script>)/gi, (_match, open: string, raw: string, close: string) => {
     let data: { nodes?: Record<string, { binding?: { productId?: string } }> }
     try { data = JSON.parse(raw) } catch { return '' }

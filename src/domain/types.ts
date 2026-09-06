@@ -6,7 +6,7 @@ export type ProductOption = {
   values: Array<{ value: string; swatch?: string; note?: string }>
 }
 
-export type Media = { url: string; alt: string }
+export type Media = { url: string; alt: string; kind?: 'image' | 'video'; poster?: string }
 
 export type Variant = {
   id: string

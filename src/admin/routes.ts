@@ -19,6 +19,7 @@ import { cleanSourceTheme, fontFacesFromHtml } from '../pages/source-theme.ts'
 import { duplicateAsset } from '../control/duplicate-asset.ts'
 import { blockPage as renderBlockPreview } from '../storefront/render.ts'
 import { storeViewFor } from '../storefront/routes.ts'
+import { productMediaRevision, updateProductMedia } from '../control/product-media.ts'
 import { pageProductData } from '../pages/product-data.ts'
 import { getDb } from '../lib/db.ts'
 import { badRequest, escapeHtml, forbidden, html, notFound, Raw, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
@@ -867,7 +868,19 @@ export function adminRouter(): Router {
     if (!getPage(db(), current.store.id, ctx.params.id as string)) throw notFound('No such page')
     const product = getProduct(db(), current.store.id, ctx.params.productId as string)
     if (!product) throw notFound('No such product')
-    return pageProductData(product, current.store.currency)
+    return { ...pageProductData(product, current.store.currency), mediaRevision: productMediaRevision(product) }
+  })
+
+  router.post('/admin/pages/:id/product-media/:productId', async (ctx) => {
+    const current = editorMediaSession(ctx)
+    mediaMutation(ctx)
+    try {
+      const product = updateProductMedia(db(), current.store.id, ctx.params.productId as string, await ctx.body())
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'update_product_media', target: product.id, diff: { slides: product.media.length } })
+      return { ...pageProductData(product, current.store.currency), mediaRevision: productMediaRevision(product) }
+    } catch (error) {
+      return new Raw(JSON.stringify({error: error instanceof Error ? error.message : String(error)}), 'application/json', {}, 409)
+    }
   })
 
   /* Same-origin, script-free document used by the visual clone editor. */

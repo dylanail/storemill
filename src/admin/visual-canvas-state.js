@@ -2,7 +2,7 @@
     document.querySelector('.canvas-state')?.remove();
     const options=[];
     if(doc.querySelector('.khOneOffer')&&doc.querySelector('.khSubOffer'))options.push({kind:'offers',label:'Purchase options',items:['One time purchase','Subscription'],value:doc.querySelector('.subOfferButton.activeOfferType')?1:0,active:(()=>{const s=computed(doc.querySelector('.oneOfferButton.activeOfferType,.subOfferButton.activeOfferType')||doc.querySelector('.oneOfferButton'));return {backgroundColor:s.backgroundColor,color:s.color};})(),inactive:(()=>{const s=computed(doc.querySelector('.oneOfferButton:not(.activeOfferType),.subOfferButton:not(.activeOfferType)')||doc.querySelector('.subOfferButton'));return {backgroundColor:s.backgroundColor,color:s.color};})()});
-    const galleries=[...doc.querySelectorAll('.product-gallery .mainImage')];
+    const galleries=[...doc.querySelectorAll('.product-gallery .mainImage')].filter(el=>!el.closest('[data-pb-gallery]'));
     const sheets=[];
     // Source sliders depend on JavaScript widths. Their editor projection uses
     // one full image, with each slide available from a canvas-only selector.
