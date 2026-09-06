@@ -105,3 +105,33 @@ if (state.mode === 'blocks') {
   list.addEventListener('click',event=>{if(performance.now()<suppressUntil){event.preventDefault();event.stopImmediatePropagation();}},true);
   document.querySelectorAll('[data-width]').forEach(button=>button.addEventListener('click',()=>{render();edit();}));
 }
+
+function nativeMediaUrls(value) {return [...new Set(value.match(/(?:https?:\/\/|\/_uploads\/)[^\s|<>"']+/g)||[value])];}
+function replaceNativeMedia(value,source,url) {return value===source?url:value.replace(/(?:https?:\/\/|\/_uploads\/)[^\s|<>"']+/g,match=>match===source?url:match);}
+function mountNativeMedia(block) {
+  const def=defs[block.type];if(!def)return;
+  for(const [key,field] of Object.entries(def.schema)){
+    if(field.type!=='string'||!(/(?:image|video|poster|background|logo).*url/i.test(field.label||'')||['image','poster','src','video','media'].includes(key)))continue;
+    const input=props.querySelector('[data-k="'+CSS.escape(key)+'"]');if(!input)continue;
+    const raw=String(block.settings[key]||''),urls=nativeMediaUrls(raw);
+    if(!urls.length)urls.push(raw);
+    const group=document.createElement('div');group.className='em-native-actions';
+    urls.forEach((source,index)=>{
+      const kind=(/video/i.test(field.label||key)&&key!=='poster')||/\.(mp4|webm|mov)([?#]|$)/i.test(source)?'video':'image';
+      for(const mode of ['edit','replace']){
+        const button=document.createElement('button');button.type='button';button.className='btn';button.textContent=(mode==='edit'?'Regenerate with branding':'Upload / choose asset')+(urls.length>1?' '+(index+1):'');
+        button.onclick=()=>window.__EDITOR_MEDIA.open({source,kind,embed:kind==='video'&&/youtube|youtu\.be|vimeo/.test(source),mode,apply:(url,scope)=>{
+          const owner=state.blocks.find(item=>item.id===block.id),current=String(owner?.settings[key]||'');
+          if(!owner||(source?!nativeMediaUrls(current).includes(source):current!==''))throw Error('This media field changed while the edit was running. Reopen it to apply the preview.');
+          push();
+          if(scope==='page'&&source){
+            for(const item of state.blocks){const definition=defs[item.type];for(const [name,setting] of Object.entries(item.settings)){
+              const shape=definition?.schema[name];if(typeof setting==='string'&&shape&&(/(?:image|video|poster|background|logo).*url/i.test(shape.label||'')||['image','poster','src','video','media'].includes(name)))item.settings[name]=replaceNativeMedia(setting,source,url);
+            }}
+          }else owner.settings[key]=source?replaceNativeMedia(current,source,url):url;
+          render();edit();setDirty(true);
+        }});group.appendChild(button);
+      }
+    });input.closest('.f').appendChild(group);
+  }
+}

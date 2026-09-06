@@ -14,7 +14,7 @@ export function duplicateAsset(db: Db, ownerId: string, sourceStoreId: string, i
   const name = input.name?.trim() || `${source.name} copy`
   if (name.length < 2 || name.length > 100) throw new Error('Give the duplicate a name between 2 and 100 characters')
   // This whitelist deliberately excludes plugins/credentials, customers, orders, carts, domains, analytics and publication snapshots.
-  const tables = ['regions', 'products', 'variants', 'collections', 'pages', 'promotions', 'bundles', 'funnels', 'custom_blocks', 'redirects'] as const
+  const tables = ['regions', 'products', 'variants', 'collections', 'pages', 'promotions', 'bundles', 'funnels', 'custom_blocks', 'redirects', 'media_labels'] as const
   const rows = new Map<string, Row[]>(tables.map((table) => [table, db.all(`SELECT * FROM ${table} WHERE store_id = ? ORDER BY rowid`, source.id)]))
   rows.set('shipping_options', db.all('SELECT so.* FROM shipping_options so JOIN regions r ON r.id = so.region_id WHERE r.store_id = ? ORDER BY so.position', source.id))
   rows.set('collection_products', db.all('SELECT cp.* FROM collection_products cp JOIN collections c ON c.id = cp.collection_id WHERE c.store_id = ?', source.id))

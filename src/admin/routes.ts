@@ -1,9 +1,12 @@
+import { mediaEditInput, prepareEditorMedia } from '../control/editor-media.ts'
+import { listStoreMedia, setMediaDetails } from '../control/media.ts'
+import { rebrandDefaults, listRebrands } from '../control/media-rebrand.ts'
 import { pageRevisionToken } from '../pages/revision-token.ts'
 import { startHealthFix, healthFix, undoHealthFix } from '../storefront/health-fixes.ts'
 import { duplicateWholeFunnel } from '../pages/funnel-clone.ts'
 import { rebrandForm, rebrandReview } from './media-rebrand-page.ts'
 import { startRebrand, getRebrand, applyRebrand, undoRebrand, cancelRebrand } from '../control/media-rebrand.ts'
-import type { RebrandSpec } from '../control/media-render.ts'
+import { mediaEditingAvailability, type RebrandSpec } from '../control/media-render.ts'
 import { saveMediaUpload } from '../lib/uploads.ts'
 import { deleteAsset, assetImpact, deletionToken } from '../control/delete-asset.ts'
 import { deleteAssetPage } from './delete-asset-page.ts'
@@ -496,6 +499,35 @@ export function adminRouter(): Router {
   const mediaMutation = (ctx: Ctx) => {
     if (ctx.req.headers.origin && new URL(ctx.req.headers.origin).host !== ctx.url.host) throw forbidden('Open Media in Storemill to make this change')
   }
+  router.post('/admin/media/classify',async(ctx)=>{
+    const current=session(ctx);mediaMutation(ctx);const body=await ctx.body()
+    setMediaDetails(db(),current.store.id,String(body.url||''),body.category==='logo'?'logo':'media',String(body.label||''))
+    return redirect('/admin/media?storeId='+current.store.id+'&flash=Media+category+updated')
+  })
+  const editorMediaSession=(ctx:Ctx)=>{const current=session(ctx);if(!getPage(db(),current.store.id,ctx.params.id||''))throw notFound('No such page');return current}
+  router.get('/admin/pages/:id/media/options',(ctx)=>{
+    const current=editorMediaSession(ctx)
+    return {assets:listStoreMedia(db(),current.store.id),defaults:rebrandDefaults(db(),current.store.id),available:mediaEditingAvailability(),jobs:listRebrands(db(),current.store.id).map(job=>({id:job.id,source:job.source_url,result:job.result_url,kind:job.kind,status:job.status,phase:job.phase,error:job.error}))}
+  })
+  router.post('/admin/pages/:id/media/upload',async(ctx)=>{
+    const current=editorMediaSession(ctx);mediaMutation(ctx)
+    try{const body=await ctx.body(),files=await ctx.files(),file=files.file;if(!file)throw new Error('Choose a file first')
+      if(body.category==='logo'&&!file.type.startsWith('image/'))throw new Error('Logo assets must be images')
+      const upload=saveMediaUpload(file,current.store.id)
+      return setMediaDetails(db(),current.store.id,upload.url,body.category==='logo'?'logo':'media',file.name)
+    }catch(error){return new Raw(JSON.stringify({error:error instanceof Error?error.message:'Upload failed'}),'application/json',{},400)}
+  })
+  router.post('/admin/pages/:id/media/rebrand',async(ctx)=>{
+    const current=editorMediaSession(ctx);mediaMutation(ctx)
+    try{const body=await ctx.body(),kind=body.kind==='video'?'video':'image'
+      // Reuse an existing job before importing an unsaved canvas source again.
+      const prior=body.requestKey?db().one<{id:string;source_url:string}>('SELECT id,source_url FROM media_rebrands WHERE store_id=? AND request_key=?',current.store.id,String(body.requestKey)):undefined
+      if(prior)return {id:prior.id,source:prior.source_url}
+      const source=await prepareEditorMedia(db(),current.store.id,String(body.source||''),kind,AbortSignal.timeout(90000))
+      const job=startRebrand(db(),current.store.id,current.user.id,source,mediaEditInput(body),String(body.requestKey||''))
+      return {id:job.id,source:job.source_url}
+    }catch(error){return new Raw(JSON.stringify({error:error instanceof Error?error.message:'Could not start this edit'}),'application/json',{},400)}
+  })
   router.get('/admin/media/rebrand', (ctx) => {
     const current = session(ctx), again = ctx.query.get('again')
     const previous = again ? getRebrand(db(), current.store.id, again) : undefined
@@ -507,6 +539,7 @@ export function adminRouter(): Router {
       mediaMutation(ctx)
       const body = await ctx.body(), files = await ctx.files()
       const logo = files.logoFile?.data.length ? saveUpload(files.logoFile, current.store.id).url : String(body.logo || '')
+      if(files.logoFile?.data.length)setMediaDetails(db(),current.store.id,logo,'logo',files.logoFile.name)
       const job = startRebrand(db(), current.store.id, current.user.id, String(body.source || ''), {
         brandName: String(body.brandName || ''), logo, oldBrand: String(body.oldBrand || ''), direction: String(body.direction || ''),
         method: String(body.method || 'ai') as RebrandSpec['method'], provider: String(body.provider || (process.env.OPENAI_API_KEY ? 'openai' : 'google')) as RebrandSpec['provider'],
@@ -525,7 +558,7 @@ export function adminRouter(): Router {
   })
   router.get('/admin/media/rebrand/:id/status', (ctx) => {
     const current = session(ctx), job = getRebrand(db(), current.store.id, ctx.params.id || '')
-    return new Raw(JSON.stringify({ status: job.status, phase: job.phase }), 'application/json', { 'Cache-Control': 'no-store' })
+    return new Raw(JSON.stringify({ id:job.id,status: job.status, phase: job.phase,error:job.error,result:job.result_url,source:job.source_url,kind:job.kind }), 'application/json', { 'Cache-Control': 'no-store' })
   })
   for (const action of ['apply', 'undo', 'cancel'] as const) router.post(`/admin/media/rebrand/:id/${action}`, async (ctx) => {
     const current = session(ctx), jobId = ctx.params.id || ''
@@ -536,18 +569,22 @@ export function adminRouter(): Router {
       else if (action === 'undo') { undoRebrand(db(), current.store.id, current.user.id, jobId); message = 'Original media restored.' }
       else { await cancelRebrand(db(), current.store.id, current.user.id, jobId); message = 'Edit cancelled. Your original has been kept.' }
     } catch (error) { message = '!' + (error instanceof Error ? error.message : 'Could not complete this action') }
+    if(ctx.req.headers.accept?.includes('application/json'))return message.startsWith('!')?new Raw(JSON.stringify({error:message.slice(1)}),'application/json',{},400):{ok:true}
     return redirect(`/admin/media/rebrand/${jobId}?storeId=${current.store.id}&flash=${encodeURIComponent(message)}`)
   })
 
   router.post('/admin/media/upload', async (ctx) => {
     const current = session(ctx)
     const files = await ctx.files()
-    if (!files.image) return redirect('/admin/media?flash=' + encodeURIComponent('!Choose an image or video first.'))
+    if (!files.image) return redirect('/admin/media?storeId='+current.store.id+'&flash=' + encodeURIComponent('!Choose an image or video first.'))
     try {
       mediaMutation(ctx)
+      const body=await ctx.body()
+      if(body.category==='logo'&&!files.image.type.startsWith('image/'))throw new Error('Logo assets must be images')
       const saved = saveMediaUpload(files.image, current.store.id)
+      setMediaDetails(db(),current.store.id,saved.url,body.category==='logo'?'logo':'media',files.image.name)
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'upload_media', target: saved.url, diff: { type: saved.type, bytes: files.image.data.length } })
-      return redirect('/admin/media?flash=' + encodeURIComponent('Media added to this asset.'))
+      return redirect('/admin/media?storeId='+current.store.id+'&flash=' + encodeURIComponent('Media added to this asset.'))
     } catch (error) {
       return redirect(`/admin/media?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Upload failed'}`)}`)
     }

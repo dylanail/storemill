@@ -5,13 +5,13 @@ import { id } from '../lib/ids.ts'
 import { saveMediaUpload } from '../lib/uploads.ts'
 import { requireRole } from './auth.ts'
 import { environment, getStore } from './stores.ts'
-import { listStoreMedia } from './media.ts'
+import { listStoreMedia, setMediaDetails } from './media.ts'
 import { replaceMediaHtml, replaceMediaValue } from './media-references.ts'
 import { getPage, savePageRevision } from '../pages/store.ts'
 import { recordAudit } from './todos.ts'
 import { cancelVideoTask, loadMedia, mediaEditingAvailability, renderRebrand, type RebrandSpec } from './media-render.ts'
 
-export type RebrandJob = { id: string; store_id: string; actor_id: string; source_url: string; original_url: string; result_url: string; kind: 'image' | 'video'; spec: string; status: 'queued' | 'working' | 'review' | 'applied' | 'failed' | 'cancelled' | 'undone'; phase: string; error: string; provider_task: string; changes: string; created_at: string; updated_at: string }
+export type RebrandJob = { id: string; store_id: string; actor_id: string; request_key: string; source_url: string; original_url: string; result_url: string; kind: 'image' | 'video'; spec: string; status: 'queued' | 'working' | 'review' | 'applied' | 'failed' | 'cancelled' | 'undone'; phase: string; error: string; provider_task: string; changes: string; created_at: string; updated_at: string }
 export function listRebrands(db: Db, storeId: string) { return db.all<RebrandJob>('SELECT * FROM media_rebrands WHERE store_id = ? ORDER BY created_at DESC LIMIT 50', storeId) }
 export function getRebrand(db: Db, storeId: string, jobId: string): RebrandJob {
   const job = db.one<RebrandJob>('SELECT * FROM media_rebrands WHERE id = ? AND store_id = ?', jobId, storeId)
@@ -22,7 +22,7 @@ export function rebrandDefaults(db: Db, storeId: string): RebrandSpec {
   const store = getStore(db, storeId)!, draft = environment(db, storeId, 'draft')
   const last = db.one<{ spec: string }>('SELECT spec FROM media_rebrands WHERE store_id=? ORDER BY created_at DESC LIMIT 1', storeId)
   const preferred = json<Partial<RebrandSpec>>(last?.spec, {})
-  return { brandName: preferred.brandName || draft.brand.name || store.brand.name || store.name, logo: preferred.logo ?? (draft.brand.logoSvg || store.brand.logoSvg || ''), oldBrand: '', direction: '', method: 'ai', provider: process.env.OPENAI_API_KEY ? 'openai' : 'google', position: 'bottom-right', width: 18, frame: 0 }
+  return { brandName: preferred.brandName || draft.brand.name || store.brand.name || store.name, logo: preferred.logo ?? (draft.brand.logoSvg || store.brand.logoSvg || ''), oldBrand: '', direction: '', method: 'ai', provider: process.env.OPENAI_API_KEY ? 'openai' : 'google', position: 'bottom-right', width: 18, frame: 0, intent:'rebrand',references:[],preserve:'',shape:'original',audio:'keep' }
 }
 export function startRebrand(db: Db, storeId: string, actorId: string, source: string, input: Partial<RebrandSpec>, requestKey = ''): RebrandJob {
   requireRole(db, actorId, storeId)
@@ -31,11 +31,15 @@ export function startRebrand(db: Db, storeId: string, actorId: string, source: s
   const media = listStoreMedia(db, storeId).find(item => item.url === source)
   if (!media || media.kind === 'embed') throw new Error('Choose an image or direct video file from this asset’s Media library. Embedded players need the original video file.')
   const defaults = rebrandDefaults(db, storeId), spec = { ...defaults, ...input }
-  for (const key of ['brandName', 'logo', 'oldBrand', 'direction'] as const) spec[key] = String(spec[key] ?? '').trim()
-  if (!spec.brandName || spec.brandName.length > 100 || spec.oldBrand.length > 100 || spec.direction.length > 1500 || spec.logo.length > 100_000) throw new Error('Enter a brand name up to 100 characters and directions up to 1,500 characters')
-  if (!['ai', 'overlay'].includes(spec.method) || !['openai', 'google'].includes(spec.provider) || !['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(spec.position)) throw new Error('Choose one of the available editing options')
+  for (const key of ['brandName', 'logo', 'oldBrand', 'direction', 'preserve'] as const) spec[key] = String(spec[key] ?? '').trim()
+  if (!spec.brandName || spec.brandName.length > 100 || spec.oldBrand.length > 100 || spec.direction.length > 6000 || (spec.preserve?.length||0) > 1500 || spec.logo.length > 100_000) throw new Error('Enter a brand name up to 100 characters and directions up to 6,000 characters')
+  if (!['ai', 'overlay'].includes(spec.method) || !['openai', 'google'].includes(spec.provider) || !['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'].includes(spec.position)) throw new Error('Choose one of the available editing options')
   if (!Number.isFinite(spec.width) || spec.width < 5 || spec.width > 40 || !Number.isFinite(spec.frame) || spec.frame < 0 || spec.frame > 29.9) throw new Error('Logo width must be 5–40%; video reference time must be between 0 and 29.9 seconds')
   if (spec.logo && spec.logo !== defaults.logo && !listStoreMedia(db, storeId).some(item => item.url === spec.logo && item.kind === 'image')) throw new Error('Upload the desired logo to this asset’s Media library first')
+  if(!['rebrand','custom','cleanup','background','enhance','restyle'].includes(spec.intent||'rebrand')||!['original','square','landscape','portrait'].includes(spec.shape||'original')||!['keep','mute'].includes(spec.audio||'keep'))throw new Error('Choose supported output and editing options')
+  if(spec.method==='ai'&&spec.intent==='custom'&&!spec.direction)throw new Error('Describe what you want to change')
+  if(!Array.isArray(spec.references)||spec.references.length>3||spec.references.some(url=>typeof url!=='string'||!listStoreMedia(db,storeId).some(item=>item.url===url&&item.kind==='image')))throw new Error('Choose up to three reference images from this asset')
+  if(media.kind==='video'&&spec.shape!=='original')throw new Error('Video edits keep the original frame shape')
   const available = mediaEditingAvailability()
   if (!available.rendering) throw new Error('Media editing needs FFmpeg and FFprobe installed on the server')
   if (spec.method === 'overlay' && !spec.logo) throw new Error('Choose or upload your desired logo for the overlay')
@@ -83,6 +87,8 @@ export async function drainRebrands(db: Db): Promise<void> {
       // Always retain the task identity, even if cancellation raced with the create response.
       db.update('media_rebrands', job.id, { provider_task: task }); if (signal.aborted) void cancelVideoTask(task)
     } })
+    const category=listStoreMedia(db,job.store_id).find(item=>item.url===job.source_url)?.category||'media'
+    setMediaDetails(db,job.store_id,result,category,'Edited '+(category==='logo'?'logo':job.kind))
     update({ result_url: result, status: 'review', phase: 'Ready to review', error: '' })
   } catch (error) {
     const current = db.one<RebrandJob>('SELECT * FROM media_rebrands WHERE id=?', job.id)

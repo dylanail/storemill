@@ -1,3 +1,4 @@
+import { id } from '../lib/ids.ts'
 import { json, type Db } from '../lib/db.ts'
 import { listUploads } from '../lib/uploads.ts'
 import { assetHeroImage } from './asset-cover.ts'
@@ -5,6 +6,7 @@ import { htmlMedia } from './media-references.ts'
 
 export type StoreMedia = {
   url: string
+  category: 'logo' | 'media'
   kind: 'image' | 'video' | 'embed'
   source: 'Brand' | 'Product' | 'Variant' | 'Collection' | 'Page' | 'Review' | 'Creative' | 'Upload'
   label: string
@@ -26,7 +28,7 @@ export function mediaKind(url: string): StoreMedia['kind'] {
  */
 export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
   const found = new Map<string, StoreMedia>()
-  const add = (value: unknown, source: StoreMedia['source'], label: string, options: { uploadedAt?: string | null; bytes?: number | null; trusted?: boolean; kind?: StoreMedia['kind'] } = {}) => {
+  const add = (value: unknown, source: StoreMedia['source'], label: string, options: { uploadedAt?: string | null; bytes?: number | null; trusted?: boolean; kind?: StoreMedia['kind']; category?: StoreMedia['category'] } = {}) => {
     if (typeof value !== 'string') return
     const url = value.trim()
     if (!url || url.startsWith('data:') || url.startsWith('<svg')) return
@@ -34,16 +36,17 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
     if (!/^(?:https?:\/\/|\/)/i.test(url)) return
     const current = found.get(url)
     if (current) {
+      if (options.category) current.category = options.category
       if (options.kind) current.kind = options.kind
       if (!current.uploadedAt && options.uploadedAt) current.uploadedAt = options.uploadedAt
       if (current.bytes === null && options.bytes !== undefined) current.bytes = options.bytes
       return
     }
-    found.set(url, { url, kind: options.kind ?? mediaKind(url), source, label, uploadedAt: options.uploadedAt ?? null, bytes: options.bytes ?? null })
+    found.set(url, { url, category: options.category ?? 'media', kind: options.kind ?? mediaKind(url), source, label, uploadedAt: options.uploadedAt ?? null, bytes: options.bytes ?? null })
   }
   const walk = (value: unknown, source: StoreMedia['source'], label: string, key = '') => {
     if (typeof value === 'string') {
-      if (/image|photo|video|media|hero|logo|poster|background|src|url/i.test(key) || explicitImage.test(value)) add(value, source, label, { trusted: /image|photo|video|media|hero|logo|poster|background|src/i.test(key), ...(/video/i.test(key) ? { kind: mediaKind(value) === 'embed' ? 'embed' : 'video' } : {}) })
+      if (/image|photo|video|media|hero|logo|poster|background|src|url/i.test(key) || explicitImage.test(value)) add(value, source, label, { ...(/logo/i.test(key)?{category:'logo' as const}:{}), trusted: /image|photo|video|media|hero|logo|poster|background|src/i.test(key), ...(/video/i.test(key) ? { kind: mediaKind(value) === 'embed' ? 'embed' : 'video' } : {}) })
       return
     }
     if (Array.isArray(value)) value.forEach((entry) => walk(entry, source, label, key))
@@ -54,7 +57,7 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
   if (store) {
     add(store.reference_image, 'Brand', 'Reference image', { trusted: true })
     const brand = json<Record<string, unknown>>(store.brand, {})
-    add(brand.logoSvg, 'Brand', 'Logo', { trusted: true })
+    add(brand.logoSvg, 'Brand', 'Logo', { trusted: true, category:'logo' })
     walk(brand, 'Brand', 'Brand kit')
   }
 
@@ -82,6 +85,8 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
 
   for (const upload of listUploads(storeId)) add(upload.url, 'Upload', upload.url.split('/').pop() ?? 'Upload', { trusted: true, uploadedAt: upload.uploadedAt, bytes: upload.bytes })
 
+  for(const item of db.all<{url:string;category:StoreMedia['category'];label:string}>('SELECT url,category,label FROM media_labels WHERE store_id=?',storeId)){const media=found.get(item.url);if(media){media.category=item.category;if(item.label)media.label=item.label}}
+
   return [...found.values()].sort((a, b) => {
     const date = (b.uploadedAt ?? '').localeCompare(a.uploadedAt ?? '')
     return date || a.source.localeCompare(b.source) || a.label.localeCompare(b.label)
@@ -90,4 +95,13 @@ export function listStoreMedia(db: Db, storeId: string): StoreMedia[] {
 
 export function storeCoverImage(db: Db, storeId: string): string {
   return assetHeroImage(db, storeId)
+}
+
+/** Classification never changes the image itself or its existing placements. */
+export function setMediaDetails(db:Db,storeId:string,url:string,category:'logo'|'media',label='') {
+  const media=listStoreMedia(db,storeId).find(item=>item.url===url)
+  if(!media)throw new Error('Choose media from this asset')
+  if(!['logo','media'].includes(category)||category==='logo'&&media.kind!=='image')throw new Error('Logo assets must be images')
+  db.run('INSERT INTO media_labels (id,store_id,url,category,label) VALUES (?,?,?,?,?) ON CONFLICT(store_id,url) DO UPDATE SET category=excluded.category,label=excluded.label',id('media'),storeId,url,category,String(label).trim().slice(0,100))
+  return {...media,category,label:label.trim().slice(0,100)||media.label}
 }

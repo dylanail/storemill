@@ -144,7 +144,7 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
     for await (const chunk of req) {
       size += (chunk as Buffer).length
       // The media upload route authenticates before reading a video body. Other routes keep the small default limit.
-      const limit = url.pathname === '/admin/media/upload' ? 101 * 1024 * 1024 : url.pathname === '/admin/media/rebrand' ? 13 * 1024 * 1024 : 8 * 1024 * 1024
+      const limit = (url.pathname === '/admin/media/upload'||/^\/admin\/pages\/[^/]+\/media\/upload$/.test(url.pathname)) ? 101 * 1024 * 1024 : (url.pathname === '/admin/media/rebrand'||/^\/admin\/pages\/[^/]+\/media\/rebrand$/.test(url.pathname)) ? 20 * 1024 * 1024 : 8 * 1024 * 1024
       if (size > limit) throw badRequest('Request body too large')
       chunks.push(chunk as Buffer)
     }

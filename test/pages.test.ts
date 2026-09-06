@@ -214,7 +214,7 @@ test('the page builder ships valid, safely embedded client code', () => {
   const html = editorPage({ page, storeSlug: store.slug, products: [], revisions: listPageRevisions(db, store.id, page.id) })
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   scripts.forEach((match) => assert.doesNotThrow(() => new Function(match[1] ?? '')))
-  assert.equal(scripts.length, 5)
+  assert.equal(scripts.length, 6)
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/)
   assert.match(html, /Save history/)
   assert.match(html, /sandbox="allow-same-origin"/)

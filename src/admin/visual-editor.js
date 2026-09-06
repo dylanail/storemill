@@ -55,7 +55,7 @@
   document.querySelector('.work').appendChild(breadcrumbs);
   const host = $('html-canvas');
   const chrome = document.createElement('div'); chrome.className = 'canvas-chrome'; chrome.setAttribute('aria-label', 'Canvas tools');
-  chrome.innerHTML = '<div class="canvas-outline hover-outline" hidden><span></span></div><div class="canvas-outline selected-outline" hidden><span></span></div><div class="canvas-outline target-outline" hidden><span></span></div><div class="insertion-line" hidden></div><div class="floating-tools" hidden></div><button class="canvas-insert" type="button" hidden title="Add after selection" aria-label="Add after selection">+</button>';
+  chrome.innerHTML = '<div class="canvas-outline hover-outline" hidden><span></span></div><div class="canvas-outline selected-outline" hidden><span></span></div><div class="canvas-outline target-outline" hidden><span></span></div><div class="insertion-line" hidden></div><div class="floating-tools" hidden></div><button class="canvas-insert" type="button" hidden title="Add after selection" aria-label="Add after selection"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M2 8h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>';
   host.appendChild(chrome);
   const hoverBox = chrome.querySelector('.hover-outline'), selectionBox = chrome.querySelector('.selected-outline'), targetBox = chrome.querySelector('.target-outline');
   const floating = chrome.querySelector('.floating-tools'), plus = chrome.querySelector('.canvas-insert'), line = chrome.querySelector('.insertion-line');
@@ -361,7 +361,8 @@
       const text=meaningfulTexts[0];if(text){text.textContent=value;meaningfulTexts.slice(1).forEach(t=>t.textContent='');}else el.appendChild(doc.createTextNode(value));
     }
   }
-  function imageElement(n) { return n.el.localName==='img'?n.el:n.type==='Product gallery'?n.el.querySelector('img'):null; }
+  function imageElement(n) { return n.el.localName==='img'?n.el:(n.type==='Product gallery'||n.el.localName==='picture')?n.el.querySelector('img'):null; }
+  /* MEDIA_EDITOR_HELPERS */
   function renderInspector() {
     const n=current();
     if(!n){$('props-title').textContent='Page editor';props.innerHTML='<div class="selection-empty"><div class="empty-symbol">↖</div><h3>Start with what you see</h3><p>Select a headline, image, button or section on your page.</p><button class="btn primary" type="button" id="empty-insert">Add a section</button><div class="shortcut-list"><span>Write in place</span><kbd>Double-click</kbd><span>Select parent</span><kbd>Shift ↵</kbd><span>Undo</span><kbd>⌘ / Ctrl Z</kbd></div></div>';$('empty-insert').onclick=()=>openInsert('section');floating.innerHTML='';return;}
@@ -374,6 +375,7 @@
     let content='';
     if(locked)content+='<div class="notice">This layer is locked. Unlock it to make changes.</div>';
     if(img)content+='<div class="image-preview"><img src="'+esc(img.getAttribute('src')||'')+'" alt="Selected image"></div>'+field('Image URL','data-attribute="src"',img.getAttribute('src')||'','url','Replacing an image also clears its old responsive sources.')+field('Image description','data-attribute="alt"',img.getAttribute('alt')||'')+'<button class="btn wide" type="button" data-action="upload">Upload replacement</button>';
+    content+=mediaControls(n);
     if(canText)content+=field(binding?'Fallback text':interactiveTypes.includes(n.type)?'Button label':'Text','data-content="text"',binding?.fallbackText??n.el.textContent,'textarea')+(canInline?'<button class="btn wide" type="button" data-action="write">Write on page</button>':'');
     if(n.el.localName==='a')content+=field('Destination','data-attribute="href"',n.el.getAttribute('href')||'','text','Use a page path, #section or full URL.');
     if(n.el.localName==='input'||n.el.localName==='textarea')content+=field('Placeholder','data-attribute="placeholder"',n.el.getAttribute('placeholder')||'');
@@ -415,7 +417,7 @@
     props.querySelectorAll('[data-layout]').forEach(b=>b.onclick=()=>operation('change layout',()=>{setStyle(n.id,'display',b.dataset.layout==='grid'?'grid':'flex');setStyle(n.id,'flex-direction',b.dataset.layout==='grid'?'':b.dataset.layout);if(b.dataset.layout==='grid')setStyle(n.id,'grid-template-columns','repeat(2,minmax(0,1fr))');}));
     props.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>operation('reset '+b.dataset.reset,()=>setStyle(n.id,b.dataset.reset,'')));
     props.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>action(b.dataset.action));
-    mountVisualColumns(n);
+    mountVisualColumns(n);mountVisualMedia(n);
     setupBindings(n);
     floating.innerHTML='<button type="button" data-move-handle title="Drag to move" aria-label="Drag selected element">↕</button><button type="button" data-float="'+(img?'replace':canInline?'write':'design')+'">'+(img?'Replace image':canInline?'Edit text':'Design')+'</button><button type="button" data-float="padding" title="Edit padding">Padding</button><button type="button" data-float="up" title="Move up" aria-label="Move up">↑</button><button type="button" data-float="down" title="Move down" aria-label="Move down">↓</button><button type="button" data-float="duplicate" title="Duplicate" aria-label="Duplicate">⧉</button><button type="button" data-float="delete" title="Delete" aria-label="Delete">×</button>';
     floating.querySelector('[data-move-handle]').onpointerdown=e=>beginPointerDrag(e,n,true);
@@ -479,7 +481,7 @@
     button.onclick=async()=>{
       const productId=props.querySelector('#binding-product').value,field=props.querySelector('#binding-field').value;if(!productId){announce('Choose a product first.');return;}
       button.disabled=true;
-      try {const response=await fetch('/admin/pages/'+window.__PAGE.id+'/product-data/'+encodeURIComponent(productId));const product=await response.json();if(!response.ok||product.error)throw Error(product.error||'Could not load product');
+      try {const response=await fetch('/admin/pages/'+window.__PAGE.id+'/product-data/'+encodeURIComponent(productId)+'?storeId='+encodeURIComponent(window.__PAGE.storeId));const product=await response.json();if(!response.ok||product.error)throw Error(product.error||'Could not load product');
         operation('connect product',()=>{const old=nodeMeta(n.id).binding;nodeMeta(n.id).binding={productId,field,fallbackHtml:old?.fallbackHtml??n.el.innerHTML,fallbackAttributes:old?.fallbackAttributes??Object.fromEntries([...n.el.attributes].map(a=>[a.name,a.value])),fallbackText:old?.fallbackText??n.el.textContent,fallbackSources:old?.fallbackSources??[...(imageElement(n)?.closest('picture')?.querySelectorAll('source')||[])].map(el=>Object.fromEntries([...el.attributes].map(a=>[a.name,a.value]))),fallbackOverrides:old?.fallbackOverrides??copy(metadata.overrides[n.id]||{})};applyProduct(n,product,field);syncBindingRuntime();});
       }catch(e){announce(e.message);}finally{button.disabled=false;}
     };
@@ -761,10 +763,11 @@
     const style=doc.createElement('style');style.textContent=sectionStyles(n);
     if(root.matches('area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr')){const wrapper=doc.createElement('div');wrapper.style.display='contents';wrapper.appendChild(root);root=wrapper;}
     root.setAttribute('data-pb-imported-section','');root.appendChild(style);
-    try{const response=await fetch('/admin/pages/'+window.__PAGE.id+'/html-presets',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:name.trim(),html:root.outerHTML})});const out=await response.json();if(!response.ok||out.error)throw Error(out.error||'Could not save section');window.__PRESETS.unshift(out.preset);renderLibrary();announce('Section saved to your template library');}catch(e){announce(e.message);}
+    try{const response=await fetch('/admin/pages/'+window.__PAGE.id+'/html-presets?storeId='+encodeURIComponent(window.__PAGE.storeId),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:name.trim(),html:root.outerHTML})});const out=await response.json();if(!response.ok||out.error)throw Error(out.error||'Could not save section');window.__PRESETS.unshift(out.preset);renderLibrary();announce('Section saved to your template library');}catch(e){announce(e.message);}
   }
 
   function keydown(e) {
+    if(e.target.closest?.('.editor-media'))return;
     if(e.key==='Escape'&&pointerDrag){pointerDrag.target.releasePointerCapture?.(pointerDrag.pointer);pointerDrag=null;endDrag();e.preventDefault();return;}
     if(!insert.open&&document.querySelector('.drawer:not([hidden]),.preview-overlay:not([hidden])'))return;
     const key=e.key.toLowerCase(),mod=e.metaKey||e.ctrlKey;

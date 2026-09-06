@@ -21,3 +21,5 @@
 
 /* Layer hover is editor chrome; it never changes saved component styles. */
 .hover-outline{border:2px solid #5a95ef;background:#2563eb0a}.canvas-block.layer-highlight{outline:2px solid #5a95ef;outline-offset:-2px}.canvas-block.layer-highlight:after{content:"";position:absolute;inset:0;background:#2563eb0a;pointer-events:none}.canvas-block.layer-highlight .block-label{opacity:1}.layer.layer-highlight{background:#edf4ff;box-shadow:inset 0 0 0 1px #c7dbfa}
+
+.canvas-insert{display:grid;place-items:center;padding:0;line-height:1;box-sizing:border-box}.canvas-insert svg{display:block;flex:none}

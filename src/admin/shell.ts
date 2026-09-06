@@ -8,7 +8,7 @@ import { SUGGESTIONS } from '../agent/chat.ts'
 import type { Artifact } from '../agent/registry.ts'
 import type { AssistantRequest } from '../agent/queue.ts'
 
-export type IconName = 'home' | 'assets' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'image' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
+export type IconName = 'home' | 'assets' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'image' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'insights' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
 export type NavItem = { key: string; href: string; label: string; icon: IconName; area?: string }
 
 export function uiIcon(name: IconName, size = 18): string {
@@ -29,6 +29,7 @@ export function uiIcon(name: IconName, size = 18): string {
     discount: '<path d="M20 13 13 20a2 2 0 0 1-2.8 0L4 13.8V4h9.8L20 10.2a2 2 0 0 1 0 2.8Z"/><circle cx="9" cy="9" r="1"/>',
     ads: '<path d="M3 11v2h4l9 5V6L7 11H3Z"/><path d="M7 13v6h4"/><path d="M20 9v6"/>',
     analytics: '<path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/>',
+    insights: '<path d="M3 3v18h18"/><path d="m6 15 5-5 4 3 6-8M16 5h5v5"/>',
     experiment: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M8 15h8"/>',
     profit: '<circle cx="12" cy="12" r="9"/><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8M12 6v12"/>',
     build: '<path d="m14.7 6.3 3-3a2.1 2.1 0 0 1 3 3l-3 3M13 8l3 3-8.5 8.5a2.1 2.1 0 0 1-3-3L13 8Z"/><path d="m4 4 4 4"/>',
@@ -76,7 +77,7 @@ function groupsFor(kind: Store['kind']): Array<{ label: string; icon: IconName; 
     { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
     { key: 'ads', href: '/admin/ads', label: 'Ads', icon: 'ads', area: 'ads' },
   ] },
-  { label: 'Insights', icon: 'analytics', children: [
+  { label: 'Insights', icon: 'insights', children: [
     { key: 'analytics', href: '/admin/analytics', label: 'Analytics & attribution', icon: 'analytics', area: 'analytics' },
     { key: 'cro', href: '/admin/cro', label: 'Experiments', icon: 'experiment', area: 'analytics' },
     { key: 'profit', href: '/admin/profit', label: 'Profit', icon: 'profit', area: 'analytics' },
