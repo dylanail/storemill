@@ -1,4 +1,5 @@
 import type { ImportedProduct } from '../domain/ops.ts'
+import { readImportedGallery } from './product-media-import.ts'
 import type { Product } from '../domain/types.ts'
 
 type Element = { attrs: string; inner: string; html: string; start: number; end: number }
@@ -41,7 +42,8 @@ export function planImportedOfferProduct(html: string, sourceUrl: string, option
     if (/^\/_uploads\//.test(raw)) return raw
     try { const url = new URL(decode(raw), sourceUrl); return /^https?:$/.test(url.protocol) ? url.toString() : '' } catch { return '' }
   }
-  const images = [...new Set(galleryImages.map((tag) => imageUrl(attribute(tag, 'data-src') || attribute(tag, 'src'))).filter(Boolean))].slice(0, 24)
+  const media = readImportedGallery(html, sourceUrl)
+  const images = media.filter(item => item.kind !== 'video').map(item => item.url)
   const variants: ImportedProduct['variants'] = []
   const bindings: ImportedOfferPlan['bindings'] = []
   for (const group of groups) for (const tile of elements(group.inner, (attrs) => classIs(attrs, 'khOfferBox') || attribute(attrs, 'data-offer') === 'package')) {
@@ -66,7 +68,7 @@ export function planImportedOfferProduct(html: string, sourceUrl: string, option
   if (!variants.length) return null
   const hasRecurring = elements(body, (attrs) => classIs(attrs, 'khSubOffer') || attribute(attrs, 'data-purchase-type') === 'subscription').length > 0
   return {
-    product: { title: decode(productTitle), description: '', images, priceCents: variants[0]!.priceCents, currency: options.currency, variants, options: [], source: sourceUrl },
+    product: { title: decode(productTitle), description: '', images, media, priceCents: variants[0]!.priceCents, currency: options.currency, variants, options: [], source: sourceUrl },
     bindings,
     notes: [`Extracted ${variants.length} explicitly priced one-time packages in ${options.currency}; each variant represents one complete package.`, ...(hasRecurring ? ['Subscription offers were not imported: the current checkout requires an explicitly configured recurring-payment flow.'] : [])],
   }

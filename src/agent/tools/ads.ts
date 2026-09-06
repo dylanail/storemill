@@ -70,8 +70,8 @@ export const adTools: Tool[] = defineTools([
         metadata: { ...product.metadata, imageSheet: JSON.stringify(sheet) },
         ...(chosen
           ? args.asHero !== false
-            ? { heroImage: chosen, media: [{ url: chosen, alt: `${product.title}, ${sheet.direction || sheet.preset}` }, ...product.media.filter((entry) => entry.url !== chosen)].slice(0, 8) }
-            : { media: [...product.media, { url: chosen, alt: `${product.title}, ${sheet.direction || sheet.preset}` }].slice(0, 8) }
+            ? { heroImage: chosen, media: [{ url: chosen, alt: `${product.title}, ${sheet.direction || sheet.preset}` }, ...product.media.filter((entry) => entry.url !== chosen)] }
+            : { media: [...product.media, { url: chosen, alt: `${product.title}, ${sheet.direction || sheet.preset}` }] }
           : {}),
       })
       return {

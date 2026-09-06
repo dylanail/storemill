@@ -160,21 +160,24 @@ export async function importAssetFromUrl(
     }
     if(!found.length&&offerPlan){found=[{key:'offer:'+source,product:offerPlan.product,purpose:'primary',sourceIds:[]}];document.notes.push(...offerPlan.notes)}
     for(const entry of found){
+      commerce.issues.push(...(entry.product.mediaIssues||[]).map(reason=>({url:source,reason})))
       if(entry.product.currency!==String(input.currency||'USD').toUpperCase()){commerce.issues.push({url:source,reason:`Source prices use ${entry.product.currency}; no automatic currency conversion was applied.`});continue}
       if(entry.purpose==='primary'&&['upsell','downsell'].includes(role))entry.product.metadata={...entry.product.metadata,hidden:'true',sourcePurpose:role}
-      candidates.set(entry.key,candidates.get(entry.key)||entry)
+      const previous=candidates.get(entry.key)
+      if(previous&&entry.product.metadata?.sourceMedia==='gallery'&&previous.product.metadata?.sourceMedia!=='gallery')previous.product={...previous.product,images:entry.product.images,media:entry.product.media,metadata:{...previous.product.metadata,sourceMedia:'gallery'}}
+      candidates.set(entry.key,previous||entry)
       keysByPage.set(source,[...new Set([...(keysByPage.get(source)||[]),entry.key])])
     }
   }
   const importedProducts:ImportedProduct[]=[],productKeys:string[]=[],productImageReports:ImageLocalizationReport[]=[]
   for(const [key,entry] of candidates){
     const imported=entry.product
-    const remoteMedia=[...new Set([...imported.images,...imported.variants.map(v=>v.image||'').filter(Boolean)])]
+    const remoteMedia=[...new Set([...imported.images,...(imported.media||[]).flatMap(item=>[item.url,...(item.poster?[item.poster]:[])]),...imported.variants.map(v=>v.image||'').filter(Boolean)])]
     emit({task:'Copying product media: '+imported.title,products:importedProducts.length,currentUrl:imported.source})
-    const owned=await localizeImageUrls(remoteMedia,{storeId:pendingId,localizedImages,...(input.signal?{signal:input.signal}:{}),...(input.fetchImpl?{fetchImpl:input.fetchImpl}:{})},imported.source)
+    const owned=await localizeImageUrls(remoteMedia,{storeId:pendingId,localizedImages,productVideos:new Set((imported.media||[]).filter(item=>item.kind==='video').map(item=>item.url)),...(input.signal?{signal:input.signal}:{}),...(input.fetchImpl?{fetchImpl:input.fetchImpl}:{})},imported.source)
     productImageReports.push(owned.report)
     const media=new Map(remoteMedia.map((url,index)=>[url,owned.urls[index]||url]))
-    importedProducts.push({...imported,images:imported.images.map(url=>media.get(url)||url),variants:imported.variants.map(v=>v.image?{...v,image:media.get(v.image)||v.image}:v)})
+    importedProducts.push({...imported,images:imported.images.map(url=>media.get(url)||url),...(imported.media?{media:imported.media.map(item=>({...item,url:media.get(item.url)||item.url,...(item.poster?{poster:media.get(item.poster)||item.poster}:{})}))}:{}),variants:imported.variants.map(v=>v.image?{...v,image:media.get(v.image)||v.image}:v)})
     productKeys.push(key)
   }
   stopIfAborted(input.signal)
@@ -192,6 +195,7 @@ export async function importAssetFromUrl(
   const products = importedProducts.map((imported) => createFromImport(db, store.id, {
     ...imported,
     images: imported.images.map(rehome),
+    ...(imported.media ? {media:imported.media.map(item=>({...item,url:rehome(item.url),...(item.poster?{poster:rehome(item.poster)}:{})}))} : {}),
     variants: imported.variants.map((variant) => variant.image ? { ...variant, image: rehome(variant.image) } : variant),
   }, { asSupplier: false, status: 'draft' }))
   const productByKey=new Map(products.map((product,index)=>[productKeys[index]!,product]))

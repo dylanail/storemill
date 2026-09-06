@@ -17,7 +17,7 @@ export type ImportedBundlePlan = {
   html: string
   css: string
   hostId: string
-  tiers: Array<{ sourceId: string; quantity: number; totalCents: number; unitPriceCents: number; label: string; badge?: string }>
+  tiers: Array<{ sourceId: string; quantity: number; totalCents: number; unitPriceCents?: number; label: string; badge?: string }>
   notes: string[]
 }
 
@@ -54,12 +54,12 @@ export function planImportedBundle(html: string, sourceUrl: string, sourceMetada
   const variant = variants[0]
   if (!Number.isSafeInteger(variant.price) || variant.price <= 0 || variant.sellingPlans?.length) throw new Error('The source bundle does not have a verified one-time unit price.')
   const sourceCompareAtCents = Number.isSafeInteger(variant.compareAtPrice) && variant.compareAtPrice > variant.price ? variant.compareAtPrice as number : undefined
-  if (!Array.isArray(settings.dealBars) || !settings.dealBars.length || settings.dealBars.length > 5) throw new Error('The source bundle has an unsupported number of tiers.')
+  if (!Array.isArray(settings.dealBars) || !settings.dealBars.length || settings.dealBars.length > 20) throw new Error('The source bundle has an unsupported number of tiers.')
   const notes: string[] = []
   const tiers: ImportedBundlePlan['tiers'] = settings.dealBars.map((bar: any) => {
     if (bar.dealBarType !== 'quantity-break' || bar.discountType !== 'specific' || bar.sellingPlanEnabled || bar.sellingPlanGid || bar.freeGifts?.length || bar.upsells?.length || bar.featuredProductGID || !Number.isSafeInteger(bar.quantity) || bar.quantity < 1 || bar.quantity > 999 || typeof bar.discountValue !== 'number') throw new Error('This bundle includes an unsupported subscription, gift, product mix or price rule. Review it before enabling purchases.')
     const totalCents = Math.round(bar.discountValue * 10 ** minorDigits(currency))
-    if (!Number.isSafeInteger(totalCents) || totalCents <= 0 || totalCents % bar.quantity || totalCents > variant.price * bar.quantity) throw new Error('The source bundle price cannot be represented as an exact discounted unit price.')
+    if (!Number.isSafeInteger(totalCents) || totalCents <= 0 || totalCents > variant.price * bar.quantity) throw new Error('The source bundle needs a positive total no higher than its regular item prices.')
     const sourceId = String(bar.id)
     const rendered = new RegExp(`data-deal-bar-id=["']${sourceId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][\\s\\S]*?class=["']kaching-bundles__bar-price["'][^>]*>([\\s\\S]*?)<\\/div>`, 'i').exec(widget)
     const renderedAmount = rendered ? Number(plain(rendered[1]!).replace(/[^\d.-]/g, '')) : NaN
@@ -67,7 +67,7 @@ export function planImportedBundle(html: string, sourceUrl: string, sourceMetada
     const percentage = /(?:Extra|Save)\s*(\d+(?:\.\d+)?)%/i.exec(String(bar.label ?? ''))
     const actual = (1 - totalCents / (variant.price * bar.quantity)) * 100
     if (percentage && Math.abs(Number(percentage[1]) - actual) > 0.1) notes.push(`Source ${bar.title} label says ${percentage[1]}% while its explicit price is approximately ${actual.toFixed(2)}% below individual units. Preserved source copy; checkout enforces ${totalCents} ${currency} minor units for ${bar.quantity}.`)
-    return { sourceId, quantity: bar.quantity, totalCents, unitPriceCents: totalCents / bar.quantity, label: String(bar.title ?? `Buy ${bar.quantity}`), ...(bar.badgeText ? { badge: String(bar.badgeText) } : {}) }
+    return { sourceId, quantity: bar.quantity, totalCents, ...(totalCents % bar.quantity === 0 ? {unitPriceCents: totalCents / bar.quantity} : {}), label: String(bar.title ?? `Buy ${bar.quantity}`), ...(bar.badgeText ? { badge: String(bar.badgeText) } : {}) }
   })
   if (new Set(tiers.map(tier => tier.quantity)).size !== tiers.length) throw new Error('The source bundle has conflicting quantity tiers.')
   const css = [...html.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/gi)].find(style => /\bid=["']kaching-bundles-styles["']/i.test(style[0]))?.[0] ?? ''
@@ -95,7 +95,7 @@ export function installImportedBundle(db: Db, storeId: string, productId: string
   if (!store || !product || store.currency.toUpperCase() !== plan.currency) throw new Error('The copied bundle needs a matching product and store currency.')
   verifyProduct(product, plan)
   const compareAtCents = product.variants[0]!.compareAtCents || plan.sourceCompareAtCents
-  const tiers = plan.tiers.map(tier => ({ quantity: tier.quantity, unitPriceCents: tier.unitPriceCents, ...(compareAtCents ? { compareAtTotalCents: compareAtCents * tier.quantity } : {}), discountPercent: 0, label: tier.label, ...(tier.badge ? { badge: tier.badge } : {}) }))
+  const tiers = plan.tiers.map(tier => ({ quantity: tier.quantity, ...(tier.unitPriceCents!==undefined?{unitPriceCents:tier.unitPriceCents}:{totalPriceCents:tier.totalCents}), ...(compareAtCents ? { compareAtTotalCents: compareAtCents * tier.quantity } : {}), discountPercent: 0, label: tier.label, ...(tier.badge ? { badge: tier.badge } : {}) }))
   const previous = listBundles(db, storeId).find(bundle => bundle.productId === productId)
   if (previous?.status === 'paused') throw new Error('This product has a paused bundle. Review it before enabling a copied offer.')
   if (previous && JSON.stringify(previous.tiers.map(({compareAtTotalCents, ...tier}) => tier)) !== JSON.stringify(tiers.map(({compareAtTotalCents, ...tier}) => tier))) throw new Error('This product already has different bundle rules. Review them before replacing the copied offer.')

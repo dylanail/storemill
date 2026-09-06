@@ -1,3 +1,4 @@
+import { saveDiscount, previewDiscount, changeDiscountStatus } from '../control/discounts.ts'
 import { minorDigits } from '../lib/money.ts'
 import { startImport, getImport, cancelImport } from '../control/asset-import-jobs.ts'
 import { importJobPage } from './asset-import-page.ts'
@@ -632,7 +633,7 @@ export function adminRouter(): Router {
       const shot = String(body.shot ?? '').trim().toLowerCase()
       const result = await execute(
         'attach_product_photo',
-        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless'), ...(shot ? { shot } : {}) },
+        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'original'), ...(shot ? { shot } : {}) },
         { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
       )
       return back(ctx, result.summary)
@@ -1075,7 +1076,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/bundles', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'bundles', 'Bundles', pages.bundlesPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'bundles', 'Product offers', pages.bundlesPage(ctxFor(current, ctx)))
   })
 
   router.post('/admin/bundles', async (ctx) => {
@@ -1120,8 +1121,9 @@ export function adminRouter(): Router {
       const tiers = bundle.tiers.map((tier, index) => {
         const sale = Math.round(Number(body['sale' + index]) * scale);
         const compare = Math.round(Number(body['compare' + index]) * scale);
-        if (!Number.isSafeInteger(sale) || sale <= 0 || sale % tier.quantity) throw new Error('Enter a positive sale total that divides into whole unit prices for each quantity.');
-        return { ...tier, discountPercent: 0, unitPriceCents: sale / tier.quantity, compareAtTotalCents: compare };
+        if (!Number.isSafeInteger(sale) || sale <= 0) throw new Error('Enter a positive sale total for each quantity.');
+        const {unitPriceCents,...rest}=tier;
+        return { ...rest, discountPercent: 0, totalPriceCents: sale, compareAtTotalCents: compare };
       });
       upsertBundle(db(), current.store.id, { productId: bundle.productId, title: bundle.title, tiers, style: bundle.style });
       return back(ctx, 'Bundle prices updated in the product cards, cart and checkout.');
@@ -1391,9 +1393,17 @@ export function adminRouter(): Router {
     return back(ctx, 'Collection created.')
   })
 
+  for (const action of ['save','preview','status'] as const) router.post('/admin/discounts/'+action, async(ctx)=>{
+    const current=session(ctx)
+    try {
+      const input=await ctx.body()
+      return action==='save'?saveDiscount(db(),current.store,input,current.user.id):action==='preview'?previewDiscount(db(),current.store,input):changeDiscountStatus(db(),current.store,input)
+    } catch(error){const message=error instanceof Error?error.message:'Could not update discount';return new Raw(JSON.stringify({error:message}),'application/json',{},/changed in another tab/.test(message)?409:400)}
+  })
+
   router.get('/admin/promotions', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'promotions', 'Promotions', pages.promotionsPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'promotions', 'Discounts', pages.promotionsPage(ctxFor(current, ctx)))
   })
 
   router.post('/admin/promotions/:id/:state', (ctx) => {
@@ -2328,8 +2338,8 @@ export function adminRouter(): Router {
     const url = String(body.url ?? '')
     if (!url) return back(ctx, '!No image chosen.')
     const alt = `${product.title}`
-    if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)].slice(0, 8) })
-    else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }].slice(0, 8) })
+    if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)] })
+    else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }] })
     return back(ctx, body.as === 'hero' ? 'That is the hero image now.' : 'Added to the gallery.')
   })
 

@@ -4,6 +4,8 @@ import { id } from '../lib/ids.ts'
 import { format } from '../lib/money.ts'
 import { getProduct } from './catalog.ts'
 import { createPromotion, setPromotionStatus } from './promotions.ts'
+import { quantityPrice, type QuantityMode } from './quantity-pricing.ts'
+import { getVariant } from './catalog.ts'
 import type { Product } from './types.ts'
 
 /**
@@ -21,6 +23,8 @@ export type BundleTier = {
   discountPercent: number
   /** Explicit source package price divided by its quantity, in the store's minor units. */
   unitPriceCents?: number
+  /** Exact total for the displayed pack, including prices that do not divide evenly. */
+  totalPriceCents?: number
   /** Original displayed package total; does not change the payable price. */
   compareAtTotalCents?: number
   label: string
@@ -39,6 +43,7 @@ export type Bundle = {
   productId: string
   title: string
   tiers: BundleTier[]
+  pricingMode?: QuantityMode
   style: BundleStyle
   promotionId: string | null
   status: 'active' | 'paused'
@@ -53,6 +58,7 @@ function rowToBundle(row: Row): Bundle {
     title: row.title as string,
     tiers: json(row.tiers, [] as BundleTier[]),
     style: json(row.style, {} as BundleStyle),
+    pricingMode: row.pricing_mode === 'multiples' ? 'multiples' : 'bulk',
     promotionId: (row.promotion_id as string | null) ?? null,
     status: row.status as Bundle['status'],
     createdAt: row.created_at as string,
@@ -79,28 +85,31 @@ export const DEFAULT_TIERS: BundleTier[] = [
  * discount scoped to the product, plus a free-shipping rule for each tier that
  * promises it. Deleting the bundle disables them.
  */
-export function upsertBundle(db: Db, storeId: string, input: { productId: string; title?: string; tiers?: BundleTier[]; style?: BundleStyle }): Bundle {
+export function upsertBundle(db: Db, storeId: string, input: { productId: string; title?: string; tiers?: BundleTier[]; pricingMode?: QuantityMode; style?: BundleStyle }): Bundle {
   const product = getProduct(db, storeId, input.productId)
   if (!product) throw new Error('No product with that id')
-  const tiers = normalizeTiers(input.tiers?.length ? input.tiers : DEFAULT_TIERS)
+  const tiers = normalizeTiers(input.tiers ?? DEFAULT_TIERS)
   if (tiers.some(tier => tier.unitPriceCents !== undefined && product.variants.some(variant => tier.unitPriceCents! > variant.priceCents))) throw new Error('An exact bundle unit price cannot exceed a product variant price')
-  if (tiers.some(tier => tier.compareAtTotalCents !== undefined && (!Number.isSafeInteger(tier.compareAtTotalCents) || tier.compareAtTotalCents < (tier.unitPriceCents !== undefined ? tier.unitPriceCents * tier.quantity : Math.round(Math.min(...product.variants.map(v => v.priceCents)) * tier.quantity * (1 - tier.discountPercent / 100)))))) throw new Error('Original bundle totals must be whole minor units and at least the sale total')
+  if (tiers.some(tier => tier.totalPriceCents !== undefined && tier.totalPriceCents > Math.min(...product.variants.map(v=>v.priceCents))*tier.quantity)) throw new Error('A pack price cannot exceed the regular price of its items')
+  if (tiers.some(tier=>tier.giftVariantId&&!getVariant(db,storeId,tier.giftVariantId))) throw new Error('Choose a gift variant from this store')
+  if (tiers.some(tier => tier.compareAtTotalCents !== undefined && (!Number.isSafeInteger(tier.compareAtTotalCents) || tier.compareAtTotalCents < (tier.totalPriceCents ?? (tier.unitPriceCents !== undefined ? tier.unitPriceCents * tier.quantity : Math.round(Math.min(...product.variants.map(v => v.priceCents)) * tier.quantity * (1 - tier.discountPercent / 100))))))) throw new Error('Original bundle totals must be whole minor units and at least the sale total')
   const existing = db.one('SELECT * FROM bundles WHERE store_id = ? AND product_id = ?', storeId, product.id)
   const previous = existing ? rowToBundle(existing) : null
 
+  const pricingMode=input.pricingMode??previous?.pricingMode??'bulk'
   return db.tx(() => {
     if (previous?.promotionId) setPromotionStatus(db, storeId, previous.promotionId, 'disabled')
     for (const row of db.all<{ id: string }>("SELECT id FROM promotions WHERE store_id = ? AND json_extract(rules, '$.bundleProductId') = ?", storeId, product.id)) {
       setPromotionStatus(db, storeId, row.id, 'disabled')
     }
-    const discounted = tiers.filter((tier) => tier.discountPercent > 0 || tier.unitPriceCents !== undefined && product.variants.some(variant => tier.unitPriceCents! < variant.priceCents))
+    const discounted = tiers.filter(tier=>product.variants.some(variant=>quantityPrice([tier],tier.quantity,variant.priceCents)<variant.priceCents*tier.quantity))
     let promotionId: string | null = null
     if (discounted.length) {
       promotionId = createPromotion(db, storeId, {
         title: `${product.title} bundle`,
         kind: 'tiered',
         automatic: true,
-        rules: { productIds: [product.id], tiers: discounted.map((tier) => ({ quantity: tier.quantity, percent: tier.discountPercent, ...(tier.unitPriceCents !== undefined ? { unitPriceCents: tier.unitPriceCents } : {}) })), bundleProductId: product.id } as never,
+        rules: { productIds: [product.id], quantityMode: pricingMode, tiers: tiers.map((tier) => ({ quantity: tier.quantity, percent: tier.discountPercent, ...(tier.unitPriceCents !== undefined ? { unitPriceCents: tier.unitPriceCents } : {}), ...(tier.totalPriceCents !== undefined ? { totalPriceCents: tier.totalPriceCents } : {}) })), bundleProductId: product.id } as never,
       }).id
     }
     const shippingTier = tiers.find((tier) => tier.freeShipping)
@@ -115,6 +124,7 @@ export function upsertBundle(db: Db, storeId: string, input: { productId: string
     const bundleId = previous?.id ?? id('bnd')
     const values = {
       title: input.title ?? previous?.title ?? 'Bundle & save',
+      pricing_mode: pricingMode,
       tiers,
       style: { ...(previous?.style ?? {}), ...(input.style ?? {}) },
       promotion_id: promotionId,
@@ -141,13 +151,26 @@ export function removeBundle(db: Db, storeId: string, bundleId: string): boolean
 }
 
 function normalizeTiers(tiers: BundleTier[]): BundleTier[] {
-  for (const tier of tiers) if (tier.unitPriceCents !== undefined && (!Number.isSafeInteger(tier.quantity) || tier.quantity < 1 || !Number.isSafeInteger(tier.unitPriceCents) || tier.unitPriceCents <= 0)) throw new Error('Exact bundle tiers require a positive whole quantity and unit price')
-  if (tiers.some(tier => tier.unitPriceCents !== undefined) && new Set(tiers.map(tier => tier.quantity)).size !== tiers.length) throw new Error('Exact bundle tiers require distinct quantities')
-  return [...tiers]
-    .filter((tier) => tier.quantity >= 1)
-    .map((tier) => ({ ...tier, quantity: Math.round(tier.quantity), discountPercent: Math.max(0, Math.min(90, tier.discountPercent)) }))
-    .sort((a, b) => a.quantity - b.quantity)
-    .slice(0, 5)
+  if(!tiers.length||tiers.length>20)throw new Error('Add between 1 and 20 pricing tiers')
+  tiers=tiers.map(tier=>({...tier,discountPercent:tier.discountPercent??0}))
+  if(new Set(tiers.map(tier=>tier.quantity)).size!==tiers.length)throw new Error('Each tier needs a different quantity')
+  for(const tier of tiers){
+    if(!Number.isSafeInteger(tier.quantity)||tier.quantity<1||tier.quantity>999)throw new Error('Tier quantities must be whole numbers from 1 to 999')
+    if(!Number.isFinite(tier.discountPercent)||tier.discountPercent<0||tier.discountPercent>100)throw new Error('Discount percentages must be between 0 and 100')
+    for(const price of [tier.unitPriceCents,tier.totalPriceCents])if(price!==undefined&&(!Number.isSafeInteger(price)||price<=0))throw new Error('Enter a positive price for every priced tier')
+    if(tier.unitPriceCents!==undefined&&tier.totalPriceCents!==undefined)throw new Error('Choose one price type for each tier')
+  }
+  return [...tiers].sort((a,b)=>a.quantity-b.quantity)
+}
+
+export function setBundleStatus(db:Db,storeId:string,bundleId:string,status:Bundle['status']):void {
+  const bundle=listBundles(db,storeId).find(item=>item.id===bundleId)
+  if(!bundle)throw new Error('No quantity offer with that id')
+  if(status==='active'){upsertBundle(db,storeId,{...bundle});return}
+  db.tx(()=>{
+    db.run('UPDATE bundles SET status=? WHERE id=? AND store_id=?',status,bundleId,storeId)
+    for(const row of db.all<{id:string}>("SELECT id FROM promotions WHERE store_id=? AND json_extract(rules,'$.bundleProductId')=?",storeId,bundle.productId))setPromotionStatus(db,storeId,row.id,'disabled')
+  })
 }
 
 /** The tier a quantity earns, or null below the first tier. */
@@ -161,7 +184,12 @@ export function tierFor(bundle: Bundle, quantity: number): BundleTier | null {
  * on the surrounding form, and its data attributes let the buy button show
  * the tier total without a round trip.
  */
-export function renderBundleWidget(bundle: Bundle, product: Product, currency: string, opts: { variantPriceCents?: number; locale?: string } = {}): string {
+export function renderBundleWidget(bundle: Bundle, product: Product, currency: string, opts: { variantPriceCents?: number; locale?: string; currencyRate?: number } = {}): string {
+  if(opts.currencyRate!==undefined){
+    const rate=opts.currencyRate
+    bundle={...bundle,tiers:bundle.tiers.map(t=>({...t,...(t.unitPriceCents!==undefined?{unitPriceCents:Math.round(t.unitPriceCents*rate)}:{}),...(t.totalPriceCents!==undefined?{totalPriceCents:Math.round(t.totalPriceCents*rate)}:{}),...(t.compareAtTotalCents!==undefined?{compareAtTotalCents:Math.round(t.compareAtTotalCents*rate)}:{})}))}
+    product={...product,variants:product.variants.map(v=>({...v,priceCents:Math.round(v.priceCents*rate),compareAtCents:v.compareAtCents===null?null:Math.round(v.compareAtCents*rate)}))}
+  }
   const unit = opts.variantPriceCents ?? Math.min(...product.variants.map((variant) => variant.priceCents))
   const style = bundle.style
   // One tier is pre-selected: the first one carrying a badge (that is what the
@@ -169,17 +197,21 @@ export function renderBundleWidget(bundle: Bundle, product: Product, currency: s
   // browser to pick, and it picks the last.
   const preselect = Math.max(0, bundle.tiers.findIndex((tier) => Boolean(tier.badge)))
   const rows = bundle.tiers.map((tier, index) => {
-    const full = unit * tier.quantity
     const compare = tier.compareAtTotalCents ?? Math.max(...product.variants.map(v => v.compareAtCents || v.priceCents)) * tier.quantity
-    const total = tier.unitPriceCents !== undefined ? Math.min(full, tier.unitPriceCents * tier.quantity) : Math.round(full * (1 - tier.discountPercent / 100))
+    const total = quantityPrice(bundle.tiers,tier.quantity,unit,bundle.pricingMode)
     const perUnit = Math.round(total / tier.quantity)
+    const variantPrices=Object.fromEntries(product.variants.map(variant=>{
+      const amount=quantityPrice(bundle.tiers,tier.quantity,variant.priceCents,bundle.pricingMode)
+      const original=tier.compareAtTotalCents??(variant.compareAtCents||variant.priceCents)*tier.quantity
+      return [variant.id,{total:format(amount,currency,opts.locale),compare:original>amount?format(original,currency,opts.locale):'',each:(amount%tier.quantity?'≈ ':'')+format(Math.round(amount/tier.quantity),currency,opts.locale)+' each'}]
+    }))
     const perks = [tier.freeShipping ? 'Free shipping' : '', tier.giftVariantId ? `+ ${tier.giftLabel || 'free gift'}` : ''].filter(Boolean)
     const checked = index === preselect ? 'checked' : ''
     return `<label class="tier${tier.badge ? ' tier--hi' : ''}">
-      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" data-discount="${tier.discountPercent}" ${checked}>
+      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" data-discount="${tier.discountPercent}" data-variant-prices="${escapeHtml(JSON.stringify(variantPrices))}" ${checked}>
       <span class="tier-main"><span class="tier-label">${escapeHtml(tier.label)}${tier.discountPercent ? ` <em>Save ${tier.discountPercent}%</em>` : ''}</span>
         ${perks.length ? `<span class="tier-perks">${perks.map((perk) => escapeHtml(perk)).join(' · ')}</span>` : ''}</span>
-      <span class="tier-price"><b data-tier-total>${escapeHtml(format(total, currency, opts.locale))}</b>${style.showCompare !== false && compare > total ? `<s data-tier-compare>${escapeHtml(format(compare, currency, opts.locale))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small data-tier-unit>${escapeHtml(format(perUnit, currency, opts.locale))} each</small>` : ''}</span>
+      <span class="tier-price"><b data-tier-total>${escapeHtml(format(total, currency, opts.locale))}</b>${style.showCompare !== false && compare > total ? `<s data-tier-compare>${escapeHtml(format(compare, currency, opts.locale))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small data-tier-unit>${total%tier.quantity?'≈ ':''}${escapeHtml(format(perUnit, currency, opts.locale))} each</small>` : ''}</span>
       ${tier.badge ? `<span class="tier-badge">${escapeHtml(tier.badge)}</span>` : ''}</label>`
   })
   return `<div class="bundle bundle--${escapeHtml(style.layout ?? 'stacked')}" style="${style.accent ? `--bundle-accent:${escapeHtml(style.accent)};` : ''}${style.radius ? `--bundle-radius:${escapeHtml(style.radius)};` : ''}">

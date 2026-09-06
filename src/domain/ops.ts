@@ -3,7 +3,8 @@ import { id } from '../lib/ids.ts'
 import { createProduct, getProduct, listProducts } from './catalog.ts'
 import { createReview } from './reviews.ts'
 import { listOrders } from './orders.ts'
-import type { Order, Product, Supplier } from './types.ts'
+import type { Order, Product, Supplier, Media } from './types.ts'
+import { readProductImages } from '../pages/product-media-import.ts'
 import type { TrackingEvent, TrackingSnapshot } from '../shipping/seventeen-track.ts'
 
 /**
@@ -398,7 +399,7 @@ export function importReviews(db: Db, storeId: string, csv: string, opts: { prod
 
 /* ------------------------------------------------------- product import */
 
-export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
+export type ImportedProduct = { title: string; description: string; images: string[]; media?: Media[]; mediaIssues?: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
 
 /**
  * Import a product from a URL.
@@ -417,7 +418,31 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
       const response = await fetchImpl(jsonUrl, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
       if (response.ok) {
         const payload = (await response.json()) as { product?: ShopifyProduct }
-        if (payload.product) return fromShopify(payload.product, url)
+        if (payload.product) {
+          const imported = fromShopify(payload.product, url)
+          // The Ajax product feed exposes ordered videos as well as original images.
+          try {
+            const mediaResponse = await fetchImpl(`${source.origin}/products/${shopifyMatch[1]}.js`, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
+            const feed = mediaResponse.ok ? await mediaResponse.json() as { media?: Array<{media_type?:string;src?:string;alt?:string;preview_image?:{src?:string};sources?:Array<{url:string;mime_type?:string;width?:number}>}> } : null
+            if (Array.isArray(feed?.media) && feed.media.length) {
+              const media: Media[] = []
+              for (const item of feed.media) {
+                if (item.media_type === 'image' && item.src) media.push({ url: new URL(item.src, url).href, alt: item.alt || '', kind: 'image' })
+                else if (item.media_type === 'video') {
+                  const file = (item.sources || []).filter(source => source.mime_type === 'video/mp4' || /\.mp4([?#]|$)/i.test(source.url)).sort((a,b) => (b.width || 0) - (a.width || 0))[0]
+                  if (file) media.push({ url: new URL(file.url, url).href, alt: item.alt || '', kind: 'video', ...(item.preview_image?.src ? { poster: new URL(item.preview_image.src,url).href } : {}) })
+                  else (imported.mediaIssues ??= []).push('A source product video has no downloadable MP4. Keep the source player or upload its original video; its poster was not imported as a slide.')
+                } else if (item.media_type !== 'image') (imported.mediaIssues ??= []).push(`Source product media ${item.media_type || 'of unknown type'} needs its original player or model support; no still image was substituted.`)
+              }
+              // Never replace a complete image feed with an incomplete preview-only feed.
+              if (imported.images.every(url => media.some(item => item.kind === 'image' && item.url === url))) {
+                imported.media = media
+                imported.images = media.filter(item => item.kind === 'image').map(item => item.url)
+              }
+            }
+          } catch { /* The original .json image list remains authoritative if Ajax media is unavailable. */ }
+          return imported
+        }
       }
     } catch { /* fall through to the generic path */ }
   }
@@ -426,9 +451,10 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
   return fromHtml(await response.text(), url)
 }
 
-type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
+type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string; alt?: string; position?: number }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
 
 function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
+  const sourceImages = [...(product.images ?? [])].sort((a,b) => (a.position ?? 0) - (b.position ?? 0))
   const imagesById = new Map((product.images ?? []).flatMap((image) => image.id === undefined ? [] : [[image.id, image.src] as const]))
   const variants = (product.variants ?? []).map((variant) => {
     const image = variant.featured_image?.src || (variant.image_id === undefined || variant.image_id === null ? '' : imagesById.get(variant.image_id)) || ''
@@ -437,7 +463,8 @@ function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
   return {
     title: product.title,
     description: stripHtml(product.body_html ?? ''),
-    images: (product.images ?? []).map((image) => image.src).slice(0, 24),
+    images: sourceImages.map((image) => new URL(image.src, url).href),
+    media: sourceImages.map(image => ({ url: new URL(image.src, url).href, alt: image.alt || '', kind: 'image' })),
     priceCents: variants[0]?.priceCents ?? null,
     currency: 'USD',
     variants,
@@ -453,9 +480,10 @@ function fromHtml(html: string, url: string): ImportedProduct {
   const description = decode(meta('og:description') || meta('description'))
   const priceRaw = meta('product:price:amount') || meta('og:price:amount') || /"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)/.exec(html)?.[1] || ''
   const currency = meta('product:price:currency') || meta('og:price:currency') || /"priceCurrency"\s*:\s*"([A-Z]{3})"/.exec(html)?.[1] || 'USD'
-  const images = [...new Set([meta('og:image'), ...[...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:avif|gif|jpe?g|png|webp)[^"']*)["']/gi)].map((match) => match[1] as string)].filter(Boolean).map((src) => { try { return new URL(src, url).toString() } catch { return '' } }).filter(Boolean))].slice(0, 24)
+  const media = readProductImages(html, url)
+  const images = media.filter(item => item.kind !== 'video').map(item => item.url)
   const priceCents = priceRaw ? Math.round(parseFloat(priceRaw) * 100) : null
-  return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
+  return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, media, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
 }
 
 function stripHtml(input: string): string {
@@ -492,7 +520,7 @@ export function createFromImport(
     description: imported.description,
     status: opts.status ?? 'draft',
     heroImage: imported.images[0] ?? '',
-    media: imported.images.map((url) => ({ url, alt: imported.title })),
+    media: imported.media?.map(item => ({ ...item, alt: item.alt || imported.title })) ?? imported.images.map((url) => ({ url, alt: imported.title })),
     options: imported.options.map((option) => ({ title: option.title, values: option.values.map((value) => ({ value })) })),
     tags: ['imported'],
     metadata: imported.metadata ?? {},

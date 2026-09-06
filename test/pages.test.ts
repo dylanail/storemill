@@ -466,7 +466,9 @@ test('bundle tiers re-price against the variant the buyer picks', () => {
   const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
   const pdp = productPage(view as never, { product: getProduct(db, store.id, product.id)!, stats: statsFor(db, store.id, product.id), reviews: [], companions: [] })
   assert.match(pdp, /data-tier-total/, 'and the page can find the number to change')
-  assert.match(pdp, /input\.dataset\.discount/, 'picking a variant re-prices every tier from that variant')
+  assert.match(pdp, /input\.dataset\.variantPrices/, 'picking a variant uses the same price calculation as the cart')
+  const quotes=JSON.parse([...widget.matchAll(/data-variant-prices="([^"]*)"/g)][1]![1]!.replace(/&quot;/g,'"'))
+  assert.equal(quotes[product.variants[1]!.id].total,'$144.00')
 })
 
 test('the buybox promises only what the store has actually configured', () => {

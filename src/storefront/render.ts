@@ -370,7 +370,7 @@ export function productPage(
   // product, two ways to buy it, with the difference priced honestly.
   const bundle = bundleFor(view.db, view.store.id, product.id)
   const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.region?.currency ?? view.store.currency, {
-    variantPriceCents: convertCents(cheapest.priceCents, view.region, view.store.currency), locale: view.region?.locale,
+    variantPriceCents: convertCents(cheapest.priceCents, view.region, view.store.currency), locale: view.region?.locale, currencyRate: convertCents(100, view.region, view.store.currency) / 100,
   }) : ''
   const promises = storePromises(view)
 
@@ -444,12 +444,11 @@ ${qaSection(view, product)}
     document.getElementById('pdp-price').textContent = money(match.price);
     document.querySelectorAll('#pdp-form .tier').forEach(function(card){
       var input = card.querySelector('input[name=quantity]'); if (!input) return;
-      var quantity = Number(input.value) || 1, off = Number(input.dataset.discount || 0);
-      var full = match.price * quantity, total = Math.round(full * (1 - off / 100));
-      input.dataset.total = money(total);
-      var b = card.querySelector('[data-tier-total]'); if (b) b.textContent = money(total);
-      var s = card.querySelector('[data-tier-compare]'); if (s) s.textContent = money(full);
-      var each = card.querySelector('[data-tier-unit]'); if (each) each.textContent = money(Math.round(total / quantity)) + ' each';
+      var quote = JSON.parse(input.dataset.variantPrices || '{}')[match.id]; if (!quote) return;
+      input.dataset.total = quote.total;
+      var b = card.querySelector('[data-tier-total]'); if (b) b.textContent = quote.total;
+      var s = card.querySelector('[data-tier-compare]'); if (s) { s.textContent = quote.compare; s.hidden = !quote.compare; }
+      var each = card.querySelector('[data-tier-unit]'); if (each) each.textContent = quote.each;
     });
     var tier = document.querySelector('#pdp-form input[name=quantity]:checked');
     var total = tier && tier.dataset.total ? tier.dataset.total : money(match.price);
@@ -681,19 +680,20 @@ function reviewsSection(view: StoreView, product: Product, stats: ReviewStats, r
 export function cartPage(view: StoreView, totals: Totals): string {
   const cart = view.cart
   const items = cart?.items ?? []
+  const pricedLines=cart?cartDisplayLines(view.db,view.store.id,cart,totals):[]
   const gap = totals.freeShippingGapCents
   const body = `<section class="wrap"><div class="section-head"><h2>${t(view, 'cart', 'Your cart')}</h2><span class="eyebrow">${items.length} lines</span></div>
   ${items.length
       ? `<div class="cart-layout">
     <table class="lines cart-lines">${items
       .map(
-        (item) => `<tr><td style="width:80px"><img src="${escapeHtml(item.image)}" alt=""></td>
+        (item,index) => `<tr><td style="width:80px"><img src="${escapeHtml(item.image)}" alt=""></td>
         <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}${item.source ? ` &middot; added from ${escapeHtml(item.source)}` : ''}</div></td>
         <td style="width:130px"><form method="post" action="${view.base}/cart/update" style="display:flex;gap:.35rem">
           <input type="hidden" name="variantId" value="${escapeHtml(item.variantId)}">
           <input name="quantity" type="number" min="0" value="${item.quantity}" style="width:72px" aria-label="Quantity">
           <button class="btn btn--ghost" style="padding:.5rem .7rem;font-size:11px" type="submit">Set</button></form></td>
-        <td style="width:110px;text-align:right">${baseMoney(item.unitCents * item.quantity, view)}</td></tr>`,
+        <td style="width:110px;text-align:right">${money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view)}${(pricedLines[index]?.compareAtLineCents??0)>(pricedLines[index]?.lineCents??0)?`<br><s class="micro">${money(pricedLines[index]!.compareAtLineCents, view)}</s>`:''}</td></tr>`,
       )
       .join('')}</table>
     <div>
