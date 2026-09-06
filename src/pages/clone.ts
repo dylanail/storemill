@@ -2,6 +2,7 @@ import { copyStylesheet, expandStyleImports } from './clone-styles.ts'
 import { decodeLink, discoverPageLinks, type CopyReport } from './site-copy.ts'
 import { localizeHtmlImages, localizeMediaUrls, mapMediaDocument, resolveMediaUrl, rewriteHtmlImages, type ImageCopyOptions, type ImageLocalizationReport } from './clone-media.ts'
 import { captureCloneSource, type CapturedSource, type CaptureReport } from './clone-capture.ts'
+import { resolveSourceNavigation } from './source-navigation.ts'
 import { mergeImageReports } from './clone-report.ts'
 
 export type { ImageLocalizationReport, ImageCopyEntry } from './clone-media.ts'
@@ -25,6 +26,8 @@ export type CloneOptions = ImageCopyOptions & {
   sourceCapture?: Pick<CapturedSource, 'html' | 'url'> & Partial<CapturedSource>
   /** Static fixture/import mode is explicit; public URL copies render before scripts are stripped. */
   captureMode?: 'rendered' | 'static'
+  discoverSite?: boolean
+  onProgress?: (message: string) => void
 }
 
 export type CloneResult = {
@@ -40,13 +43,15 @@ export type CloneResult = {
   links?: string[]
   hasProductData?: boolean
   report?: CopyReport
+  commerceHtml?: string
+  nextStep?: string
 }
 
 const UA = 'Mozilla/5.0 (compatible; storemillClone/1.0)'
 
 export async function clonePage(url: string, options: CloneOptions): Promise<CloneResult> {
   stopIfAborted(options.signal)
-  const capture = options.sourceCapture ?? (options.captureMode !== 'static' && !options.fetchImpl ? await captureCloneSource(url, { signal: options.signal }) : undefined)
+  const capture = options.sourceCapture ?? (options.captureMode !== 'static' && !options.fetchImpl ? await captureCloneSource(url, { signal: options.signal, onProgress: options.onProgress }) : undefined)
   options = { ...options, sourceCapture: capture, localizedImages: options.localizedImages ?? new Map<string, string>() }
   const fetchImpl = options.fetchImpl ?? fetch
   const notes: string[] = [...(options.sourceCapture?.notes ?? [])]
@@ -74,7 +79,10 @@ export async function clonePage(url: string, options: CloneOptions): Promise<Clo
   // <base> would re-root every relative URL on the clone; we resolve them ourselves.
   const base = /<base[^>]+href=["']([^"']+)/i.exec(html)?.[1]
   const root = base ? new URL(base, finalUrl) : finalUrl
-  const links = discoverPageLinks(html, root.toString())
+  const commerceHtml = html
+  const navigation = options.discoverSite ? await resolveSourceNavigation(html, finalUrl.href, options) : undefined
+  if (navigation) { html = navigation.html; notes.push(...navigation.issues); copyIssues.push(...navigation.issues) }
+  const links = [...new Set([...discoverPageLinks(html, root.toString()), ...(capture?.links ?? []), ...(navigation?.links ?? [])])]
   html = html.replace(/<base[^>]*>/gi, '')
   // Source policies and refresh redirects cannot control the owned document.
   html = mapMediaDocument(html, tag => /^<meta\b/i.test(tag) && /\shttp-equiv\s*=\s*(?:"(?:content-security-policy|refresh)"|'(?:content-security-policy|refresh)'|(?:content-security-policy|refresh)(?=\s|>))/i.test(tag) ? '' : tag)
@@ -150,6 +158,7 @@ export async function clonePage(url: string, options: CloneOptions): Promise<Clo
 
   // The report includes disabled/limited/failed images too, so a partial copy
   // is never silently presented as complete.
+  options.onProgress?.('Copying images and styles from ' + finalUrl.href)
   const localized = await localizeClonedHtml(html, root.toString(), options)
   html = localized.html
   const reports = [localized.report]
@@ -175,7 +184,7 @@ export async function clonePage(url: string, options: CloneOptions): Promise<Clo
   if (!imageReport.complete) notes.unshift(`Image copy incomplete: ${imageReport.failed} failed and ${imageReport.skipped} skipped. See the image report for every source URL and reason.`)
   const captureReport: CaptureReport = capture?.captureReport ? { ...capture.captureReport, issues: [...capture.captureReport.issues] } : { mode: 'static', complete: false, viewports: [], issues: ['Static HTML only: JavaScript-generated images and embedded widgets were not verified.'] }
   if (copyIssues.length) { captureReport.complete = false; captureReport.issues = [...new Set([...captureReport.issues, ...copyIssues])]; notes.push(...copyIssues) }
-  return { html, title, description, sourceUrl: finalUrl.toString(), stylesheets, imagesLocalized, imageReport, captureReport, notes, links, hasProductData }
+  return { html, title, description, sourceUrl: finalUrl.toString(), stylesheets, imagesLocalized, imageReport, captureReport, notes, links, hasProductData, ...(options.discoverSite ? {commerceHtml,nextStep:navigation?.next} : {}) }
 
 }
 

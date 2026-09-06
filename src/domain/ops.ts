@@ -398,7 +398,7 @@ export function importReviews(db: Db, storeId: string, csv: string, opts: { prod
 
 /* ------------------------------------------------------- product import */
 
-export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; sku?: string; image?: string; sourceId?: string; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string }
+export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
 
 /**
  * Import a product from a URL.
@@ -426,13 +426,13 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
   return fromHtml(await response.text(), url)
 }
 
-type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
+type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
 
 function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
   const imagesById = new Map((product.images ?? []).flatMap((image) => image.id === undefined ? [] : [[image.id, image.src] as const]))
   const variants = (product.variants ?? []).map((variant) => {
     const image = variant.featured_image?.src || (variant.image_id === undefined || variant.image_id === null ? '' : imagesById.get(variant.image_id)) || ''
-    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
+    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.compare_at_price && Number(variant.compare_at_price)>Number(variant.price)?{compareAtCents:Math.round(Number(variant.compare_at_price)*100)}:{}), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
   })
   return {
     title: product.title,
@@ -486,7 +486,7 @@ export function createFromImport(
   const supplierCost = opts.asSupplier ? (imported.priceCents ?? 0) : 0
   const supplierShipping = Math.max(0, Math.round(opts.supplierShippingCents ?? 0))
   const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round(((cents + supplierShipping) * markup) / 100) * 100 - 1) : cents)
-  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
+  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.compareAtCents!==undefined&&!opts.asSupplier?{compareAtCents:variant.compareAtCents}:{}), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: variant.inventory ?? 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
   const product = createProduct(db, storeId, {
     title: imported.title,
     description: imported.description,
@@ -495,10 +495,11 @@ export function createFromImport(
     media: imported.images.map((url) => ({ url, alt: imported.title })),
     options: imported.options.map((option) => ({ title: option.title, values: option.values.map((value) => ({ value })) })),
     tags: ['imported'],
+    metadata: imported.metadata ?? {},
     supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, shippingCents: supplierShipping, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
     variants,
   })
-  const mapping = Object.fromEntries(product.variants.flatMap((variant, index) => imported.variants[index]?.sourceId ? [[`sourceVariant:${variant.id}`, imported.variants[index]!.sourceId!]] : []))
+  const mapping = Object.fromEntries(product.variants.flatMap((variant, index) => [...(imported.variants[index]?.sourceId ? [[`sourceVariant:${variant.id}`, imported.variants[index]!.sourceId!]] : []), ...(imported.variants[index]?.sourceAliases ? [[`sourceVariantAliases:${variant.id}`, JSON.stringify(imported.variants[index]!.sourceAliases)]] : [])]))
   if (Object.keys(mapping).length) {
     db.update('products', product.id, { metadata: { ...product.metadata, ...mapping } })
     return { ...product, metadata: { ...product.metadata, ...mapping } }

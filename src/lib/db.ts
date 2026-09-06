@@ -727,6 +727,19 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
     url TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'media', label TEXT NOT NULL DEFAULT '',
     UNIQUE(store_id,url));` },
+  { name: '026_asset_import_jobs', sql: `CREATE TABLE asset_import_jobs (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    request_key TEXT NOT NULL DEFAULT '', input TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued', progress TEXT NOT NULL DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX asset_import_owner ON asset_import_jobs(owner_id, created_at DESC);
+    CREATE UNIQUE INDEX asset_import_request ON asset_import_jobs(owner_id,request_key) WHERE request_key <> '';
+    CREATE TABLE post_purchase_offers (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE, page_id TEXT NOT NULL,
+      status TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '{}', payment_intent_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
 ]
 
 function migrate(db: Db) {

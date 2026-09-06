@@ -1,3 +1,4 @@
+import { drainImports } from './control/asset-import-jobs.ts'
 import './lib/env.ts'
 import { recoverHealthFixes } from './storefront/health-fixes.ts'
 import { createReadStream } from 'node:fs'
@@ -191,6 +192,7 @@ recoverHealthFixes(db)
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
 setInterval(() => void sweepMarketingFlows(db, { origin }).catch(() => undefined), 5 * 60_000).unref()
 setInterval(() => void dispatchServerEvents(db).catch(() => undefined), 15_000).unref()
+setInterval(() => void drainImports(db).catch(() => undefined), 1_000).unref()
 setInterval(() => void drainRebrands(db).catch(() => undefined), 2_000).unref()
 setInterval(() => void drainAssistantQueue(db).catch(() => undefined), 1_000).unref()
 // Experiment decisions are cheap, local reads. Running them beside lifecycle

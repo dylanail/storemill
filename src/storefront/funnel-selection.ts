@@ -9,7 +9,7 @@ import type { StoreView } from './render.ts'
 export function funnelSelection(view: StoreView): string {
   if (view.store.kind !== 'funnel' || !view.cart) return ''
   const cart = view.cart
-  const options = listProducts(view.db, view.store.id, { status: 'published', limit: 250 }).filter(product => !product.metadata.hidden).flatMap(product => {
+  const options = listProducts(view.db, view.store.id, { status: 'published', limit: 250 }).filter(product => !product.metadata.hidden&&(!view.checkoutProductId||product.id===view.checkoutProductId)).flatMap(product => {
     const bundle = bundleFor(view.db, view.store.id, product.id)
     return product.variants.flatMap(variant => {
       const quantities = [...new Set([1, ...(bundle?.tiers.map(tier => tier.quantity) ?? [])])].sort((a, b) => a - b)

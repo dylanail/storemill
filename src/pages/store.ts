@@ -154,7 +154,8 @@ export function homePage(db: Db, storeId: string, opts: { preview?: boolean } = 
 }
 
 /** Copied and native checkouts use the same store-owned payment endpoints. */
-export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean; productId?: string } = {}): Page | null {
+  if(opts.productId){const matching=db.one(`SELECT * FROM pages WHERE store_id=? AND role='checkout' AND product_id=? ${opts.preview?'':"AND status='published'"} ORDER BY created_at,rowid LIMIT 1`,storeId,opts.productId);if(matching)return rowToPage(matching)}
   const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
   return row ? rowToPage(row) : null
 }

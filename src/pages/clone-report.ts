@@ -2,8 +2,9 @@ import type { ImageCopyEntry, ImageLocalizationReport } from './clone-media.ts'
 import type { Db } from '../lib/db.ts'
 import type { CaptureReport } from './clone-capture.ts'
 import { recordAudit } from '../control/todos.ts'
+import type { CopyReport } from './site-copy.ts'
 
-export type SavedCopyReport = { images?: ImageLocalizationReport; capture?: CaptureReport; notes: string[] }
+export type SavedCopyReport = { images?: ImageLocalizationReport; capture?: CaptureReport; notes: string[]; site?: CopyReport; pages?: Array<{id:string;title:string;role:string;source:string;productId:string}> }
 export function saveCopyReport(db: Db, storeId: string, pageId: string, report: SavedCopyReport): void {
   recordAudit(db, { storeId, actorType: 'system', action: 'copy_media_report', target: pageId, diff: report })
 }

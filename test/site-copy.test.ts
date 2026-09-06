@@ -142,7 +142,7 @@ test('funnel crawl preserves directory URLs while resolving relative next steps'
   })
   const result = await importAssetFromUrl(db, user.id, { url: 'https://example.com/', kind: 'funnel', fetchImpl })
   assert.equal(result.pages.length, 3)
-  assert.equal(result.report.complete, true)
+  assert.equal(result.report.complete, false, 'unpriced funnel pages require review')
   assert.ok(result.pages.some((page) => page.sourceUrl === 'https://example.com/flow/checkout'))
 })
 
@@ -177,7 +177,7 @@ test('Funnelish anchor actions discover an opaque checkout URL through its redir
   assert.equal(copied.pages[1]!.role, 'checkout')
   assert.equal(copied.pages[1]!.sourceUrl, 'https://get.example.com/beetroot/gn/of')
   assert.match(copied.page.rawHtml, /action="\/checkout"/)
-  assert.equal(copied.report.complete, true)
+  assert.equal(copied.report.complete, false, 'a missing catalog is an incomplete commerce copy')
   assert.equal(copied.products.length, 0, 'a missing catalog price is never replaced by an invented default')
   assert.match(copied.clone.notes.join('\n'), /No explicit purchasable price/)
 })

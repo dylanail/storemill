@@ -1,10 +1,13 @@
+import { readSourceCommerce, bindSourceProducts, type SourceProduct } from '../pages/source-commerce.ts'
+import { createPromotion } from '../domain/promotions.ts'
+import { getProduct } from '../domain/catalog.ts'
 import { sourceThemeFromHtml, fontFacesFromHtml } from '../pages/source-theme.ts'
 import type { Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { relocateUploads } from '../lib/uploads.ts'
 import { clonePage, localizeImageUrls, type CloneResult, type ImageLocalizationReport } from '../pages/clone.ts'
 import { mergeImageReports, saveCopyReport } from '../pages/clone-report.ts'
-import { canonicalPageUrl, copyUrlPriority, discoverPageLinks, inferCopiedPage, isCopyablePageUrl, isPaymentUrl, rewriteCopiedLinks, type CopyReport } from '../pages/site-copy.ts'
+import { canonicalPageUrl, relatedSiteOrigin, copyUrlPriority, discoverPageLinks, inferCopiedPage, isCopyablePageUrl, isPaymentUrl, rewriteCopiedLinks, type CopyReport } from '../pages/site-copy.ts'
 import { bindImportedOfferProduct, planImportedOfferProduct } from '../pages/imported-offers.ts'
 import { installImportedBundle, planImportedBundle, repairImportedBundleHtml } from '../pages/imported-bundles.ts'
 import { createPage, updatePage, type Page } from '../pages/store.ts'
@@ -18,6 +21,7 @@ import { setBuildMode, setSiteShape } from './build.ts'
 import { addRedirect } from '../seo/schema.ts'
 
 export type AssetKind = Store['kind']
+export type ImportProgress = { phase: 'pages'|'products'|'wiring'|'done'; percent: number; task: string; copied: number; discovered: number; products: number; images: number; currentUrl: string }
 
 export function createBlankAsset(db: Db, ownerId: string, input: { name: string; kind: AssetKind; currency?: string }): Store {
   const name = input.name.trim()
@@ -36,16 +40,21 @@ export function createBlankAsset(db: Db, ownerId: string, input: { name: string;
 export async function importAssetFromUrl(
   db: Db,
   ownerId: string,
-  input: { url: string; name?: string; kind: AssetKind; currency?: string; additionalUrls?: string[]; maxPages?: number; fetchImpl?: typeof fetch; signal?: AbortSignal },
+  input: { url: string; name?: string; kind: AssetKind; currency?: string; additionalUrls?: string[]; maxPages?: number; fetchImpl?: typeof fetch; signal?: AbortSignal; onProgress?: (progress: ImportProgress) => void },
 ): Promise<{ store: Store; page: Page; pages: Page[]; products: Product[]; clone: CloneResult; report: CopyReport }> {
   stopIfAborted(input.signal)
   const url = input.url.trim()
   if (!/^https?:\/\/[^\s]+$/i.test(url)) throw new Error('Paste a full URL starting with https://')
+  let progress: ImportProgress = {phase:'pages',percent:1,task:'Opening the starting page',copied:0,discovered:1,products:0,images:0,currentUrl:url}
+  const emit = (patch: Partial<ImportProgress>) => { progress={...progress,...patch,percent:Math.max(progress.percent,patch.percent??progress.percent)};input.onProgress?.({...progress}) }
+  emit({})
   const pendingId = id('import')
   const localizedImages = new Map<string, string>()
   const cloneOptions = {
     storeId: pendingId,
     keepScripts: false,
+    discoverSite: true,
+    onProgress: (task: string) => emit({task,images:localizedImages.size}),
     localizedImages,
     stylesheetCache: new Map<string, string>(),
     ...(input.signal ? { signal: input.signal } : {}),
@@ -59,9 +68,10 @@ export async function importAssetFromUrl(
   const homeClone = await clonePage(url, cloneOptions)
   const documents: CloneResult[] = [homeClone]
   const report: CopyReport = { discovered: 1, copied: 1, complete: true, failed: [], remaining: [], externalSteps: [] }
-  const maxPages = Number.isFinite(input.maxPages) ? Math.max(1, Math.min(100, Math.floor(input.maxPages as number))) : 50
+  const maxPages = Number.isFinite(input.maxPages) ? Math.max(1, Math.min(1000, Math.floor(input.maxPages as number))) : 250
   const origins = new Set([new URL(homeClone.sourceUrl).origin, ...additionalUrls.filter((value) => !isPaymentUrl(value)).map((value) => new URL(value).origin)])
   const queued: string[] = []
+  const nextSteps = new Set<string>(homeClone.nextStep ? [canonicalPageUrl(homeClone.nextStep)] : [])
   const seen = new Set([canonicalPageUrl(homeClone.sourceUrl)])
   const requested = new Set(seen)
   const aliases = new Map<string, string>([[canonicalPageUrl(url), canonicalPageUrl(homeClone.sourceUrl)]])
@@ -70,6 +80,7 @@ export async function importAssetFromUrl(
     if (requested.has(canonical)) return
     const candidate = new URL(canonical)
     const step = inferCopiedPage(canonical, '', input.kind === 'funnel').role
+    if (relatedSiteOrigin(canonical, origins)) origins.add(candidate.origin)
     if (isPaymentUrl(canonical) || (!origins.has(candidate.origin) && ['checkout', 'upsell', 'downsell', 'thankyou'].includes(step))) {
       if (!report.externalSteps.includes(canonical)) report.externalSteps.push(canonical)
       return
@@ -85,23 +96,27 @@ export async function importAssetFromUrl(
   }
   additionalUrls.forEach((value) => enqueue(value, true))
   for (const linked of homeClone.links ?? discoverPageLinks(homeClone.html, homeClone.sourceUrl)) enqueue(linked)
+  emit({copied:1,discovered:requested.size,percent:8})
   while (queued.length && documents.length < maxPages) {
-    queued.sort((a, b) => copyUrlPriority(a) - copyUrlPriority(b))
+    queued.sort((a, b) => Number(nextSteps.has(canonicalPageUrl(b))) - Number(nextSteps.has(canonicalPageUrl(a))) || copyUrlPriority(a) - copyUrlPriority(b))
     const linked = queued.shift() as string
     if (seen.has(canonicalPageUrl(linked))) continue
     seen.add(canonicalPageUrl(linked))
+    emit({currentUrl:linked,task:'Copying '+linked,percent:10+Math.floor(58*documents.length/(documents.length+queued.length+1)),copied:documents.length,discovered:requested.size,images:localizedImages.size})
     try {
       const document = await clonePage(linked, cloneOptions)
       const final = canonicalPageUrl(document.sourceUrl)
-      if (!origins.has(new URL(final).origin) || isPaymentUrl(final)) {
+      if (!relatedSiteOrigin(final, origins) || isPaymentUrl(final)) {
         report.failed.push({ url: linked, reason: `Redirected outside the copied site to ${new URL(final).origin}.` })
         continue
       }
+      origins.add(new URL(final).origin)
       aliases.set(canonicalPageUrl(linked), final)
       if (documents.some((entry) => canonicalPageUrl(entry.sourceUrl) === final)) continue
       seen.add(final)
       requested.add(final)
       documents.push(document)
+      if(document.nextStep)nextSteps.add(canonicalPageUrl(document.nextStep))
       for (const discovered of document.links ?? discoverPageLinks(document.html, document.sourceUrl)) enqueue(discovered)
     } catch (error) {
       stopIfAborted(input.signal)
@@ -118,43 +133,49 @@ export async function importAssetFromUrl(
   homeClone.notes.push(`Copied ${documents.length} pages. Discovery follows readable links and declared next steps; add unlinked, protected or post-purchase step URLs explicitly.`)
 
 
-  // A product page is more than HTML. Import Shopify's structured product JSON
-  // (or schema/Open Graph as a fallback) so the cloned store has a purchasable
-  // catalog entry, variants, and its full-size product media as owned uploads.
-  const importedProducts: ImportedProduct[] = []
-  const productImageReports: ImageLocalizationReport[] = []
-  const productFetch = input.signal
-    ? ((request: string | URL | Request, init?: RequestInit) => (input.fetchImpl ?? fetch)(request, { ...init, signal: input.signal })) as typeof fetch
-    : input.fetchImpl ?? fetch
-  const offerPlans = new Map(documents.map((document) => [canonicalPageUrl(document.sourceUrl), planImportedOfferProduct(document.html, document.sourceUrl, { currency: input.currency?.toUpperCase() || 'USD' })]))
-  const productSources = [...new Set(documents.filter((document) => isProductUrl(document.sourceUrl) || offerPlans.get(canonicalPageUrl(document.sourceUrl)) || (document.hasProductData && !['cart', 'checkout', 'thankyou'].includes(inferCopiedPage(document.sourceUrl, document.html, input.kind === 'funnel').role))).map((document) => canonicalPageUrl(document.sourceUrl)))]
-  for (const source of productSources) {
-    try {
-      const offerPlan = offerPlans.get(source)
-      const imported = offerPlan?.product ?? await importProductFromUrl(source, productFetch)
-      if (offerPlan) homeClone.notes.push(...offerPlan.notes)
-      if (!imported.variants.length || imported.variants.some((variant) => !Number.isSafeInteger(variant.priceCents) || variant.priceCents <= 0)) throw new Error('No explicit purchasable price was found. Assign this page a product and price in the editor.')
-      const remoteMedia = [...new Set([...imported.images, ...imported.variants.map((variant) => variant.image ?? '').filter(Boolean)])]
-      const owned = await localizeImageUrls(remoteMedia, {
-        storeId: pendingId,
-        localizedImages,
-        ...(input.signal ? { signal: input.signal } : {}),
-        ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
-      }, source)
-      productImageReports.push(owned.report)
-      const mediaBySource = new Map(remoteMedia.map((remote, index) => [remote, owned.urls[index] ?? remote]))
-      importedProducts.push({
-        ...imported,
-        source,
-        images: imported.images.map((image) => mediaBySource.get(image) ?? image),
-        variants: imported.variants.map((variant) => variant.image ? { ...variant, image: mediaBySource.get(variant.image) ?? variant.image } : variant),
-      })
-    } catch (error) {
-      stopIfAborted(input.signal)
-      homeClone.notes.push(`Saved the product page but could not create its catalog product from ${source}: ${error instanceof Error ? error.message : 'could not read it'}`)
+  emit({phase:'products',percent:70,task:'Finding products, prices and offers across the copied site',copied:documents.length,discovered:report.discovered})
+  const sourceData=new Map(documents.map(document=>[canonicalPageUrl(document.sourceUrl),readSourceCommerce(document.commerceHtml||document.html,document.sourceUrl,input.currency?.toUpperCase()||'USD')]))
+  const roleFor=(document:CloneResult,index=0)=>{
+    const type=sourceData.get(canonicalPageUrl(document.sourceUrl))?.stepType
+    const roles:Record<number,Page['role']>={1:'checkout',2:'upsell',3:'thankyou',4:'downsell',7:'advertorial'}
+    const role=type===undefined?undefined:roles[type]
+    return role?{role,kind:(role==='checkout'?'checkout':role==='advertorial'?'advertorial':'custom') as Page['kind']}:inferCopiedPage(document.sourceUrl,document.html,input.kind==='funnel',index===0)
+  }
+  const commerce={products:0,linkedPages:0,bundles:0,bumps:0,upsells:0,downsells:0,issues:[] as Array<{url:string;reason:string}>}
+  const candidates=new Map<string,SourceProduct>(),keysByPage=new Map<string,string[]>()
+  const offerPlans=new Map(documents.map(document=>[canonicalPageUrl(document.sourceUrl),planImportedOfferProduct(document.html,document.sourceUrl,{currency:input.currency?.toUpperCase()||'USD'})]))
+  const unresolved: Array<{url:string;reason:string}>=[]
+  const productFetch=((request:string|URL|Request,init?:RequestInit)=>(input.fetchImpl??fetch)(request,{...init,...(input.signal?{signal:input.signal}:{})})) as typeof fetch
+  for(const [index,document] of documents.entries()){
+    const source=canonicalPageUrl(document.sourceUrl),data=sourceData.get(source)!,role=roleFor(document,index).role,offerPlan=offerPlans.get(source)
+    emit({currentUrl:source,percent:70+Math.floor(12*index/documents.length),task:'Reading products and prices: '+document.title,products:candidates.size})
+    commerce.issues.push(...data.issues.map(reason=>({url:source,reason})))
+    let found=data.products
+    // Shopify's catalog endpoint has complete variant/compare-at data; schema remains a fallback.
+    if(data.platform!=='funnelish'&&!offerPlan&&isProductUrl(source)){
+      try{const product=await importProductFromUrl(source,productFetch);if(!product.variants.length||product.variants.some(v=>!Number.isSafeInteger(v.priceCents)||v.priceCents<=0))throw Error('No explicit product price on this page');found=[{key:'product:'+source,product,purpose:'primary',sourceIds:[]}]}catch(error){stopIfAborted(input.signal);if(!found.length&&!offerPlan)unresolved.push({url:source,reason:error instanceof Error?error.message:'No explicit price'})}
+    }
+    if(!found.length&&offerPlan){found=[{key:'offer:'+source,product:offerPlan.product,purpose:'primary',sourceIds:[]}];document.notes.push(...offerPlan.notes)}
+    for(const entry of found){
+      if(entry.product.currency!==String(input.currency||'USD').toUpperCase()){commerce.issues.push({url:source,reason:`Source prices use ${entry.product.currency}; no automatic currency conversion was applied.`});continue}
+      if(entry.purpose==='primary'&&['upsell','downsell'].includes(role))entry.product.metadata={...entry.product.metadata,hidden:'true',sourcePurpose:role}
+      candidates.set(entry.key,candidates.get(entry.key)||entry)
+      keysByPage.set(source,[...new Set([...(keysByPage.get(source)||[]),entry.key])])
     }
   }
+  const importedProducts:ImportedProduct[]=[],productKeys:string[]=[],productImageReports:ImageLocalizationReport[]=[]
+  for(const [key,entry] of candidates){
+    const imported=entry.product
+    const remoteMedia=[...new Set([...imported.images,...imported.variants.map(v=>v.image||'').filter(Boolean)])]
+    emit({task:'Copying product media: '+imported.title,products:importedProducts.length,currentUrl:imported.source})
+    const owned=await localizeImageUrls(remoteMedia,{storeId:pendingId,localizedImages,...(input.signal?{signal:input.signal}:{}),...(input.fetchImpl?{fetchImpl:input.fetchImpl}:{})},imported.source)
+    productImageReports.push(owned.report)
+    const media=new Map(remoteMedia.map((url,index)=>[url,owned.urls[index]||url]))
+    importedProducts.push({...imported,images:imported.images.map(url=>media.get(url)||url),variants:imported.variants.map(v=>v.image?{...v,image:media.get(v.image)||v.image}:v)})
+    productKeys.push(key)
+  }
   stopIfAborted(input.signal)
+  emit({phase:'wiring',percent:84,task:'Creating the owned catalog and wiring pages',products:importedProducts.length,images:localizedImages.size})
   const inferredName = homeClone.title.split(/\s+[|–—]\s+/)[0]?.trim() || new URL(homeClone.sourceUrl).hostname.replace(/^www\./, '')
   const store = createBlankAsset(db, ownerId, {
     name: input.name?.trim() || inferredName.slice(0, 80),
@@ -170,11 +191,43 @@ export async function importAssetFromUrl(
     images: imported.images.map(rehome),
     variants: imported.variants.map((variant) => variant.image ? { ...variant, image: rehome(variant.image) } : variant),
   }, { asSupplier: false, status: 'draft' }))
-  const productBySource = new Map(products.map((product, index) => [canonicalPageUrl(importedProducts[index]?.source ?? ''), product]))
+  const productByKey=new Map(products.map((product,index)=>[productKeys[index]!,product]))
+  const ownProduct=(source:string)=>{const entries=(keysByPage.get(source)||[]).map(key=>candidates.get(key)!).filter(entry=>entry.purpose==='primary');return entries.length===1?productByKey.get(entries[0]!.key):undefined}
+  const productBySource=new Map<string,Product>()
+  for(const [index,document] of documents.entries()){
+    const source=canonicalPageUrl(document.sourceUrl),own=ownProduct(source)
+    if(own){productBySource.set(source,own);continue}
+    if (['upsell','downsell'].includes(roleFor(document,index).role)) { commerce.issues.push({url:source,reason:'This post-purchase page has no explicit priced offer; its commerce needs review.'}); continue }
+    if(!['offer','pdp','advertorial','checkout'].includes(roleFor(document,index).role))continue
+    const funnelId=sourceData.get(source)?.funnelId
+    const checkout=funnelId?documents.find(other=>sourceData.get(canonicalPageUrl(other.sourceUrl))?.funnelId===funnelId&&roleFor(other).role==='checkout'&&ownProduct(canonicalPageUrl(other.sourceUrl))):undefined
+    if(checkout){productBySource.set(source,ownProduct(canonicalPageUrl(checkout.sourceUrl))!);continue}
+    // Follow actual page edges to the nearest priced offer; do not choose a random catalog product.
+    let frontier=[source],visited=new Set<string>(),found:Product[]=[]
+    for(let depth=0;depth<12&&frontier.length&&!found.length;depth++){
+      const next:string[]=[]
+      for(const current of frontier){if(visited.has(current))continue;visited.add(current);const doc=documents.find(d=>canonicalPageUrl(d.sourceUrl)===current);for(const link of doc?.links||[]){const canonical=aliases.get(canonicalPageUrl(link))||canonicalPageUrl(link);const product=ownProduct(canonical);if(product&&!product.metadata.hidden)found.push(product);else if(!visited.has(canonical))next.push(canonical)}}
+      frontier=next
+    }
+    found=[...new Map(found.map(p=>[p.id,p])).values()]
+    if(found.length===1)productBySource.set(source,found[0]!)
+  }
+  for(const failure of unresolved)if(!productBySource.has(failure.url))commerce.issues.push({url:failure.url,reason:failure.reason+'; no unambiguous priced next step was found.'})
+  const variantBySource=new Map<string,{product:Product;variant:Product['variants'][number]}>()
+  for(const product of products)for(const variant of product.variants){const source=product.metadata['sourceVariant:'+variant.id];if(source)variantBySource.set(source,{product,variant})}
+  const shippingVariants=new Set<string>()
+  for(const data of sourceData.values())for(const [source,gifts] of Object.entries(data.giftRules)){
+    const paid=variantBySource.get(source);if(!paid)continue
+    const included=gifts.map(id=>variantBySource.get(id)).filter((v):v is NonNullable<typeof v>=>!!v&&v.variant.priceCents===0)
+    const shipping=included.filter(item=>/free shipping/i.test(item.product.title))
+    if(shipping.length&&!shippingVariants.has(paid.variant.id)){shippingVariants.add(paid.variant.id);createPromotion(db,store.id,{title:paid.variant.title+' — free shipping',kind:'free_shipping',automatic:true,rules:{variantIds:[paid.variant.id]}})}
+    const giftIds=included.filter(item=>!shipping.includes(item)).map(item=>item.variant.id)
+    if(giftIds.length){const fresh=getProduct(db,store.id,paid.product.id)!;db.update('products',fresh.id,{metadata:{...fresh.metadata,['includedGifts:'+paid.variant.id]:JSON.stringify(giftIds)}})}
+  }
   for (const [source, product] of productBySource) {
     try {
       const pathname = new URL(source).pathname
-      if (pathname !== `/products/${product.handle}`) addRedirect(db, store.id, pathname, `/products/${product.handle}`)
+      if (isProductUrl(source) && pathname !== `/products/${product.handle}` && !/checkout|upsell|downsell/i.test(pathname)) addRedirect(db, store.id, pathname, `/products/${product.handle}`)
     } catch { /* malformed source URLs were already rejected earlier */ }
   }
   // A one-product store often links to a longer canonical Shopify handle than
@@ -185,16 +238,20 @@ export async function importAssetFromUrl(
       if (pathname !== `/products/${products[0]?.handle}`) addRedirect(db, store.id, pathname, `/products/${products[0]?.handle}`)
     }
   }
+  const installedBundles=new Set<string>()
   const pages = documents.map((document, index) => {
+    emit({percent:86+Math.floor(10*index/documents.length),task:'Wiring page '+(index+1)+' of '+documents.length+': '+document.title,currentUrl:document.sourceUrl})
     const path = new URL(document.sourceUrl).pathname
     const product = productBySource.get(canonicalPageUrl(document.sourceUrl))
     const offerPlan = offerPlans.get(canonicalPageUrl(document.sourceUrl))
-    let boundHtml = offerPlan && product ? bindImportedOfferProduct(document.html, offerPlan, product) : document.html
+    let boundHtml = bindSourceProducts(offerPlan && product ? bindImportedOfferProduct(document.html, offerPlan, product) : document.html,products)
     try {
       const bundlePlan = planImportedBundle(document.html, document.sourceUrl)
       if (bundlePlan) {
-        if (!product) throw new Error('Link the copied bundle to its imported product before enabling package purchases.')
-        const installed = installImportedBundle(db, store.id, product.id, bundlePlan)
+        const bundled=products.find(candidate=>candidate.variants.some(variant=>candidate.metadata['sourceVariant:'+variant.id]===bundlePlan.sourceVariantId))||product
+        if (!bundled) throw new Error('No imported product matches this source bundle.')
+        const installed = installImportedBundle(db, store.id, bundled.id, bundlePlan)
+        installedBundles.add(installed.bundle.id)
         const repaired = repairImportedBundleHtml(boundHtml, bundlePlan, installed)
         if (!repaired.changed) throw new Error(repaired.reason || 'The copied bundle could not be placed in its source position.')
         boundHtml = repaired.html
@@ -208,21 +265,21 @@ export async function importAssetFromUrl(
     }
     const created = createPage(db, store.id, {
       title: index === 0 ? input.kind === 'store' ? 'Imported home page' : 'Imported sales page' : document.title || path.split('/').filter(Boolean).at(-1) || 'Imported page',
-      ...inferCopiedPage(document.sourceUrl, document.html, input.kind === 'funnel', index === 0),
+      ...roleFor(document,index),
       mode: 'html',
       rawHtml: boundHtml.split(`/_uploads/${pendingId}/`).join(`/_uploads/${store.id}/`),
       seo: { title: document.title, description: document.description },
       status: 'draft',
       sourceUrl: document.sourceUrl,
-      ...(product ? { productId: product.id, handle: product.handle } : {}),
+      ...(product ? { productId: product.id, ...(roleFor(document,index).role==='pdp'?{handle:product.handle}:{}) } : {}),
     })
     saveCopyReport(db, store.id, created.id, { images: document.imageReport ? JSON.parse(rehome(JSON.stringify(document.imageReport))) : undefined, capture: document.captureReport, notes: document.notes })
-    return index === 0 && input.kind === 'store' ? updatePage(db, store.id, created.id, { isHome: true }) : created
+    return index === 0 ? updatePage(db, store.id, created.id, { isHome: true }) : created
   })
   const page = pages[0] as Page
   const routes = pages.map((created, index) => ({
     source: documents[index]?.sourceUrl ?? '',
-    target: created.role === 'cart' ? '/cart' : created.role === 'checkout' ? '/checkout' : index === 0 && input.kind === 'store' ? '/' : `/pages/${created.handle}`,
+    target: created.role === 'cart' ? '/cart' : created.role === 'checkout' ? (pages.find(p=>p.role==='checkout')?.id===created.id?'/checkout':`/pages/${created.handle}`) : index === 0 ? '/' : `/pages/${created.handle}`,
   }))
   for (const [alias, final] of aliases) {
     const target = routes.find((route) => canonicalPageUrl(route.source) === final)?.target
@@ -230,14 +287,29 @@ export async function importAssetFromUrl(
   }
   const clonedNavigation: Theme['nav'] = input.kind === 'store' ? navigationFromClone(homeClone.html, homeClone.sourceUrl, routes) : []
   pages.forEach((created) => updatePage(db, store.id, created.id, { rawHtml: rewriteCopiedLinks(created.rawHtml, created.sourceUrl, routes) }))
-  if (input.kind === 'funnel') upsertFunnel(db, store.id, {
-    name: `${store.name} funnel`,
-    steps: pages.map(page => ({ pageId: page.id, label: page.title })),
-    offerPageId: pages.find((created) => created.role === 'offer' || created.role === 'pdp')?.id ?? page.id,
-    advertorialPageId: pages.find((created) => created.role === 'advertorial')?.id ?? '',
-    productId: products.length === 1 ? products[0]?.id ?? '' : '',
-    status: 'active',
-  })
+  const primaryPages=pages.filter(p=>p.productId&&['checkout','offer','pdp'].includes(p.role)&&!products.find(product=>product.id===p.productId)?.metadata.hidden)
+  const mainIds=[...new Set(primaryPages.map(p=>p.productId))]
+  for(const productId of mainIds.length?mainIds:input.kind==='funnel'?['']:[]){
+    const main=primaryPages.find(p=>p.productId===productId),sourceId=main?sourceData.get(canonicalPageUrl(main.sourceUrl))?.funnelId:undefined
+    const related=pages.filter(p=>sourceId?sourceData.get(canonicalPageUrl(p.sourceUrl))?.funnelId===sourceId:p.productId===productId||!p.productId&&['checkout','thankyou'].includes(p.role)&&!sourceData.get(canonicalPageUrl(p.sourceUrl))?.funnelId)
+    const bumpPages=related.filter(p=>p.role==='checkout'&&p.productId===productId)
+    const bumpKey=(bumpPages.length?bumpPages:related).flatMap(p=>keysByPage.get(canonicalPageUrl(p.sourceUrl))||[]).find(key=>candidates.get(key)?.purpose==='bump')
+    const bump=bumpKey?productByKey.get(bumpKey):undefined
+    const offer=(role:'upsell'|'downsell')=>{const page=related.find(p=>p.role===role&&p.productId),product=page?products.find(product=>product.id===page.productId):undefined;const variant=product?.variants.find(v=>product.metadata['sourceVariant:'+v.id]===product.metadata.sourceDefaultVariant)||product?.variants[0];return variant?{enabled:true,variantId:variant.id,variantIds:product!.variants.map(v=>v.id),discountPercent:0,headline:page!.title,pageId:page!.id}:{enabled:false}}
+    const upsell=offer('upsell'),downsell=offer('downsell')
+    const steps=related.filter(p=>!['page','cart'].includes(p.role)).sort((a,b)=>(sourceData.get(canonicalPageUrl(a.sourceUrl))?.stepOrder||0)-(sourceData.get(canonicalPageUrl(b.sourceUrl))?.stepOrder||0)).map(p=>{
+      const product=products.find(product=>product.id===p.productId),variant=product?.variants.find(v=>product.metadata['sourceVariant:'+v.id]===product.metadata.sourceDefaultVariant)||product?.variants[0]
+      const document=documents.find(d=>canonicalPageUrl(d.sourceUrl)===canonicalPageUrl(p.sourceUrl))
+      const next=pages.find(page=>document?.nextStep&&canonicalPageUrl(page.sourceUrl)===canonicalPageUrl(document.nextStep))
+      return {pageId:p.id,label:p.title,role:p.role,...(['upsell','downsell'].includes(p.role)&&variant?{offer:{enabled:true,pageId:p.id,variantId:variant.id,variantIds:product!.variants.map(v=>v.id),discountPercent:0,headline:p.title},nextPageId:next?.id||'',declinePageId:next?.id||''}:{})}
+    })
+    upsertFunnel(db,store.id,{name:(products.find(p=>p.id===productId)?.title||store.name)+' funnel',productId,steps,offerPageId:related.find(p=>['offer','pdp'].includes(p.role)&&p.productId===productId)?.id||page.id,advertorialPageId:related.find(p=>p.role==='advertorial'&&p.productId===productId)?.id||'',bump:bump?.variants[0]?{enabled:true,variantId:bump.variants[0].id,priceCents:bump.variants[0].priceCents,label:bump.title}:{enabled:false},upsell,downsell,status:'active'})
+    if(bump)commerce.bumps++;commerce.upsells+=steps.filter(s=>s.role==='upsell'&&s.offer).length;commerce.downsells+=steps.filter(s=>s.role==='downsell'&&s.offer).length
+  }
+  commerce.products=products.length;commerce.linkedPages=pages.filter(p=>p.productId).length;commerce.bundles=installedBundles.size;commerce.upsells=pages.filter(p=>p.role==='upsell'&&p.productId).length;commerce.downsells=pages.filter(p=>p.role==='downsell'&&p.productId).length
+  if (input.kind === 'funnel' && !products.some(product => product.metadata.sourcePurpose !== 'gift' && product.metadata.sourcePurpose !== 'bump')) commerce.issues.push({url:homeClone.sourceUrl,reason:'No explicit purchasable price was found in the reachable pages. Add a protected or unlinked checkout URL to complete the catalog.'})
+  report.commerce=commerce
+  if(commerce.issues.length){report.complete=false;homeClone.notes.push(...commerce.issues.map(issue=>issue.url+': '+issue.reason))}
   report.images = mergeImageReports([...documents.map(document => document.imageReport), ...productImageReports])
   report.captureIssues = documents.flatMap(document => document.captureReport?.issues.map(reason => ({ url: document.sourceUrl, reason })) ?? [])
   // Test transports intentionally supply static fixtures; real copies must complete rendered capture too.
@@ -246,6 +318,9 @@ export async function importAssetFromUrl(
   const imagesLocalized = localizedImages.size
   db.update('stores', store.id, { reference_url: homeClone.sourceUrl })
   setTheme(db, store.id, clonedNavigation.length ? { nav: clonedNavigation } : {}, { build: `Cloned ${documents.length} pages and ${products.length} products from ${homeClone.sourceUrl}; ${stylesheets} stylesheets and ${imagesLocalized} images localized` })
+  report.images=JSON.parse(rehome(JSON.stringify(report.images)))
+  saveCopyReport(db,store.id,page.id,{images:report.images,capture:homeClone.captureReport,notes:[...new Set(documents.flatMap(document=>document.notes))],site:report,pages:pages.map(p=>({id:p.id,title:p.title,role:p.role,source:p.sourceUrl,productId:p.productId}))})
+  emit({phase:'done',percent:100,task:report.complete?'Clone complete':'Clone complete — review the listed gaps',copied:pages.length,products:products.length,images:localizedImages.size})
   const freshPages = pages.map((created) => updatePage(db, store.id, created.id, {}))
   return {
     store: getStore(db, store.id) ?? { ...store, referenceUrl: homeClone.sourceUrl },

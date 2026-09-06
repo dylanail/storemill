@@ -1,7 +1,7 @@
 import { sourceThemeScript } from './source-theme.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { chromium, devices, type Page, type Frame } from 'playwright'
-import { isPaymentUrl } from './site-copy.ts'
+import { isPaymentUrl, discoverPageLinks } from './site-copy.ts'
 import { mapMediaDocument } from './clone-media.ts'
 import { isPublicHost } from './public-network.ts'
 
@@ -12,8 +12,8 @@ export type CaptureReport = {
   issues: string[]
   excludedWidgets?: string[]
 }
-export type CapturedSource = { html: string; url: string; notes: string[]; captureReport: CaptureReport; embeddedDocuments?: Array<{ marker: string; html: string; url: string }> }
-type CaptureOptions = { signal?: AbortSignal; executablePath?: string; allowPrivateNetwork?: boolean; timeoutMs?: number }
+export type CapturedSource = { html: string; url: string; notes: string[]; captureReport: CaptureReport; links?: string[]; embeddedDocuments?: Array<{ marker: string; html: string; url: string }> }
+type CaptureOptions = { signal?: AbortSignal; executablePath?: string; allowPrivateNetwork?: boolean; timeoutMs?: number; onProgress?: (message: string) => void }
 const snapshotScript = readFileSync(new URL('./clone-capture.js', import.meta.url), 'utf8')
 type CapturedImage = { index: number; key: string; alt: string; src: string; srcset: string; picture: boolean; width: string | null; height: string | null }
 type SnapshotState = { images: number; broken: string[]; imageUrls: string[]; declaredImageUrls: string[]; imageElements: CapturedImage[]; issues: string[]; shadowRoots: number; shadowWidgets: Array<{ host: string; provider: boolean }> }
@@ -45,6 +45,7 @@ export async function captureCloneSource(url: string, options: CaptureOptions = 
     // Fresh contexts exercise initial mobile/tablet rendering as well as CSS.
     // Resizing one desktop DOM can miss server/UA/initial-width-only content.
     for (const width of [1440, 820, 390]) {
+      options.onProgress?.(`Rendering ${width === 1440 ? 'desktop' : width === 820 ? 'tablet' : 'mobile'} layout: ${url}`)
       signal.throwIfAborted()
       const device = width === 390 ? devices['Pixel 7'] : width === 820 ? devices['iPad (gen 7)'] : undefined
       const context = await browser.newContext({ ...(device ?? {}), viewport: { width, height: 1000 }, serviceWorkers: 'block', acceptDownloads: false })
@@ -163,7 +164,7 @@ export async function captureCloneSource(url: string, options: CaptureOptions = 
     report.issues = [...new Set(report.issues)]
     report.excludedWidgets = [...new Set(report.excludedWidgets ?? [])]
     report.complete = !report.issues.length
-    return { html: primary.html, url: primary.url, embeddedDocuments: primary.embeddedDocuments, notes: [`Rendered fresh desktop, tablet and mobile browser sessions and scrolled each before saving its images.`, ...report.excludedWidgets.map(widget => `Excluded source payment widget: ${widget}; checkout uses this store's payment integration.`), ...report.issues], captureReport: report }
+    return { html: primary.html, url: primary.url, links: [...new Set(captures.flatMap(capture => [...discoverPageLinks(capture.html, capture.url), ...capture.embeddedDocuments.flatMap(document => discoverPageLinks(document.html, document.url))]))], embeddedDocuments: primary.embeddedDocuments, notes: [`Rendered fresh desktop, tablet and mobile browser sessions and scrolled each before saving its images.`, ...report.excludedWidgets.map(widget => `Excluded source payment widget: ${widget}; checkout uses this store's payment integration.`), ...report.issues], captureReport: report }
   } catch (error) {
     signal.throwIfAborted()
     throw new Error(`Could not finish the visual source capture: ${error instanceof Error ? error.message : String(error)}. The copy was not saved; retry after the source or browser is available.`)

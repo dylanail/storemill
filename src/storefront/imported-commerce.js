@@ -25,7 +25,7 @@
   }
   function productFor(node) {
     const root = node.closest('[data-product-id],[data-pb-product],[data-pb-product-id],[data-product-handle],product-info,product-form,.product,.product-card,.product-single') || node.closest('form') || document;
-    const chosenOffer=all('.khOfferBox.of_selected_box').find(box=>box.getClientRects().length);
+    const chosenOffer=all('.khOfferBox.of_selected_box,.pl-item[data-copy-variant-id][aria-checked="true"]').find(box=>box.getClientRects().length);
     const copiedBundle=one('[data-copy-product-id][data-copy-bundle]',root);
     const id = copiedBundle?.dataset.copyProductId || chosenOffer?.dataset.copyProductId || root.dataset?.copyProductId || root.dataset?.pbProduct || root.dataset?.pbProductId || root.dataset?.productId;
     const link = one('a[href*="/products/"]', root)?.getAttribute('href') || root.dataset?.productHandle || '';
@@ -39,7 +39,7 @@
     if (!product) return null;
     const form = node.closest('product-info,.product,.product-single') || node.closest('form') || document;
     const select = one('[name=variantId],[name=id],select[name="variation_id"],input[name="variation_id"]', form);
-    const offer=all('.khOfferBox.of_selected_box').find(box=>box.getClientRects().length);
+    const offer=all('.khOfferBox.of_selected_box,.pl-item[data-copy-variant-id][aria-checked="true"]').find(box=>box.getClientRects().length);
     const copiedBundle=bundleSelection(node,product);
     const sourceId = copiedBundle?.root.dataset.copyVariantId || offer?.dataset.copyVariantId || select?.value || node.dataset.variantId || node.getAttribute('variantvalue');
     let variant = product.variants.find(v => v.id === sourceId || (v.sourceId && v.sourceId === sourceId));
@@ -92,6 +92,20 @@
         });
       });
       select(bars.find(bar=>bar.classList.contains('kaching-bundles__bar--selected'))||bars[0]);
+    });
+  }
+  function mountSourcePackages() {
+    all('.product-list').forEach(root=>{
+      const cards=all('.pl-item[data-copy-variant-id]',root).filter(card=>config.products.some(product=>product.id===card.dataset.copyProductId));
+      if(!cards.length)return;
+      root.setAttribute('role','radiogroup');root.setAttribute('aria-label','Choose your package');
+      const selected=card=>cards.forEach(other=>{const on=other===card;other.setAttribute('aria-checked',String(on));other.classList.toggle('pl-selected',on);other.classList.toggle('selected',on);other.tabIndex=on?0:-1;all('input[type=radio],input[type=checkbox]',other).forEach(input=>{input.checked=on;input.tabIndex=-1;});});
+      const choose=async card=>{const product=config.products.find(product=>product.id===card.dataset.copyProductId),variant=product?.variants.find(variant=>variant.id===card.dataset.copyVariantId);if(!variant?.available){announce('This package is not available.');return;}if(config.role==='checkout'&&window.__selectFunnelPackage&&!await window.__selectFunnelPackage(variant.id,1))return;selected(card);};
+      cards.forEach((card,index)=>{card.setAttribute('role','radio');card.addEventListener('click',event=>{event.preventDefault();void choose(card);});card.addEventListener('keydown',event=>{if(!['Enter',' ','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();const next=event.key.startsWith('Arrow')?cards[(index+(['ArrowDown','ArrowRight'].includes(event.key)?1:cards.length-1))%cards.length]:card;void choose(next);next.focus();});});
+      const current=cards.find(card=>document.querySelector('[data-funnel-variant="'+card.dataset.copyVariantId+'"]:checked'));
+      // Source "default" is a visual default; a package is charged only after selection.
+      selected(current||cards.find(card=>card.classList.contains('pl-selected'))||cards.find(card=>{const product=config.products.find(p=>p.id===card.dataset.copyProductId);return product?.variants.some(v=>v.id===card.dataset.copyVariantId&&v.sourceId===product.defaultSourceId)})||cards[0]);
+      if(config.role==='checkout')root.addEventListener('click',()=>{const fieldset=one('[data-funnel-selection]');if(fieldset&&cards.every(card=>config.products.some(p=>p.variants.some(v=>v.id===card.dataset.copyVariantId))))fieldset.hidden=true;},{once:true});
     });
   }
   function lineHtml(item) {
@@ -148,13 +162,14 @@
     // Funnel offers are confirmed on checkout; stores keep their copied drawer.
     buyNow=buyNow||config.assetKind==='funnel';
     if(config.assetKind==='funnel'&&config.role!=='checkout'){
-      location.href=config.base+'/checkout';return;
+      const declared=node.getAttribute('href')||node.dataset.copyHref||'';
+      location.href=declared.startsWith(config.base+'/pages/')?declared:config.base+'/checkout';return;
     }
     if(one('.subOfferButton.activeOfferType')){announce('Subscriptions are not available in this checkout yet. Choose One time purchase to place an order.');return;}
     const product = productFor(node), picked = choice(node, product);
     const copiedBundle=bundleSelection(node,product);
     if(copiedBundle&&!copiedBundle.quote){announce('This bundle needs verified product pricing before it can be purchased.');return;}
-    const offer=all('.khOfferBox.of_selected_box').find(box=>box.getClientRects().length);
+    const offer=all('.khOfferBox.of_selected_box,.pl-item[data-copy-variant-id][aria-checked="true"]').find(box=>box.getClientRects().length);
     if(offer&&!offer.dataset.copyVariantId){announce('This package needs to be linked to a product option in the page editor.');return;}
     if (!product || !picked) { announce(product ? 'Choose an available product option before adding to cart.' : (config.preview ? 'Link a product in the page editor and publish that product before testing checkout. Draft products are not sold.' : 'This product is not available yet.')); return; }
     if (!picked.variant.available) { announce('This option is sold out. Choose another option.'); return; }
@@ -168,7 +183,7 @@
   }
   function destination(node) { return node.getAttribute('data-copy-href') || node.getAttribute('href') || node.getAttribute('action') || ''; }
   function kind(node) {
-    if (node.closest('[data-owned-checkout]')) return '';
+    if (node.closest('[data-owned-checkout],[data-owned-offer]')) return '';
     if(node.dataset.copyAction)return node.dataset.copyAction;
     const route = destination(node), label = text(node) || node.getAttribute('aria-label') || node.getAttribute('title') || '';
     if (/checkout\/buy|buy.?now/i.test(route) || /^(buy (it )?now|order now)/i.test(label) || node.matches('[data-pb-action="buy-now"],.shopify-payment-button__button')) return 'buy';
@@ -206,6 +221,7 @@
   document.addEventListener('submit', event => {
     const form=event.target;if(config.scope==='sections'&&!form.closest('[data-pb-imported-section]'))return;
     if(one('[data-copy-checkout-field]',form)){event.preventDefault();document.getElementById('checkout-form')?.requestSubmit();return;}
+    if(form.hasAttribute('data-owned-offer-form'))return;
     if (form.id==='checkout-form' || form.closest('[data-owned-checkout-summary]')) return;
     const submitter=event.submitter || one('button[type=submit],input[type=submit]',form) || form;
     const action=kind(submitter) || (/cart\/add|add-to-cart/i.test(form.dataset.copyOriginalAction || form.action) ? 'add':'');
@@ -231,6 +247,7 @@
   });
   function mountCheckout() {
     if(!config.checkout)return;
+    all('.order-bump').forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
     const original=one('form.fk-card-payment-container') || one('form[action*="checkout"],form[action*="payment"],form[data-copy-original-action*="checkout"],form[data-copy-original-action*="payment"],form#checkout,form.checkout');
     const holder=document.createElement('div');holder.dataset.ownedCheckout='';holder.innerHTML=(config.checkout.error ? '<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.express+config.checkout.form;
     const funnelColumn=one('.basic-information-section');
@@ -238,8 +255,9 @@
       // Script-driven funnel checkouts scatter payment/contact controls across hidden forms.
       // Keep their branded two-column shell, and replace those regions as a unit.
       const layout=funnelColumn.parentElement;layout.dataset.ownedCheckoutLayout='';
+      const packages=all('.product-list',funnelColumn).filter(root=>one('[data-copy-variant-id]',root));
       let summary=one('.sidebar',layout);if(!summary){summary=document.createElement('aside');layout.append(summary);}
-      funnelColumn.dataset.ownedCheckoutColumn='form';funnelColumn.replaceChildren(holder);
+      funnelColumn.dataset.ownedCheckoutColumn='form';funnelColumn.replaceChildren(...packages,holder);
       summary.dataset.ownedCheckoutColumn='summary';summary.dataset.ownedCheckoutSummary='';
       const summaryTemplate=document.createElement('template');summaryTemplate.innerHTML=config.checkout.summary;const total=text(summaryTemplate.content.querySelector('.grand span:last-child'));
       summary.innerHTML='<details data-owned-summary-details'+(innerWidth>740?' open':'')+'><summary>Order summary <b data-pay-total>'+escape(total)+'</b></summary>'+config.checkout.summary+'</details>';
@@ -445,6 +463,7 @@
   }catch{/* An old editor metadata snapshot does not stop the source page. */}
   mountCopiedBundles();
   mountCheckout();
+  mountSourcePackages();
   if(config.role==='cart'){
     if(!cartHosts().length){const host=document.createElement('div');host.dataset.ownedCartLines='';(one('main,.cart-page,#MainContent')||document.body).append(host);}
   }

@@ -12,7 +12,7 @@ const runtime = readFileSync(new URL('./imported-commerce.js', import.meta.url),
 /** Only published catalog fields cross the storefront boundary. Supplier and payment credentials never do. */
 export function importedCommerceConfig(view: StoreView, page: Page) {
   const products = listProducts(view.db, view.store.id, { status: 'published', limit: 250 }).map(product => ({
-    id: product.id, handle: product.handle, title: product.title, image: product.heroImage,
+    id: product.id, handle: product.handle, title: product.title, image: product.heroImage, defaultSourceId:product.metadata.sourceDefaultVariant||'',
     variants: product.variants.map(variant => ({
       id: variant.id, title: variant.title, options: variant.optionValues, image: variant.image,
       sourceId: product.metadata[`sourceVariant:${variant.id}`] || '',

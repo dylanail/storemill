@@ -12,11 +12,12 @@ export type CopyReport = {
   images?: ImageLocalizationReport
   captureIssues?: Array<{ url: string; reason: string }>
   interactionIssues?: Array<{ url: string; reason: string }>
+  commerce?: { products: number; linkedPages: number; bundles: number; bumps: number; upsells: number; downsells: number; issues: Array<{url:string;reason:string}> }
 }
 
 export type CopyRoute = { source: string; target: string }
 
-const tracking = /^(?:utm_.+|fbclid|gclid|dclid|msclkid|ttclid|_pos|_sid|_ss|referrer|from)$/i
+const tracking = /^(?:utm_.+|pr_.+|fbclid|gclid|dclid|msclkid|ttclid|srsltid|_gl|_ga|_pos|_sid|_ss|referrer|from|session_id|sessionid|cid|fnsh\.core\.cid)$/i
 const paymentHost = /(?:^|\.)(?:stripe\.com|paypal\.com|klarna\.com|afterpay\.com|shop\.app)$/i
 const nonPage = /\.(?:avif|gif|jpe?g|png|svg|webp|ico|css|js|mjs|json|xml|txt|woff2?|ttf|otf|eot|pdf|zip|mp4|webm|mp3)(?:$|\/)/i
 
@@ -29,6 +30,7 @@ export function canonicalPageUrl(value: string): string {
     const url = new URL(decodeLink(value))
     url.hash = ''
     url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+    url.pathname = url.pathname.replace(/^\/collections\/[^/]+(\/products\/[^/]+)$/i, '$1')
     for (const key of [...url.searchParams.keys()]) {
       if (tracking.test(key) || (key === 'variant' && /^\/products\/[^/]+\/?$/i.test(url.pathname))) url.searchParams.delete(key)
     }
@@ -46,8 +48,9 @@ export function isCopyablePageUrl(value: string): boolean {
     const url = new URL(value)
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || isPaymentUrl(value) || nonPage.test(url.pathname)) return false
     // Only read documents. Never follow a state-changing cart, account or subscription action.
-    if (/^\/(?:admin|api|apps|account|login|logout|search|cdn|webhooks?)(?:\/|$)/i.test(url.pathname)) return false
+    if (/^\/(?:admin|api|apps|accounts?|customer_authentication|login|logout|search|cdn|webhooks?)(?:\/|$)/i.test(url.pathname)) return false
     if (/^\/(?:cart\/(?:add|change|update|clear)|checkout\/(?:process|complete)|orders?\/(?:cancel|refund)|unsubscribe)(?:\/|$)/i.test(url.pathname)) return false
+    if (/\/(?:undefined|null)(?:\/|$)/.test(url.pathname)) return false
     if ([...url.searchParams.keys()].some((key) => /^(?:add-to-cart|remove_item|delete|logout|unsubscribe|wc-ajax)$/i.test(key))) return false
     return true
   } catch { return false }
@@ -121,4 +124,14 @@ export function rewriteCopiedLinks(html: string, sourceUrl: string, routes: Copy
       return `${prefix}${quote}${escapeAttribute(`${local.pathname}${local.search}${local.hash}`, quote)}${quote}`
     } catch { return attribute }
   }))
+}
+
+/** Follow a brand between its landing subdomain, shop and main website, excluding shared platform hosts. */
+export function relatedSiteOrigin(value: string, origins: Set<string>): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase()
+    const brand = (hostname: string) => hostname.replace(/^(?:(?:www|try|get|go|shop|store|checkout|buy|secure|pay|offer|offers|lp|funnel|landing)\.)+/, '')
+    const shared = /(?:^|\.)(?:myshopify\.com|funnelish\.com|webflow\.io|pages\.dev|vercel\.app|netlify\.app)$/
+    return [...origins].some(origin => { const other = new URL(origin).hostname.toLowerCase(); return host === other || !shared.test(host) && !shared.test(other) && brand(host) === brand(other) && brand(host).includes('.') })
+  } catch { return false }
 }

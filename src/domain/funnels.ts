@@ -14,7 +14,7 @@ import type { Product } from './types.ts'
  * to offer. A store has one *active* funnel per product; the checkout finds
  * the funnel through the products in the cart.
  */
-export type Offer = { variantId?: string; discountPercent?: number; headline?: string; text?: string }
+export type Offer = { variantId?: string; discountPercent?: number; headline?: string; text?: string; enabled?: boolean; pageId?: string; variantIds?: string[] }
 export type Bump = { variantId?: string; label?: string; text?: string; priceCents?: number; enabled?: boolean }
 
 export type Funnel = {
@@ -28,7 +28,7 @@ export type Funnel = {
   upsell: Offer
   downsell: Offer
   thankyou: { headline?: string; showRelated?: boolean; showTracking?: boolean }
-  steps: Array<{ pageId: string; label: string }>
+  steps: Array<{ pageId: string; label: string; offer?: Offer; nextPageId?: string; declinePageId?: string; role?: string }>
   status: 'active' | 'paused'
   /** Funnels in the same group split the traffic that arrives at /go/:group by weight. */
   testGroup: string
@@ -156,9 +156,10 @@ export function resolveBump(db: Db, storeId: string, funnel: Funnel | null): Res
   }
 }
 
-export type ResolvedOffer = { product: Product; variantId: string; priceCents: number; discountPercent: number; headline: string; text: string }
+export type ResolvedOffer = { product: Product; variantId: string; priceCents: number; discountPercent: number; headline: string; text: string; pageId?: string; pending?: boolean }
 
 export function resolveOffer(db: Db, storeId: string, offer: Offer | undefined, fallback: () => { product: Product; variantId: string } | null, defaultDiscount: number): ResolvedOffer | null {
+  if (offer?.enabled === false) return null
   let product: Product | null = null
   let variantId = offer?.variantId ?? ''
   if (variantId) {
@@ -175,6 +176,7 @@ export function resolveOffer(db: Db, storeId: string, offer: Offer | undefined, 
   if (!variant) return null
   const discount = offer?.discountPercent ?? defaultDiscount
   return {
+    pageId: offer?.pageId,
     product,
     variantId: variant.id,
     priceCents: variant.priceCents,

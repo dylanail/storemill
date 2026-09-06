@@ -16,12 +16,12 @@ import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import { convertCents, defaultRegion, type Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
-import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
+import { getPage, PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
-import { funnelNextFor, type ResolvedBump, type ResolvedOffer } from '../domain/funnels.ts'
+import { funnelForProducts, funnelNextFor, type ResolvedBump, type ResolvedOffer } from '../domain/funnels.ts'
 import { stripeFor } from '../payments/stripe.ts'
 import { publicStoreUrl } from '../lib/urls.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
@@ -36,6 +36,7 @@ export type StoreView = {
   env: StoreEnvironment
   base: string
   preview: boolean
+  checkoutProductId?: string
   cart: Cart | null
   totals: Totals | null
   region?: Region | null
@@ -151,6 +152,7 @@ function renderOwnedPageBody(view: StoreView, page: Page, context: BlockContext)
 
 /** A cloned or hand-written HTML page keeps its body but owns its public metadata. */
 export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput): string {
+  if(checkout&&page.productId)view={...view,checkoutProductId:page.productId}
   let html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
   html = rebaseClonedNavigation(html, view, page.sourceUrl)
   if (page.sourceUrl || checkout || page.role === 'cart' || /data-pb-imported-section/.test(html)) {
@@ -565,10 +567,19 @@ export function bumpHtml(view: StoreView, bump: ResolvedBump | null): string {
     <span><strong>${escapeHtml(bump.label)} — ${baseMoney(bump.priceCents, view)}</strong><span class="micro" style="display:block">${escapeHtml(bump.text)}</span></span></label>`
 }
 
-export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell'): string {
+export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell', action = `${view.base}/orders/${order.id}/${step==='upsell'?'offer':'downsell'}`): string {
   const basePrice = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
   const price = convertCents(basePrice, view.region, view.store.currency)
   const compareAt = convertCents(offer.priceCents, view.region, view.store.currency)
+  const template=offer.pageId?getPage(view.db,view.store.id,offer.pageId):null
+  if(template?.mode==='html'&&template.rawHtml){
+    let copied=htmlPage(view,{...template,rawHtml:template.rawHtml.replace(/<(?:a|button)\b[^>]*(?:#yes-link|#no-link)[^>]*>/gi,tag=>tag.replace(/>$/, ' data-owned-offer>'))})
+    const variants=offer.product.variants
+    const controls=`<section data-owned-offer style="position:sticky;bottom:0;z-index:2147483000;padding:16px;background:#fff;color:#171717;border-top:1px solid #ddd;font:16px/1.4 system-ui;box-shadow:0 -4px 24px #0002"><form data-owned-offer-form id="owned-offer-form" method="post" action="${escapeHtml(action)}" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><label>Offer <select name="variantId" aria-label="Offer option" style="max-width:100%">${variants.map(variant=>{const total=convertCents(Math.round(variant.priceCents*(1-offer.discountPercent/100)),view.region,view.store.currency);return `<option value="${escapeHtml(variant.id)}" data-price="${escapeHtml(format(total,order.currency))}" ${variant.id===offer.variantId?'selected':''}>${escapeHtml(variant.title)} — ${format(total,order.currency)}</option>`}).join('')}</select></label><button type="submit" name="accept" value="yes">${offer.pending?'Check payment status':'Yes, add to my order'} — <span data-offer-price>${format(price,order.currency)}</span></button><button type="submit" name="accept" value="no" ${offer.pending?'disabled':''}>No thanks, continue</button><span role="status" data-offer-status>${offer.pending?'A payment is awaiting confirmation for this option.':''}</span></form></section>`
+    const script=`<script data-owned-offer>(function(){const form=document.getElementById('owned-offer-form'),select=form.elements.variantId;function choose(id){if([...select.options].some(option=>option.value===id)){select.value=id;form.querySelector('[data-offer-price]').textContent=select.selectedOptions[0].dataset.price;}}select.addEventListener('change',()=>choose(select.value));document.addEventListener('click',event=>{const node=event.target.closest('a,button,[data-copy-variant-id]');if(!node||form.contains(node))return;if(${Boolean(offer.pending)}){event.preventDefault();return;}const href=node.getAttribute('href')||node.dataset.yesLink||node.dataset.noLink||'';if(node.dataset.copyVariantId)choose(node.dataset.copyVariantId);if(!/^#(?:yes-link|no-link)/.test(href))return;event.preventDefault();event.stopImmediatePropagation();const yes=href.startsWith('#yes-link');form.requestSubmit(form.querySelector('[value="'+(yes?'yes':'no')+'"]'));},true);form.addEventListener('submit',()=>{form.querySelector('[data-offer-status]').textContent='Updating your order…';});if(new URLSearchParams(location.search).get('offer')==='pending')form.querySelector('[data-offer-status]').textContent='Payment is awaiting confirmation. Retry the same option to check the same payment.';if(new URLSearchParams(location.search).get('offer')==='failed')form.querySelector('[data-offer-status]').textContent='The previous offer was not added because its payment did not complete.';})();</script>`
+    copied=/<\/body>/i.test(copied)?copied.replace(/<\/body>/i,()=>controls+script+'</body>'):copied+controls+script
+    return copied
+  }
   const body = `<section class="wrap upsell-page">
     <div class="eyebrow">Order #${order.displayId} confirmed — ${step === 'downsell' ? 'one last thing' : 'one more thing'}</div>
     <h1 style="font-size:clamp(1.8rem,4vw,2.8rem);margin:.6rem 0 1.2rem">${escapeHtml(offer.headline)}</h1>
@@ -576,8 +587,8 @@ export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, s
       <div><p class="lead" style="margin:0 0 .6rem">${escapeHtml(offer.text)}</p>
         <div class="price-lg">${format(price, order.currency, view.region?.locale)} ${offer.discountPercent ? `<s class="micro">${format(compareAt, order.currency, view.region?.locale)}</s>` : ''}</div>
         <p class="micro">Ships with your order. ${order.paymentProvider === 'stripe' ? 'Charged to the card you just used — no form.' : 'Added to your order in one click.'}</p>
-        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency, view.region?.locale)}</button></form>
-        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
+        <form method="post" action="${escapeHtml(action)}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency, view.region?.locale)}</button></form>
+        <form method="post" action="${escapeHtml(action)}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
       </div></div></section>`
   return layout(view, { title: `One more thing — ${view.store.name}`, description: 'Your order', body, bare: true })
 }
@@ -726,7 +737,7 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
       <td style="text-align:right">${item.unitCents ? baseMoney(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
     <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
     ${totalsBlock(view, totals)}</div>`
-  const bump = input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''
+  const bump = `<section class="co-block" data-owned-bump-slot>${input.bump?bumpHtml(view,input.bump):''}</section>`
   const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''
   const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
       ${funnelSelection(view)}
@@ -767,10 +778,7 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
     return fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: el.value, on: el.checked }) })
       .then(function(r){ return r.json() }).then(refresh);
   }
-  bumps.forEach(function(bump){ bump.addEventListener('change', function(){
-    bumps.forEach(function(other){ other.checked = bump.checked });
-    sendBump(bump);
-  })});
+  document.addEventListener('change',function(event){var bump=event.target;if(!bump.matches('.bump input'))return;document.querySelectorAll('.bump input').forEach(function(other){other.checked=bump.checked});sendBump(bump);});
   var ticked = document.querySelector('.bump input:checked');
   if (ticked) sendBump(ticked);
   document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
@@ -825,6 +833,7 @@ ${parts.script}`
  * scripts that keep the totals live ride along once, after the blocks.
  */
 export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutInput, opts: { sample?: boolean } = {}): string {
+  if(page.productId)view={...view,checkoutProductId:page.productId}
   const parts = checkoutParts(view, input)
   const brand = Object.keys(view.env.brand).length ? view.env.brand : view.store.brand
   const context: BlockContext = {
@@ -939,6 +948,16 @@ export function orderPage(view: StoreView, order: Order, related: Product[] = []
     ${related.length ? `<div class="section-head" style="margin-top:3rem"><h2>Goes with your order</h2></div><div class="grid">${related.map((product) => productCard(view, product)).join('')}</div>` : ''}
     ${order.paymentStatus==='captured'?renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents, currency: order.currency }, { preview: view.preview }):''}
   </section>`
+  const funnel=funnelForProducts(view.db,view.store.id,order.items.map(item=>item.productId))
+  const templateId=funnel?.steps.find(step=>step.role==='thankyou')?.pageId
+  const template=templateId?getPage(view.db,view.store.id,templateId):null
+  if(template?.mode==='html'&&template.rawHtml){
+    const summary=`<section data-owned-confirmation>${body}</section><style data-owned-confirmation> [data-owned-confirmation]{padding:24px;max-width:100%;box-sizing:border-box;background:#fff;color:#222;font:16px/1.5 system-ui}[data-owned-confirmation] table{width:100%;border-collapse:collapse}[data-owned-confirmation] img{width:64px;max-width:100%}[data-owned-confirmation] td{padding:10px;overflow-wrap:anywhere}[data-owned-confirmation] .totals>div{display:flex;justify-content:space-between;gap:16px}[data-owned-confirmation] a{display:inline-block;padding:12px}[data-owned-confirmation] .wrap{width:100%;margin:auto}</style>`
+    let copied=htmlPage(view,template)
+    const mount=`<script data-owned-confirmation>(function(){const owned=document.querySelector('[data-owned-confirmation]');const old=[...document.querySelectorAll('.order-summary,.order-summary__sections,[data-order-summary],.order-confirmation-details')].filter(node=>!owned.contains(node));if(old.length){old[0].replaceWith(owned);old.slice(1).forEach(node=>node.remove());}document.querySelectorAll('[data-order-number]').forEach(node=>node.textContent=${JSON.stringify(String(order.displayId))});})();</script>`
+    copied=/<body[^>]*>/i.test(copied)?copied.replace(/<body[^>]*>/i,tag=>tag+summary):summary+copied
+    return /<\/body>/i.test(copied)?copied.replace(/<\/body>/i,()=>mount+'</body>'):copied+mount
+  }
   return layout(view, { title: `Order #${order.displayId}`, description: 'Order confirmation', body })
 }
 

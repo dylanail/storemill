@@ -1,0 +1,19 @@
+import { escapeHtml as e } from '../lib/http.ts'
+import { json } from '../lib/db.ts'
+import type { ImportJob, ImportResult } from '../control/asset-import-jobs.ts'
+import type { ImportProgress } from '../control/assets.ts'
+
+export function importJobPage(job: ImportJob): string {
+  const progress=json<Partial<ImportProgress>>(job.progress,{}),result=json<Partial<ImportResult>>(job.result,{})
+  const running=['queued','working'].includes(job.status)
+  return `<div class="head"><div><h1>Cloning your site</h1><p class="muted">You can leave this page and reopen the clone from All assets.</p></div><a class="btn" href="/admin/stores">All assets</a></div>
+  <section class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><h2 id="copy-task" role="status" aria-live="polite">${e(progress.task||job.status)}</h2><strong id="copy-percent">${progress.percent||0}%</strong></div>
+  <progress id="copy-progress" aria-label="Estimated clone progress" value="${progress.percent||0}" max="100" style="width:100%;height:24px;margin:20px 0;accent-color:#315be8"></progress>
+  <p id="copy-counts">${progress.copied||0} pages copied · ${progress.discovered||1} discovered · ${progress.products||0} products · ${progress.images||0} images</p>
+  <p id="copy-url" class="muted" style="overflow-wrap:anywhere">${e(progress.currentUrl||'')}</p><p class="muted">Percentage is estimated as new links are discovered. Products, prices and offers are connected after pages finish copying.</p>
+  <p id="copy-error" role="alert">${e(job.error)}</p><p id="copy-connection" class="muted"></p>
+  <form id="copy-cancel" method="post" action="/admin/imports/${e(job.id)}/cancel" ${running?'':'hidden'}><button class="btn" type="submit">Cancel clone</button></form>
+  <div id="copy-result" ${job.status==='done'?'':'hidden'}><p id="copy-summary">${result.pages||0} pages and ${result.products||0} products saved as a new draft. ${result.complete?'':'Review the report for any gaps.'}</p><a class="btn primary" href="/admin/imports/${e(job.id)}/open">Open copied site</a> <a class="btn" href="/admin/imports/${e(job.id)}/open?report=1">View pages and copy report</a></div>
+  <a id="copy-retry" class="btn" href="/admin/stores#new" ${['failed','cancelled'].includes(job.status)?'':'hidden'}>Start another clone</a></section>
+  <script>(function(){const running=${running};if(!running)return;const set=(id,value)=>document.getElementById(id).textContent=value;async function poll(){try{const response=await fetch('/admin/imports/${e(job.id)}/status',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw Error();const job=await response.json(),p=job.progress||{},r=job.result||{};set('copy-task',job.status==='cancelled'?'Clone cancelled':job.status==='failed'?'Clone needs attention':p.task||job.status);set('copy-percent',(p.percent||0)+'%');document.getElementById('copy-progress').value=p.percent||0;set('copy-counts',(p.copied||0)+' pages copied · '+(p.discovered||1)+' discovered · '+(p.products||0)+' products · '+(p.images||0)+' images');set('copy-url',p.currentUrl||'');set('copy-error',job.error||'');set('copy-connection','');const active=['queued','working'].includes(job.status);document.getElementById('copy-cancel').hidden=!active;document.getElementById('copy-result').hidden=job.status!=='done';document.getElementById('copy-retry').hidden=!['failed','cancelled'].includes(job.status);if(job.status==='done')set('copy-summary',r.pages+' pages and '+r.products+' products saved as a new draft. '+(r.complete?'All discovered pages and media copied.':'Review the report for any gaps.'));if(active)setTimeout(poll,1500)}catch{set('copy-connection','Connection interrupted. Reconnecting; your clone continues on the server.');setTimeout(poll,4000)}}setTimeout(poll,250)})()</script>`
+}

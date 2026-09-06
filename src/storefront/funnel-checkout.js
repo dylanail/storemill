@@ -15,6 +15,7 @@
       const data=await response.json();if(!response.ok||data.error)throw new Error(data.error||'Could not update your package.');
       selected=true;
       document.querySelectorAll('.summary-body').forEach(node=>node.outerHTML=data.summaryHtml);
+      if(data.bumpHtml!==undefined)document.querySelectorAll('[data-owned-bump-slot]').forEach(node=>node.outerHTML=data.bumpHtml);
       document.querySelectorAll('[data-pay-total],.co-summary-mobile summary b').forEach(node=>node.textContent=money(data.totalCents));
       document.querySelectorAll('[data-funnel-variant]').forEach(node=>node.checked=node.dataset.funnelVariant===data.variantId&&Number(node.dataset.funnelQuantity)===data.quantity);
       // Reset any removed order bump rather than leaving a checked control for an uncharged item.

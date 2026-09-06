@@ -1,3 +1,4 @@
+import { currentOfferStep, respondToOffer, offerReceipts } from '../domain/post-purchase.ts'
 import { id } from '../lib/ids.ts'
 import { metaEvent, type MetaEvent } from '../analytics/meta-browser.ts'
 import type { ServerEventInput } from '../analytics/server-events.ts'
@@ -553,7 +554,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const amounts = paymentTotals(current.db, current.store.id, updated)
     const shown = { ...current, cart: updated, totals: amounts }
     const parts = view.checkoutParts(shown, checkoutInputFor(shown))
-    return { ok: true, ...amounts, variantId, quantity, summaryHtml: parts.summary, totalsHtml: view.totalsBlock(shown, amounts) }
+    return { ok: true, ...amounts, variantId, quantity, summaryHtml: parts.summary, bumpHtml:parts.bump, totalsHtml: view.totalsBlock(shown, amounts) }
   })
 
   /** Buy now: a fresh cart with this line, straight to checkout. */
@@ -712,11 +713,34 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const order = getOrder(current.db, current.store.id, ctx.params.id as string)
     if (!order) throw notFound('No such order')
+    const copiedFlow=funnelForProducts(current.db,current.store.id,order.items.map(item=>item.productId))
+    if(copiedFlow?.steps.some(step=>step.offer?.enabled)){
+      const step=currentOfferStep(current.db,current.store.id,order,copiedFlow)
+      if(!step)return redirect(`${current.base}/orders/${order.id}`)
+      const offer=resolveOffer(current.db,current.store.id,step.offer,()=>null,0)
+      if(!offer)return redirect(`${current.base}/orders/${order.id}`)
+      const pending=offerReceipts(current.db,current.store.id,order.id).find(row=>row.page_id===step.pageId&&row.status==='pending')
+      if(pending){const quote=JSON.parse(pending.quote),variant=offer.product.variants.find(v=>v.id===quote.lines[0]?.variantId);if(variant){offer.variantId=variant.id;offer.priceCents=quote.baseAmountCents;offer.discountPercent=0;offer.pending=true;offer.product={...offer.product,variants:[{...variant,priceCents:quote.baseAmountCents}]}}}
+      return html(view.offerPage({...current,region:regionForOrder(current,order.id)},order,offer,step.role==='downsell'?'downsell':'upsell',`${current.base}/orders/${order.id}/steps/${step.pageId}`))
+    }
     if (order.upsell.offered) return redirect(`${current.base}/orders/${order.id}${order.upsell.accepted || order.downsell.offered ? '' : '/downsell'}`)
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
     if (!offer) return redirect(`${current.base}/orders/${order.id}`)
     return html(view.offerPage({ ...current, region: regionForOrder(current, order.id) }, order, offer, 'upsell'))
+  })
+
+  router.post('/orders/:id/steps/:pageId',async ctx=>{
+    const current=open(ctx),order=getOrder(current.db,current.store.id,ctx.params.id!)
+    if(!order)throw notFound('No such order')
+    const funnel=funnelForProducts(current.db,current.store.id,order.items.map(item=>item.productId))
+    if(!funnel)throw notFound('No such funnel')
+    const body=await ctx.body(),region=regionForOrder(current,order.id)
+    try{
+      const result=await respondToOffer(current.db,current.store.id,order.id,funnel,{pageId:ctx.params.pageId!,accept:body.accept==='yes',variantId:String(body.variantId||'')},amount=>convertCents(amount,region,current.store.currency),(quote,key)=>chargeSaved(current,order,quote.amountCents,{offerStep:ctx.params.pageId!},key))
+      if(result==='accepted'){const receipt=offerReceipts(current.db,current.store.id,order.id).find(row=>row.page_id===ctx.params.pageId)!;record(ctx,{...current,region},'checkout.complete',{amountCents:JSON.parse(receipt.quote).amountCents,meta:{offerStep:ctx.params.pageId}})}
+      return redirect(`${current.base}/orders/${order.id}/offer${result==='pending'?'?offer=pending':result==='failed'?'?offer=failed':''}`)
+    }catch(error){return html(`<p>${escapeHtml(error instanceof Error?error.message:'Could not update this order')}</p><a href="${current.base}/orders/${order.id}/offer">Return to your offer</a>`,400)}
   })
 
   router.get('/orders/:id/downsell', (ctx) => {
@@ -862,7 +886,8 @@ function configuredBump(current: StoreView) {
 
 /** The checkout built from blocks when the store has published one; the built-in page otherwise. */
 function renderCheckout(current: StoreView, input: CheckoutInput): string {
-  const custom = liveCheckoutPage(current.db, current.store.id, { preview: current.preview })
+  const productId=current.cart?.items.find(item=>!item.giftOf&&item.source!=='order-bump')?.productId||homePage(current.db,current.store.id,{preview:current.preview})?.productId
+  const custom = liveCheckoutPage(current.db, current.store.id, { preview: current.preview,productId })
   return custom ? custom.mode === 'html' ? view.htmlPage(current, custom, input) : view.checkoutBlockPage(current, custom, input) : view.checkoutPage(current, input)
 }
 
@@ -897,13 +922,14 @@ function afterOrder(ctx: Ctx, current: StoreView, order: ReturnType<typeof compl
 }
 
 /** Charges a saved card off-session on Stripe orders; demo orders just say yes. */
-async function chargeSaved(current: StoreView, order: ReturnType<typeof completeCart>, amountCents: number, metadata: Record<string, string>): Promise<{ ok: boolean; intentId: string }> {
+async function chargeSaved(current: StoreView, order: ReturnType<typeof completeCart>, amountCents: number, metadata: Record<string, string>, idempotencyKey?: string): Promise<{ ok: boolean; intentId: string; failed?: boolean }> {
   if (order.paymentProvider !== 'stripe') return { ok: true, intentId: '' }
   const stripe = stripeFor(current.db, current.store.id)
   if (!stripe || !order.paymentCustomerId || !order.paymentMethodId) return { ok: false, intentId: '' }
   try {
-    const intent = await stripe.client.paymentIntents.chargeOffSession({ amountCents, currency: order.currency, customerId: order.paymentCustomerId, paymentMethodId: order.paymentMethodId, metadata: { storeId: current.store.id, orderId: order.id, ...metadata } })
-    if (intent.status !== 'succeeded' && intent.status !== 'processing') throw new Error(`Payment ${intent.status}`)
+    const intent = await stripe.client.paymentIntents.chargeOffSession({ amountCents, currency: order.currency, customerId: order.paymentCustomerId, paymentMethodId: order.paymentMethodId, metadata: { storeId: current.store.id, orderId: order.id, ...metadata }, idempotencyKey })
+    if(idempotencyKey&&['canceled','requires_payment_method'].includes(intent.status))return {ok:false,intentId:intent.id,failed:true}
+    if (intent.status !== 'succeeded' && (idempotencyKey || intent.status !== 'processing')) throw new Error(`Payment ${intent.status}`)
     return { ok: true, intentId: intent.id }
   } catch (error) {
     log.warn(`off-session charge failed: ${error instanceof Error ? error.message : String(error)}`)

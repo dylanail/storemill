@@ -135,7 +135,8 @@ export function applyPromotions(
     if (promotion.rules.minSubtotalCents && opts.subtotalCents < Math.round(promotion.rules.minSubtotalCents * (opts.currencyRate ?? 1))) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
     const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf && item.source !== 'order-bump')
-    if (!eligible.length && promotion.kind !== 'free_shipping') continue
+    const scoped = promotion.rules.productIds?.length || promotion.rules.variantIds?.length || promotion.rules.collectionIds?.length
+    if (!eligible.length && (promotion.kind !== 'free_shipping' || scoped)) continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
     if (promotion.rules.minQuantity && units < promotion.rules.minQuantity) continue

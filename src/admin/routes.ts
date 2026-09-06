@@ -1,3 +1,5 @@
+import { startImport, getImport, cancelImport } from '../control/asset-import-jobs.ts'
+import { importJobPage } from './asset-import-page.ts'
 import { mediaEditInput, prepareEditorMedia } from '../control/editor-media.ts'
 import { listStoreMedia, setMediaDetails } from '../control/media.ts'
 import { rebrandDefaults, listRebrands } from '../control/media-rebrand.ts'
@@ -52,7 +54,7 @@ import { editorPage } from './editor.ts'
 import { refundThroughProvider, stripeFor } from '../payments/stripe.ts'
 import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.ts'
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
-import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
+import { getFunnel, deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
 import { generateVersions, setVersionWeight } from '../pages/versions.ts'
 import { analyzeExperiment, pauseExperiment, promoteExperiment, rollbackExperiment, startPdpExperiment } from '../analytics/experiments.ts'
 import { sendAccountEmail, sendEmail, orderContext } from '../email/send.ts'
@@ -163,6 +165,7 @@ function ctxFor(current: Session, ctx: Ctx) {
   return {
     db: getDb(),
     store: current.store,
+    userId: current.user.id,
     userName: current.user.name || 'there',
     userEmail: current.user.email,
     storeUrl: storeUrl(ctx, current.store),
@@ -471,24 +474,31 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/assets/import', async (ctx) => {
-    const current = session(ctx)
-    const body = await ctx.body()
-    const controller = new AbortController()
-    const abort = () => controller.abort()
-    ctx.req.once('aborted', abort)
-    ctx.res.once('close', abort)
+    const current = session(ctx), body = await ctx.body()
     try {
-      const kind = body.kind === 'funnel' ? 'funnel' : 'store'
-      const imported = await importAssetFromUrl(db(), current.user.id, { url: String(body.url ?? ''), name: String(body.name ?? ''), kind, currency: String(body.currency ?? 'USD'), additionalUrls: String(body.additionalUrls ?? '').split(/\r?\n/).map(url => url.trim()).filter(Boolean), signal: controller.signal })
-      setCookie(ctx.res, STORE_COOKIE, imported.store.id, { maxAge: 60 * 60 * 24 * 365 })
-      recordAudit(db(), { storeId: imported.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_asset', target: imported.clone.sourceUrl, diff: { kind, pageId: imported.page.id, products: imported.products.length, stylesheets: imported.clone.stylesheets, images: imported.clone.imagesLocalized, report: imported.report } })
-      return redirect(`/admin/pages/${imported.page.id}/edit?flash=${encodeURIComponent(`Cloned ${imported.pages.length} page${imported.pages.length === 1 ? '' : 's'} and ${imported.products.length} product${imported.products.length === 1 ? '' : 's'} into a new ${kind}. ${imported.clone.stylesheets} stylesheets and ${imported.clone.imagesLocalized} images were copied. ${imported.report.complete ? 'All discovered pages and images copied.' : 'Copy needs review: some pages, images or embedded content could not be verified.'} Open View copy report in Page settings for details.`)}`)
-    } catch (error) {
-      return redirect(`/admin/stores?flash=${encodeURIComponent(`!Could not clone that asset: ${error instanceof Error ? error.message : 'unknown error'}`)}`)
-    } finally {
-      ctx.req.removeListener('aborted', abort)
-      ctx.res.removeListener('close', abort)
-    }
+      const job = startImport(db(), current.user.id, {url:String(body.url??''),name:String(body.name??''),kind:body.kind==='funnel'?'funnel':'store',currency:String(body.currency??'USD').toUpperCase(),additionalUrls:String(body.additionalUrls??'').split(/\r?\n/)},String(body.requestKey??''))
+      return redirect(`/admin/imports/${job.id}`)
+    } catch(error) { return redirect(`/admin/stores?flash=${encodeURIComponent('!'+(error instanceof Error?error.message:'Could not start clone'))}`) }
+  })
+  router.get('/admin/imports/:id',ctx=>{
+    const current=session(ctx),job=getImport(db(),current.user.id,ctx.params.id!)
+    return page(ctx,current,'stores','Cloning your site',importJobPage(job))
+  })
+  router.get('/admin/imports/:id/status',ctx=>{
+    const current=session(ctx),job=getImport(db(),current.user.id,ctx.params.id!)
+    ctx.res.setHeader('Cache-Control','no-store')
+    return {id:job.id,status:job.status,progress:JSON.parse(job.progress),result:JSON.parse(job.result),error:job.error}
+  })
+  router.post('/admin/imports/:id/cancel',ctx=>{
+    const current=session(ctx);cancelImport(db(),current.user.id,ctx.params.id!)
+    return redirect(`/admin/imports/${ctx.params.id}`)
+  })
+  router.get('/admin/imports/:id/open',ctx=>{
+    const current=session(ctx),job=getImport(db(),current.user.id,ctx.params.id!)
+    if(job.status!=='done')return redirect(`/admin/imports/${job.id}`)
+    const result=JSON.parse(job.result);requireRole(db(),current.user.id,result.storeId)
+    setCookie(ctx.res,STORE_COOKIE,result.storeId,{maxAge:60*60*24*365})
+    return redirect(`/admin/pages/${result.pageId}/${ctx.url.searchParams.has('report')?'copy-report':'edit'}?storeId=${result.storeId}`)
   })
 
   router.get('/admin/media', (ctx) => {
@@ -777,10 +787,8 @@ export function adminRouter(): Router {
     if (!/^https?:\/\//i.test(url)) return back(ctx, '!Paste a full URL, starting with https://')
     try {
       if (body.scope === 'funnel') {
-        const imported = await importAssetFromUrl(db(), current.user.id, { url, kind: 'funnel', currency: current.store.currency, additionalUrls: String(body.additionalUrls ?? '').split(/\r?\n/).map(value => value.trim()).filter(Boolean) })
-        setCookie(ctx.res, STORE_COOKIE, imported.store.id)
-        recordAudit(db(), { storeId: imported.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_funnel', target: url, diff: { pages: imported.pages.length, complete: imported.report.complete } })
-        return redirect(`/admin/pages/${imported.page.id}/copy-report`)
+        const job=startImport(db(),current.user.id,{url,kind:'funnel',currency:current.store.currency,additionalUrls:String(body.additionalUrls??'').split(/\r?\n/)})
+        return redirect(`/admin/imports/${job.id}`)
       }
       const result = await clonePage(url, { storeId: current.store.id, keepScripts: body.keepScripts === 'true' })
       const role = pageRole(body.role ?? 'page'), productId = String(body.productId ?? '')
@@ -1195,13 +1203,27 @@ export function adminRouter(): Router {
       productId: String(body.productId ?? ''),
       advertorialPageId: String(body.advertorialPageId ?? ''),
       offerPageId: String(body.offerPageId ?? ''),
-      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: true },
-      upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') },
-      downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') },
+      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: body.bumpEnabled!=='false' },
+      ...(body.upsellVariantId===undefined?{}:{upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') }}),
+      ...(body.downsellVariantId===undefined?{}:{downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') }}),
       testGroup: String(body.testGroup ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
       weight: Number(body.weight ?? 0) || 0,
     })
     return back(ctx, 'Funnel saved.')
+  })
+
+  router.post('/admin/funnels/:id/steps/:pageId',async ctx=>{
+    const current=session(ctx),funnel=getFunnel(db(),current.store.id,ctx.params.id!),body=await ctx.body()
+    if(!funnel)throw notFound('Funnel not found')
+    const step=funnel.steps.find(step=>step.pageId===ctx.params.pageId)
+    if(!step?.offer)throw notFound('Offer step not found')
+    const variant=getVariant(db(),current.store.id,String(body.variantId||'')),discount=Number(body.discount||0)
+    if(!variant||!Number.isFinite(discount)||discount<0||discount>100)throw badRequest('Choose an owned product and a discount between 0 and 100')
+    const next=String(body.nextPageId||''),decline=String(body.declinePageId||'')
+    if([next,decline].some(pageId=>pageId&&(!getPage(db(),current.store.id,pageId)||pageId===step.pageId)))throw badRequest('Choose a different page from this asset')
+    const product=getProduct(db(),current.store.id,variant.productId)!
+    upsertFunnel(db(),current.store.id,{id:funnel.id,name:funnel.name,steps:funnel.steps.map(existing=>existing!==step?existing:{...step,offer:{...step.offer,enabled:body.enabled!=='false',variantId:variant.id,variantIds:product.variants.map(v=>v.id),discountPercent:discount},nextPageId:next,declinePageId:decline})})
+    return back(ctx,'Offer step saved.')
   })
 
   router.post('/admin/funnels/:id/clone', (ctx) => {

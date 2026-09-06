@@ -28,7 +28,9 @@ export function duplicateWholeFunnel(db: Db, storeId: string, funnelId: string) 
     const funnel = upsertFunnel(db, storeId, {
       ...source, id: undefined, name: `${source.name} (copy)`, status: 'paused', testGroup: '', weight: 0,
       advertorialPageId: copies.get(source.advertorialPageId)?.id ?? '', offerPageId: copies.get(source.offerPageId)?.id ?? '',
-      steps: [...copies.values()].map((page) => ({ pageId: page.id, label: page.title })),
+      upsell:{...source.upsell,...(source.upsell.pageId?{pageId:copies.get(source.upsell.pageId)?.id||''}:{})},
+      downsell:{...source.downsell,...(source.downsell.pageId?{pageId:copies.get(source.downsell.pageId)?.id||''}:{})},
+      steps: [...copies].map(([originalId,page]) => {const step=source.steps.find(step=>step.pageId===originalId);return {...step,pageId:page.id,label:page.title,...(step?.offer?{offer:{...step.offer,pageId:page.id},nextPageId:copies.get(step.nextPageId||'')?.id||'',declinePageId:copies.get(step.declinePageId||'')?.id||''}:{})}}),
     })
     return { funnel, pages: [...copies.values()] }
   })

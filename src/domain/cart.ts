@@ -140,6 +140,19 @@ export function reconcileGifts(db: Db, storeId: string, items: LineItem[]): Line
       giftOf: productId,
     })
   }
+  for (const item of paid) {
+    const owner = getProduct(db, storeId, item.productId)
+    let giftIds: unknown
+    try { giftIds = JSON.parse(owner?.metadata['includedGifts:' + item.variantId] || '[]') } catch { continue }
+    if (!Array.isArray(giftIds)) continue
+    for (const giftId of new Set(giftIds.slice(0, 30))) {
+      if (typeof giftId !== 'string') continue
+      const variant = getVariant(db, storeId, giftId), product = variant ? getProduct(db, storeId, variant.productId) : null
+      if (!variant || !product || product.metadata.sourcePurpose !== 'gift' || variant.priceCents !== 0) continue
+      if (kept.some(line => line.giftOf === item.productId && line.variantId === giftId)) continue
+      kept.push({variantId:variant.id,productId:product.id,title:product.title,variantTitle:variant.title+' — included',image:variant.image||product.heroImage,unitCents:0,quantity:item.quantity,source:'package-gift',giftOf:item.productId})
+    }
+  }
   return kept
 }
 
