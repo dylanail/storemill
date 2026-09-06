@@ -632,7 +632,7 @@ export function adminRouter(): Router {
       const shot = String(body.shot ?? '').trim().toLowerCase()
       const result = await execute(
         'attach_product_photo',
-        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless'), ...(shot ? { shot } : {}) },
+        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'original'), ...(shot ? { shot } : {}) },
         { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
       )
       return back(ctx, result.summary)
@@ -2328,8 +2328,8 @@ export function adminRouter(): Router {
     const url = String(body.url ?? '')
     if (!url) return back(ctx, '!No image chosen.')
     const alt = `${product.title}`
-    if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)].slice(0, 8) })
-    else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }].slice(0, 8) })
+    if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)] })
+    else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }] })
     return back(ctx, body.as === 'hero' ? 'That is the hero image now.' : 'Added to the gallery.')
   })
 

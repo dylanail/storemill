@@ -10,7 +10,7 @@ export function updateProductMedia(db: Db, storeId: string, productId: string, i
   const product = getProduct(db, storeId, productId)
   if (!product) throw new Error('Choose a product from this site')
   if (input.revision !== productMediaRevision(product)) throw new Error('Product media changed in another tab. Reload product media before saving; your gallery edits are still here.')
-  if (!Array.isArray(input.media) || input.media.length > 100) throw new Error('Use up to 100 slides')
+  if (!Array.isArray(input.media) || input.media.length > Math.max(100, product.media.length)) throw new Error('Use up to 100 slides')
   const available = new Set(listStoreMedia(db, storeId).map(item => item.url))
   const media: Media[] = input.media.map(item => {
     if (!item || typeof item.url !== 'string' || !available.has(item.url) || (/^\/_uploads\//.test(item.url) && !item.url.startsWith(`/_uploads/${storeId}/`))) throw new Error('Choose or upload media from this asset')

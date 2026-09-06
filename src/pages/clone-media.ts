@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { MAX_UPLOAD_BYTES, saveUpload, sniffImageType } from '../lib/uploads.ts'
+import { MAX_UPLOAD_BYTES, MAX_VIDEO_BYTES, saveMediaUpload, sniffImageType } from '../lib/uploads.ts'
 import { assertPublicNetworkUrl, PublicNetworkError } from './public-network.ts'
 
 export type ImageCopyStatus = 'localized' | 'reused' | 'embedded' | 'failed' | 'skipped'
@@ -38,6 +38,8 @@ export type ImageCopyOptions = {
   imageConcurrency?: number
   imageTimeoutMs?: number
   imageRetries?: number
+  /** Only explicitly identified product videos may use the larger video limit. */
+  productVideos?: Set<string>
 }
 
 type Span = { start: number; end: number; value: string; quote?: string; stylesheet?: boolean }
@@ -196,10 +198,11 @@ function rewriteAttribute(tag: string, attr: Attribute, rewrite: Rewrite, all: A
   if (name === 'style') next = rewriteCssImages(decoded, (url) => rewrite(url, context))
   else if (/^(?:srcset|data-srcset|data-lazy-srcset|imagesrcset)$/.test(name) && /^(?:img|source|link)$/.test(kind)) next = replaceSpans(decoded, srcsetUrls(decoded), (span) => rewrite(span.value, context))
   else if (/^(?:data-bg|data-background|data-background-image)$/.test(name)) next = /(?:url|image-set)\s*\(/i.test(decoded) ? rewriteCssImages(decoded, (url) => rewrite(url, context)) : rewrite(decoded, context)
-  else if ((/^(?:img|image|feimage|use)$/.test(kind) && /^(?:src|href|xlink:href|data-src|data-original|data-lazy-src|data-copy-(?:desktop|tablet|mobile)-src)$/.test(name))
+  else if ((/^(?:img|image|feimage|use)$/.test(kind) && /^(?:src|href|xlink:href|data-src|data-original|data-zoom-image|data-large_image|data-full|data-full-src|data-full-image|data-image-large|data-original-src|data-lazy-src|data-copy-(?:desktop|tablet|mobile)-src)$/.test(name))
     || (kind === 'source' && /^(?:data-src|data-original|data-lazy-src)$/.test(name))
     || (kind === 'input' && read('type') === 'image' && name === 'src')
     || (kind === 'video' && name === 'poster')
+    || (kind === 'a' && name === 'href' && /\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)/i.test(decoded))
     || (kind === 'meta' && /^(?:og:image(?::(?:url|secure_url))?|twitter:image(?::src)?)$/.test(read('property') || read('name')) && name === 'content')
     || (kind === 'link' && name === 'href' && (/(?:^|\s)(?:icon|apple-touch-icon|apple-touch-startup-image)(?:\s|$)/.test(read('rel')) || /(?:^|\s)preload(?:\s|$)/.test(read('rel')) && read('as') === 'image')))
     next = rewrite(decoded, context)
@@ -286,11 +289,11 @@ async function localizeReferences(refs: Reference[], sourceUrl: string, options:
         scheduled++
         if (options.imageBudget) options.imageBudget.remaining--
         work = (async () => {
-          const file = await downloadImage(target.href, sourceUrl, options)
+          const file = await downloadImage(target.href, sourceUrl, options, options.productVideos?.has(entry.url) || false)
           assertNotAborted(options.signal)
           const digest = createHash('sha256').update(file.data).digest('hex')
           const previous = bytesCache!.get(digest)
-          const owned = previous ?? saveUpload({ name: target.pathname.split('/').pop() || 'image', type: file.mime, data: file.data }, options.storeId).url
+          const owned = previous ?? saveMediaUpload({ name: target.pathname.split('/').pop() || 'image', type: file.mime, data: file.data }, options.storeId).url
           bytesCache!.set(digest, owned)
           shared.set(target.href, owned)
           copied++
@@ -357,7 +360,8 @@ async function fetchImage(url: string, sourceUrl: string, options: ImageCopyOpti
   throw new ImageDownloadError('Image redirect failed')
 }
 
-async function downloadImage(url: string, sourceUrl: string, options: ImageCopyOptions): Promise<{ data: Buffer; mime: string }> {
+async function downloadImage(url: string, sourceUrl: string, options: ImageCopyOptions, video = false): Promise<{ data: Buffer; mime: string }> {
+  const maxBytes = video ? MAX_VIDEO_BYTES : MAX_UPLOAD_BYTES
   const attempts = 1 + boundedInteger(options.imageRetries, 1, 0, 3)
   for (let attempt = 0; attempt < attempts; attempt++) {
     assertNotAborted(options.signal)
@@ -377,7 +381,7 @@ async function downloadImage(url: string, sourceUrl: string, options: ImageCopyO
         if (controller.signal.aborted) { void response.body?.cancel().catch(() => {}); throw controller.signal.reason }
         if (!response.ok) { await response.body?.cancel(); throw new ImageDownloadError(`HTTP ${response.status}`, response.status === 408 || response.status === 429 || response.status >= 500) }
         const length = Number(response.headers.get('content-length') ?? 0)
-        if (length > MAX_UPLOAD_BYTES) { await response.body?.cancel(); throw new ImageDownloadError(`Image exceeds the ${MAX_UPLOAD_BYTES / 1024 / 1024}MB upload limit`) }
+        if (length > maxBytes) { await response.body?.cancel(); throw new ImageDownloadError(`Image exceeds the ${maxBytes / 1024 / 1024}MB upload limit`) }
         const reader = response.body?.getReader()
         const chunks: Uint8Array[] = []
         let bytes = 0
@@ -389,7 +393,7 @@ async function downloadImage(url: string, sourceUrl: string, options: ImageCopyO
               const chunk = await reader.read()
               if (chunk.done) break
               bytes += chunk.value.length
-              if (bytes > MAX_UPLOAD_BYTES) { await reader.cancel(); throw new ImageDownloadError(`Image exceeds the ${MAX_UPLOAD_BYTES / 1024 / 1024}MB upload limit`) }
+              if (bytes > maxBytes) { await reader.cancel(); throw new ImageDownloadError(`Image exceeds the ${maxBytes / 1024 / 1024}MB upload limit`) }
               chunks.push(chunk.value)
             }
           } finally { controller.signal.removeEventListener('abort', cancel); reader.releaseLock() }
@@ -397,8 +401,9 @@ async function downloadImage(url: string, sourceUrl: string, options: ImageCopyO
         if (controller.signal.aborted) throw controller.signal.reason
         const data = Buffer.concat(chunks)
         if (!data.length) throw new ImageDownloadError('Empty image response')
-        const sniffed = sniffImageType(data)
+        const sniffed = sniffImageType(data) || (video ? data.subarray(4, 8).toString() === 'ftyp' ? 'video/mp4' : data.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) ? 'video/webm' : null : null)
         const declared = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase().replace(/^image\/(?:jpg|pjpeg)$/, 'image/jpeg').replace(/^image\/x-icon$/, 'image/vnd.microsoft.icon').replace(/^image\/x-png$/, 'image/png')
+        if (video && !sniffed?.startsWith('video/')) throw new ImageDownloadError('The product video URL did not return a video; no poster or rendered frame was substituted')
         if (!sniffed) throw new ImageDownloadError(`Response is not a supported image (${declared || 'missing Content-Type'}; bytes do not match JPEG, PNG, GIF, WebP, AVIF, SVG or ICO)`)
         const compatible = ['application/octet-stream', 'binary/octet-stream', sniffed, ...(sniffed === 'image/svg+xml' ? ['text/xml', 'application/xml'] : [])]
         if (declared && !compatible.includes(declared)) throw new ImageDownloadError(`Image MIME mismatch: declared ${declared}, received ${sniffed}`)

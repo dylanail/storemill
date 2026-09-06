@@ -1,4 +1,5 @@
 import { parse } from 'parse5'
+import { readImportedGallery } from './product-media-import.ts'
 import type { ImportedProduct } from '../domain/ops.ts'
 import type { Product } from '../domain/types.ts'
 import { minorDigits } from '../lib/money.ts'
@@ -18,6 +19,7 @@ const image = (value: unknown, source: string) => { try { const url = new URL(St
 /** Extract authoritative public prices before scripts disappear, without executing merchant code. */
 export function readSourceCommerce(html: string, source: string, fallbackCurrency: string): SourceCommerce {
   const out: SourceCommerce = { products: [], issues: [], giftRules: {} }
+  const gallery = readImportedGallery(html, source)
   const funnel = assignedJson(html, 'FUNNEL'), step = assignedJson(html, 'STEP'), sourceProducts = assignedJson(html, 'PRODUCTS')
   if (funnel?.id && step?.id) {
     out.platform = 'funnelish'; out.funnelId = String(funnel.id); out.stepType = Number(step.type); out.stepOrder=Number(step.order_index||0)
@@ -49,7 +51,7 @@ export function readSourceCommerce(html: string, source: string, fallbackCurrenc
       const actionId=/#yes-link-(\d+)/.exec(html)?.[1]
       const defaultId=String(primary.find(p=>String(p.entry.id)===actionId)?.entry.id||primary.find(p=>p.entry.config?.default)?.entry.id||primary[0]!.entry.id)
       const title = plain(primary[0]!.entry.name).replace(/^\d+\s*x\s*/i, '')
-      out.products.unshift({key:`funnelish:${funnel.id}:packages:${primary.map(p=>p.entry.id).join(',')}`,purpose:'primary',sourceIds:[...new Set(primary.map(p=>String(p.entry.id)))],defaultSourceId:defaultId,product:{title,description:'',images:[...new Set(primary.map(p=>image(p.entry.imageUrl,source)).filter(Boolean))],priceCents:primary[0]!.variant.priceCents,currency,variants:primary.map(p=>p.variant),options:[],source,metadata:{sourcePlatform:'funnelish',sourcePurpose:'primary',sourceDefaultVariant:defaultId}}})
+      out.products.unshift({key:`funnelish:${funnel.id}:packages:${primary.map(p=>p.entry.id).join(',')}`,purpose:'primary',sourceIds:[...new Set(primary.map(p=>String(p.entry.id)))],defaultSourceId:defaultId,product:{title,description:'',images:gallery.length?gallery.filter(item=>item.kind!=='video').map(item=>item.url):[...new Set(primary.map(p=>image(p.entry.imageUrl,source)).filter(Boolean))],...(gallery.length?{media:gallery}:{}),priceCents:primary[0]!.variant.priceCents,currency,variants:primary.map(p=>p.variant),options:[],source,metadata:{sourcePlatform:'funnelish',sourcePurpose:'primary',sourceDefaultVariant:defaultId,...(gallery.length?{sourceMedia:'gallery'}:{})}}})
     }
     // Literal source gift assignments are data, not inferred from claims such as "free" or "% off".
     const freeIds = new Set(entries.filter((e:any)=>!e.isSub && Number(e.price)===0).map((e:any)=>String(e.id)))
@@ -79,7 +81,7 @@ export function readSourceCommerce(html: string, source: string, fallbackCurrenc
         variants.push({title:plain(offer.name || 'Default'),priceCents:price,sourceId:String(offer.sku || data.sku || data.productID || ''),...(offer.availability && /OutOfStock|SoldOut|Discontinued/.test(offer.availability)?{inventory:0}:{})})
       }
       if (data.name && variants.length) {
-        const images=[data.image].flat().filter(Boolean).map((i:any)=>image(i.url || i,source)).filter(Boolean)
+        const images=[data.image].flat().filter(Boolean).map((i:any)=>image(i.contentUrl || i.url || i,source)).filter(Boolean)
         out.products.push({key:'schema:'+String(data['@id']||data.url||data.sku||data.productID||source),purpose:'primary',sourceIds:[String(data.productID||data.sku||'')].filter(Boolean),product:{title:plain(data.name),description:plain(data.description),images,priceCents:variants[0]!.priceCents,currency,variants,options:[],source}})
       }
     }
@@ -90,6 +92,7 @@ export function readSourceCommerce(html: string, source: string, fallbackCurrenc
   for (const node of nodes.filter(node=>node.tagName==='script'&&attr(node,'type').toLowerCase()==='application/ld+json')) {
     try { visit(JSON.parse((node.childNodes||[]).map((part:any)=>part.value||'').join(''))) } catch { /* malformed optional metadata */ }
   }
+  if(out.products.length===1&&gallery.length){out.products[0]!.product.media=gallery;out.products[0]!.product.images=gallery.filter(item=>item.kind!=='video').map(item=>item.url)}
   return out
 }
 

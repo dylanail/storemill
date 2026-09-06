@@ -9,6 +9,26 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const response = (bytes = png, type = 'image/png') => new Response(bytes, { headers: { 'content-type': type } })
 const fetchImages = (async () => response()) as typeof fetch
 
+test('product video imports own the original bytes and reject poster-image substitutions', async () => {
+  const url='https://cdn.example/product.mp4', mp4=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(32)])
+  const copied=await localizeImageUrls([url],{storeId:'store_original_video',productVideos:new Set([url]),fetchImpl:(async()=>response(mp4,'video/mp4')) as typeof fetch})
+  assert.equal(copied.report.complete,true)
+  assert.deepEqual(readUpload(copied.urls[0]!)?.data,mp4)
+  const poster=await localizeImageUrls([url],{storeId:'store_video_poster',productVideos:new Set([url]),fetchImpl:fetchImages})
+  assert.equal(poster.report.complete,false)
+  assert.equal(poster.report.entries[0]?.status,'failed')
+  assert.match(poster.report.entries[0]?.reason||'',/no poster or rendered frame was substituted/)
+  assert.equal(poster.urls[0],url,'a failed video remains visibly unresolved instead of becoming a still image')
+})
+
+test('full-resolution zoom attributes and image links are owned alongside responsive previews', async()=>{
+ const seen:string[]=[]
+ const copied=await localizeClonedHtml('<a href="/original.jpg"><img src="/small.jpg" data-zoom-image="/zoom.jpg" data-large_image="/large.jpg"></a>','https://source.example/',{storeId:'store_original_zoom',fetchImpl:(async(url:string|URL|Request)=>{seen.push(String(url));return response()}) as typeof fetch})
+ assert.deepEqual(new Set(seen),new Set(['https://source.example/original.jpg','https://source.example/small.jpg','https://source.example/zoom.jpg','https://source.example/large.jpg']))
+ assert.equal(copied.report.complete,true)
+ assert.doesNotMatch(copied.html,/="\/(?:original|small|zoom|large)\.jpg"/)
+})
+
 test('failed main, nested and embedded stylesheets keep the saved copy report incomplete', async () => {
   const captureReport = { mode: 'rendered' as const, complete: true, viewports: [], issues: [] }
   const sourceCapture = { url: 'https://source.example/', html: '<link rel="stylesheet" href="missing.css"><style>@import "nested.css";</style><iframe data-copy-embedded="review"></iframe>', captureReport,

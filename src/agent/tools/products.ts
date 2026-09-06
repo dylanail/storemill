@@ -335,7 +335,7 @@ export const productTools: Tool[] = defineTools([
         ...(store?.brand ? { palette: store.brand } : {}),
         ...(reference ? { reference } : {}),
       })
-      updateProduct(ctx.db, ctx.storeId, product.id, { media: [...product.media, { url, alt: args.scene as string }].slice(0, 8) })
+      updateProduct(ctx.db, ctx.storeId, product.id, { media: [...product.media, { url, alt: args.scene as string }] })
       return { summary: `Added an image to ${product.title}.`, artifacts: [{ type: 'image', urls: [url], caption: args.scene as string }] }
     },
   },
@@ -360,17 +360,25 @@ export const productTools: Tool[] = defineTools([
   {
     name: 'attach_product_photo',
     area: 'products',
-    description: 'Attach an uploaded photo to a product as its hero image and re-shoot it in a preset.',
+    description: 'Attach the original uploaded photo without altering it. Only create a staged version when a scene preset is explicitly requested.',
     schema: {
       productId: { type: 'string', required: true },
       upload: { type: 'string', required: true, pattern: '^/_uploads/', help: 'The upload URL.' },
-      preset: { type: 'string', enum: PRESET_IDS as unknown as string[], default: 'white-seamless' },
+      preset: { type: 'string', enum: ['original', ...PRESET_IDS], default: 'original' },
       shot: { type: 'string', enum: PHOTO_BRIEFS.map((brief) => brief.id), help: 'Which brief from the photo checklist this satisfies. It goes in the alt text, which is what the Creative page counts coverage from.' },
     },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
+      if (!args.preset || args.preset === 'original') {
+        const url = args.upload as string, shot = (args.shot as string) || ''
+        updateProduct(ctx.db, ctx.storeId, product.id, {
+          ...(!product.heroImage ? { heroImage: url } : {}),
+          media: [...product.media.filter(item => item.url !== url), { url, alt: labelShot(product.title, shot) }],
+        })
+        return { summary: `Added the original photo to ${product.title} without changes.`, artifacts: [{ type: 'image', urls: [url], caption: `${product.title}: original photo` }] }
+      }
       const staged = await generate({
         subject: `${product.title} ${store?.name ?? ''}`,
         preset: args.preset as PresetId,
@@ -386,7 +394,7 @@ export const productTools: Tool[] = defineTools([
           { url: staged, alt: labelShot(`${product.title}, ${args.preset}`, shot) },
           { url: args.upload as string, alt: labelShot(`${product.title}, original photo`, shot) },
           ...product.media,
-        ].slice(0, 8),
+        ],
       })
       const brief = PHOTO_BRIEFS.find((entry) => entry.id === shot)
       return {

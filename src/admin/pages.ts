@@ -1,3 +1,4 @@
+import { productGalleryMedia } from '../pages/product-data.ts'
 import { listImports } from '../control/asset-import-jobs.ts'
 import { mediaRebrandStyle, rebrandHistory } from './media-rebrand-page.ts'
 import { themeEditorPage } from './theme-page.ts'
@@ -210,6 +211,7 @@ export function productDetail(ctx: Ctx, productId: string): string {
   const product = listProducts(ctx.db, ctx.store.id, { limit: 300 }).find((entry) => entry.id === productId)
   if (!product) return '<p class="muted">No such product.</p>'
   const stats = statsFor(ctx.db, ctx.store.id, product.id)
+  const media = productGalleryMedia(product)
   return `${flash(ctx)}<div class="head"><div><div class="eyebrow"><a href="/admin/products" style="text-decoration:none">Products</a> / ${escapeHtml(product.status)}</div>
     <h1 class="serif">${escapeHtml(product.title)}</h1></div>
     <a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}" target="_blank" rel="noopener">View on the storefront ↗</a></div>
@@ -237,18 +239,17 @@ export function productDetail(ctx: Ctx, productId: string): string {
         .join('')}</tbody></table></div>
   </div>
   <div>
-    <div class="card"><h2>Media</h2><div class="grid3" style="grid-template-columns:repeat(2,1fr);margin-top:.6rem">
-      ${(product.media.length ? product.media : product.heroImage ? [{ url: product.heroImage, alt: product.title }] : [])
-        .slice(0, 4)
-        .map((entry) => mediaKind(entry.url)==='video'?`<div><video src="${escapeHtml(entry.url)}" controls playsinline preload="metadata" aria-label="${escapeHtml(entry.alt)}" style="width:100%;border-radius:8px"></video></div>`:`<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
-        .join('')}</div>
+    <div class="card" data-product-media><h2>Product media <span class="muted">(${media.length})</span></h2>
+      <p class="muted" style="font-size:12px;margin:.4rem 0">All gallery files, in order. Open a file to view it at full size.</p>
+      <div class="grid3" style="grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr));margin-top:.8rem;align-items:start">
+      ${media.map((entry,index) => `<figure data-product-media-item style="margin:0;min-width:0">${(entry.kind||mediaKind(entry.url))==='video'?`<video src="${escapeHtml(entry.url)}" controls playsinline preload="metadata" aria-label="${escapeHtml(entry.alt)}" style="width:100%;border-radius:8px"></video>`:`<a href="${escapeHtml(/^(https?:\/\/|\/(?!\/))/.test(entry.url)?entry.url:'#')}" target="_blank" rel="noopener" aria-label="Open gallery image ${index+1} at full size"><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" loading="lazy" style="display:block;width:100%;aspect-ratio:1;object-fit:contain;border-radius:8px;border:1px solid var(--line);background:#f7f7f7"></a>`}<figcaption style="display:flex;justify-content:space-between;gap:.5rem;font-size:12px;margin:.5rem 0"><span>${index+1} of ${media.length}${entry.url===product.heroImage?' · Featured':''}</span><a href="${escapeHtml(/^(https?:\/\/|\/(?!\/))/.test(entry.url)?entry.url:'#')}" target="_blank" rel="noopener">Open file ↗</a></figcaption>${(entry.kind||mediaKind(entry.url))!=='video'?shotPicker(product.id,entry.url,shotOf(entry.alt)):''}</figure>`).join('') || '<p class="muted">No product media yet.</p>'}</div>
       <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
         <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>
-        <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
+        <div class="field"><label>Photo processing</label><select name="preset"><option value="original" selected>Keep original — no changes</option>${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
           .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
         <div class="field"><label>Which creative brief does it satisfy?</label><select name="shot"><option value="">Not one of the standard shots</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}">${escapeHtml(brief.name)}</option>`).join('')}</select></div>
-        <button class="btn primary" type="submit">Upload and stage</button></form>
-      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery.</p></div>
+        <button class="btn primary" type="submit">Add photo</button></form>
+      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Original files are added without changes. Choose a scene above only if you want an additional staged version.</p></div>
     ${regenerateCard(ctx, product)}
     <div class="card"><h2>The page</h2>
       <p class="muted" style="font-size:12px;margin:.3rem 0">${product.content.benefits?.length ?? 0} benefits · ${product.content.comparison?.rows.length ?? 0}-row comparison · ${product.content.specs?.length ?? 0} specs · ${product.content.faq?.length ?? 0} questions${product.content.guarantee ? ' · guarantee' : ''}</p>
