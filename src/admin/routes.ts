@@ -1,3 +1,4 @@
+import { minorDigits } from '../lib/money.ts'
 import { startImport, getImport, cancelImport } from '../control/asset-import-jobs.ts'
 import { importJobPage } from './asset-import-page.ts'
 import { mediaEditInput, prepareEditorMedia } from '../control/editor-media.ts'
@@ -48,7 +49,7 @@ import { readCopyReport, saveCopyReport } from '../pages/clone-report.ts'
 import { copyReportPage } from './copy-report-page.ts'
 import { installImportedBundle, planImportedBundle, repairImportedBundleHtml } from '../pages/imported-bundles.ts'
 import { blockDefinition } from '../pages/blocks.ts'
-import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
+import { listBundles, removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
@@ -1109,6 +1110,23 @@ export function adminRouter(): Router {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
     }
   })
+
+  router.post('/admin/bundles/:id/prices', async (ctx) => {
+    const current = session(ctx), body = await ctx.body();
+    const bundle = listBundles(db(), current.store.id).find(bundle => bundle.id === ctx.params.id);
+    if (!bundle) throw notFound('No such bundle');
+    try {
+      const scale = 10 ** minorDigits(current.store.currency);
+      const tiers = bundle.tiers.map((tier, index) => {
+        const sale = Math.round(Number(body['sale' + index]) * scale);
+        const compare = Math.round(Number(body['compare' + index]) * scale);
+        if (!Number.isSafeInteger(sale) || sale <= 0 || sale % tier.quantity) throw new Error('Enter a positive sale total that divides into whole unit prices for each quantity.');
+        return { ...tier, discountPercent: 0, unitPriceCents: sale / tier.quantity, compareAtTotalCents: compare };
+      });
+      upsertBundle(db(), current.store.id, { productId: bundle.productId, title: bundle.title, tiers, style: bundle.style });
+      return back(ctx, 'Bundle prices updated in the product cards, cart and checkout.');
+    } catch (error) { return back(ctx, '!' + (error instanceof Error ? error.message : 'Could not save prices')); }
+  });
 
   router.post('/admin/bundles/:id/delete', (ctx) => {
     const current = adminSession(ctx)

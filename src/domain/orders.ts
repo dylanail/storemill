@@ -86,6 +86,7 @@ export function completeCart(
 ): Order {
   const cart = getCart(db, storeId, cartId)
   if (!cart) throw new CheckoutError('No cart')
+  if (cart.checkout.preview) throw new CheckoutError('Preview checkout: no payment or order is created. Publish the store to accept orders.')
   if (cart.orderId) return getOrder(db, storeId, cart.orderId) as Order
   if (!cart.items.length) throw new CheckoutError('Your cart is empty')
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.email)) throw new CheckoutError('Enter a valid email address')

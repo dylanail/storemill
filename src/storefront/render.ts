@@ -1,3 +1,4 @@
+import { cartDisplayLines } from '../domain/cart-prices.ts'
 import { mapProductGalleries, productGalleryRuntime } from '../pages/product-gallery-runtime.ts'
 import { pageProductData } from '../pages/product-data.ts'
 import { metaEventsHtml, type MetaEvent } from '../analytics/meta-browser.ts'
@@ -746,10 +747,11 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const firstProduct = items[0] ? getProduct(view.db, view.store.id, items[0].productId) : null
   const arrival = firstProduct ? deliveryEstimate(firstProduct.supplier) : null
   const proof = listReviews(view.db, view.store.id, { status: 'approved', limit: 3 }).filter((review) => !items.length || items.some((item) => item.productId === review.productId)).slice(0, 3)
+  const pricedLines = cart ? cartDisplayLines(view.db, view.store.id, cart, totals) : []
   const summary = `<div class="summary-body">
-    <table class="lines">${items.map((item) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
+    <table class="lines">${items.map((item, index) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
       <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
-      <td style="text-align:right">${item.unitCents ? baseMoney(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
+      <td style="text-align:right">${pricedLines[index]?.discountCents ? `<s class="micro">${money(pricedLines[index]!.originalLineCents, view)}</s> ` : ''}${item.unitCents ? money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
     <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
     ${totalsBlock(view, totals)}</div>`
   const bump = `<section class="co-block" data-owned-bump-slot>${input.bump?bumpHtml(view,input.bump):''}</section>`
@@ -774,9 +776,9 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
       <!--bump-->
       <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
         ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
-          <p class="micro">No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.</p></div>`}
+          <p class="micro">${view.preview ? 'Preview checkout. Try your bundle, cart and delivery choices here. Payments and order creation are disabled.' : 'No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.'}</p></div>`}
         <label class="micro check" style="margin-top:.8rem"><input type="checkbox" name="billingSame" value="true" checked> Billing address same as shipping</label></section>
-      <button class="btn btn--wide pay" type="submit" id="pay" ${view.store.kind === 'funnel' && !items.length ? 'disabled' : ''}><span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
+      <button class="btn btn--wide pay" type="submit" id="pay" ${view.preview || view.store.kind === 'funnel' && !items.length ? 'disabled' : ''}><span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
     </form>`
   const script = `<script>
 (function(){
@@ -802,7 +804,7 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   })});
 })();
 </script>
-${view.store.kind === 'funnel' ? `<script>window.__FUNNEL_CHECKOUT=${JSON.stringify({ base: view.base, hasSelection: items.length > 0, currency: totals.currency, minor: minorDigits(totals.currency) }).replace(/</g, '\\u003c')};\n${readFileSync(new URL('./funnel-checkout.js', import.meta.url), 'utf8')}</script>` : ''}
+${view.store.kind === 'funnel' ? `<script>window.__FUNNEL_CHECKOUT=${JSON.stringify({ base: view.base, preview: view.preview, hasSelection: items.length > 0, currency: totals.currency, minor: minorDigits(totals.currency) }).replace(/</g, '\\u003c')};\n${readFileSync(new URL('./funnel-checkout.js', import.meta.url), 'utf8')}</script>` : ''}
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
   const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
   const proofHtml = `<div class="co-proof">

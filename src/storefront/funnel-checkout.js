@@ -6,7 +6,7 @@
   let selected=config.hasSelection,busy=false;
   const money=cents=>new Intl.NumberFormat(undefined,{style:'currency',currency:config.currency}).format(cents/10**config.minor);
   const status=message=>document.querySelectorAll('[data-funnel-error]').forEach(node=>node.textContent=message);
-  function sync(){pay.disabled=busy||!selected;form.dataset.funnelSelectionReady=String(selected&&!busy);}
+  function sync(){pay.disabled=!!config.preview||busy||!selected;form.dataset.funnelSelectionReady=String(selected&&!busy);}
   window.__selectFunnelPackage=async function(variantId,quantity){
     if(busy||form.dataset.paymentInProgress==='true')return false;
     busy=true;sync();status('Updating your package…');

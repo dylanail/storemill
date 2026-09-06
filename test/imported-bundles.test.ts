@@ -138,3 +138,16 @@ test('duplicating a store remaps bundle, product and variant bindings; cross-sit
   assert.ok(reused.includes('data-copy-product-id="prod_destination"'))
   assert.equal(templateHtml(reused,'prod_destination'),reused)
 })
+
+test('source comparison prices repair older imports without replacing merchant page edits or duplicating discounts',()=>{
+  const {db,store,product,original,plan}=setup()
+  const before=installImportedBundle(db,store.id,product.id,plan)
+  const captured=original.replace('price&quot;:5495','price&quot;:5495,&quot;compareAtPrice&quot;:10990')
+  const priced=planImportedBundle(captured,plan.sourceUrl)!
+  assert.equal(priced.sourceCompareAtCents,10990)
+  const repaired=installImportedBundle(db,store.id,product.id,priced)
+  assert.equal(repaired.bundle.id,before.bundle.id)
+  assert.deepEqual(repaired.bundle.tiers.map(tier=>tier.compareAtTotalCents),[10990,21980,43960])
+  assert.equal(db.one<{compare_at_cents:number}>('SELECT compare_at_cents FROM variants WHERE id=?',product.variants[0]!.id)?.compare_at_cents,10990)
+  assert.equal(db.one<{n:number}>('SELECT COUNT(*) n FROM promotions WHERE store_id=?',store.id)?.n,1)
+})

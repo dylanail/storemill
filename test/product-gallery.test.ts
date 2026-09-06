@@ -24,7 +24,7 @@ test('gallery catalog updates, independent duplicates and template retargeting',
   const copy=duplicateAsset(db,user.id,store.id)
   const copied=copy.products[0]!
   assert.notEqual(copied.id,product.id)
-  assert.ok(copy.pages[0]!.rawHtml.includes(copied.id));assert.ok(!copy.pages[0]!.rawHtml.includes(product.id))
+  assert.ok(copy.pages.find(page=>page.title==='Gallery')!.rawHtml.includes(copied.id));assert.ok(!copy.pages.find(page=>page.title==='Gallery')!.rawHtml.includes(product.id))
   const revision=productMediaRevision(copied)
   const changed=updateProductMedia(db,copy.store.id,copied.id,{revision,media:[media[1],media[0]]})
   assert.equal(changed.heroImage,media[1]!.url)

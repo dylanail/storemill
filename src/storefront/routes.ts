@@ -1,3 +1,4 @@
+import { cartDisplayLines } from '../domain/cart-prices.ts'
 import { currentOfferStep, respondToOffer, offerReceipts } from '../domain/post-purchase.ts'
 import { id } from '../lib/ids.ts'
 import { metaEvent, type MetaEvent } from '../analytics/meta-browser.ts'
@@ -37,6 +38,7 @@ import { atomFeed, rssFeed } from './feeds.ts'
 import { syncOrderTracking } from '../shipping/seventeen-track.ts'
 
 const CART_COOKIE = 'amboras_cart'
+const cartCookie = (storeId: string, preview = false) => `${CART_COOKIE}_${preview ? 'preview_' : ''}${storeId}`
 const REGION_COOKIE = 'amboras_region'
 const VISITOR_COOKIE = 'amboras_v'
 const log = logger('checkout')
@@ -59,7 +61,7 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
   const db = getDb()
   const env = environment(db, store.id, opts.preview ? (ctx.query.get('theme')==='live'?'live':'draft') : store.status === 'live' ? 'live' : 'draft')
   const branded = Object.keys(env.brand).length ? { ...store, brand: env.brand } : store
-  const cartId = ctx.cookies[`${CART_COOKIE}_${store.id}`]
+  const cartId = ctx.cookies[cartCookie(store.id, opts.preview)]
   const cart = cartId ? getCart(db, store.id, cartId) : null
   const regionCookie = ctx.cookies[`${REGION_COOKIE}_${store.id}`]
   const country = String(ctx.req.headers['cf-ipcountry'] ?? ctx.req.headers['x-vercel-ip-country'] ?? '')
@@ -81,7 +83,7 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
     env,
     base,
     preview: opts.preview ?? false,
-    cart: cart && !cart.orderId ? cart : null,
+    cart: cart && !cart.orderId && Boolean(cart.checkout.preview) === Boolean(opts.preview) ? cart : null,
     totals: null,
     region,
     regions,
@@ -89,14 +91,14 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
 }
 
 function withTotals(current: StoreView): StoreView {
-  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id)
+  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id, { preview: current.preview })
   return { ...current, cart, totals: totals(current.db, current.store.id, cart) }
 }
 
 function ensureCart(ctx: Ctx, current: StoreView) {
-  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id)
+  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id, { preview: current.preview })
   if (!current.cart) {
-    setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
+    setCookie(ctx.res, cartCookie(current.store.id, current.preview), cart.id, { maxAge: 60 * 60 * 24 * 30 })
   }
   return cart
 }
@@ -155,7 +157,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/api/page-products/:id', (ctx) => {
     const current = open(ctx)
     const product = getProduct(current.db, current.store.id, ctx.params.id as string)
-    if (!product || product.status !== 'published' || product.metadata.hidden) throw notFound('No such product')
+    if (!product || product.status !== 'published' && !(current.preview && product.status === 'draft') || product.metadata.hidden) throw notFound('No such product')
     return pageProductData(product, current.region?.currency ?? current.store.currency,
       value => convertCents(value, current.region, current.store.currency))
   })
@@ -204,12 +206,15 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, visitor)
     record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
     if (version && version.productId === product.id) {
+      if (version.mode === 'html') return html(view.htmlPage(current, version))
       return html(view.blockPage(current, version, {
         title: product.seo.title || `${product.title} — ${current.store.name}`,
         description: product.seo.description || product.subtitle || product.description.slice(0, 155),
         canonical: `${current.base}/products/${product.handle}`,
       }))
     }
+    const imported = current.db.one<{ id: string }>(`SELECT id FROM pages WHERE store_id=? AND product_id=? AND role='pdp' AND mode='html' AND source_url<>'' ${current.preview ? '' : "AND status='published'"} ORDER BY updated_at DESC LIMIT 1`,current.store.id,product.id)
+    if (imported) return html(view.htmlPage(current,getPage(current.db,current.store.id,imported.id)!))
     const stats = statsFor(current.db, current.store.id, product.id)
     const reviews = listReviews(current.db, current.store.id, { productId: product.id, status: 'approved', limit: 12 })
     const companions = companionsFor(current.db, current.store.id, product.id, 2)
@@ -287,7 +292,16 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const variantId = String(body.variantId ?? '')
     const quantity = cartQuantity(body.quantity, 1)
-    const updated = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined)
+    const extras = [...new Set(Array.isArray(body.additionalVariantIds) ? body.additionalVariantIds.map(String) : [])].filter(id => id !== variantId).slice(0, 10)
+    for (const id of extras) {
+      const variant = getVariant(current.db, current.store.id, id), product = variant ? getProduct(current.db, current.store.id, variant.productId) : null
+      if (!variant || !product || product.status !== 'published' && !(current.preview && product.status === 'draft') || !canReserve(current.db, id, 1)) throw badRequest('A selected cart add-on is not available')
+    }
+    const updated = current.db.tx(() => {
+      let result = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined)
+      for (const id of extras) if (!result.items.some(item => item.variantId === id)) result = addToCart(current.db, current.store.id, cart.id, id, 1, 'cart-upsell')
+      return result
+    })
     const line = updated.items.find((item) => item.variantId === variantId)
     record(ctx, current, 'cart.add', { productId: line?.productId, amountCents: (line?.unitCents ?? 0) * quantity })
     if (wantsJson(ctx)) return cartState({ ...current, cart: updated })
@@ -318,8 +332,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (current.store.kind === 'funnel') return redirect(`${current.base}/checkout`)
     if (resumed) {
       const cart = getCart(current.db, current.store.id, resumed)
-      if (cart && !cart.orderId) {
-        setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
+      if (cart && !cart.orderId && Boolean(cart.checkout.preview) === current.preview) {
+        setCookie(ctx.res, cartCookie(current.store.id, current.preview), cart.id, { maxAge: 60 * 60 * 24 * 30 })
         current = { ...current, cart }
       }
     }
@@ -343,6 +357,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals({ ...opened, cart: ensureCart(ctx, opened) })
     const cart = current.cart
     if (!cart) return redirect(`${current.base}/cart`)
+    if (current.preview) return html(renderCheckout(current, checkoutInputFor(current, { error: 'Preview checkout: no payment or order is created.' })), 409)
     if (stripeFor(current.db, current.store.id)) {
       return html(renderCheckout(current, checkoutInputFor(current, { error: 'Payment could not start. Reload the page and try again — nothing has been charged.' })), 409)
     }
@@ -460,7 +475,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
         const sample = !current.cart?.items.length
         if (sample && !current.preview && current.store.kind !== 'funnel') return redirect(`${current.base}/cart`)
         // Direct funnel checkout must persist its empty cart for package selection.
-        if (current.store.kind === 'funnel' && current.cart) setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, current.cart.id, { maxAge: 60 * 60 * 24 * 30 })
+        if (current.store.kind === 'funnel' && current.cart) setCookie(ctx.res, cartCookie(current.store.id, current.preview), current.cart.id, { maxAge: 60 * 60 * 24 * 30 })
         record(ctx,current,'checkout.start',{amountCents:current.totals?.totalCents||0});
         const shown = sample && current.store.kind !== 'funnel' ? withSampleCart(current) : current
         return html(built.mode === 'html' ? view.htmlPage(shown, built, checkoutInputFor(shown)) : view.checkoutBlockPage(shown, built, checkoutInputFor(shown), { sample }))
@@ -529,7 +544,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const quantity = Number(body.quantity)
     const variant = getVariant(current.db, current.store.id, variantId)
     const product = variant ? getProduct(current.db, current.store.id, variant.productId) : null
-    if (!variant || !product || product.status !== 'published' || product.metadata.hidden) throw badRequest('Choose an available package')
+    if (!variant || !product || product.status !== 'published' && !(current.preview && product.status === 'draft') || product.metadata.hidden) throw badRequest('Choose an available package')
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999 || !canReserve(current.db, variantId, quantity)) throw badRequest('That package quantity is not available')
     const cart = ensureCart(ctx, current)
     if (cart.paymentIntentId) {
@@ -561,8 +576,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.post('/checkout/buy', async (ctx) => {
     const current = open(ctx)
     const body = await ctx.body()
-    const cart = createCart(current.db, current.store.id, current.region?.id)
-    setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
+    const cart = createCart(current.db, current.store.id, current.region?.id, { preview: current.preview })
+    setCookie(ctx.res, cartCookie(current.store.id, current.preview), cart.id, { maxAge: 60 * 60 * 24 * 30 })
     addToCart(current.db, current.store.id, cart.id, String(body.variantId ?? ''), cartQuantity(body.quantity, 1), 'buy-now')
     const line = getCart(current.db, current.store.id, cart.id)?.items[0]
     record(ctx, current, 'cart.add', { ...(line ? { productId: line.productId } : {}), amountCents: (line?.unitCents ?? 0) * (line?.quantity ?? 1) })
@@ -618,8 +633,10 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   /** A PaymentIntent for the cart as it stands. Re-used if the amount has not moved. */
   router.post('/checkout/intent', async (ctx) => {
     const current = open(ctx)
+    if (current.preview) throw badRequest('Preview checkout cannot create a payment')
     const cart = ensureCart(ctx, current)
     const stripe = stripeFor(current.db, current.store.id)
+    if (cart.checkout.preview) throw badRequest('Preview checkout cannot create a payment')
     if (!stripe) return { error: 'No payment provider is connected' }
     if (stripe.config.captureMode === 'manual') return { error: 'Manual capture is not supported by this checkout. Select Automatic capture in Payments before accepting orders. No payment has been started.' }
     if (!cart.items.length || cart.items.some(item => !Number.isInteger(item.quantity) || item.quantity < 1 || !canReserve(current.db, item.variantId, item.quantity))) return { error: 'Some items are no longer available. Review your cart.' }
@@ -661,8 +678,9 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   /** Stripe returns here. The order is written only once the intent reports success. */
   router.get('/checkout/complete', async (ctx) => {
     const current = withTotals(open(ctx))
-    const cart = getCart(current.db, current.store.id, ctx.cookies[`${CART_COOKIE}_${current.store.id}`] || '') || current.cart
+    const cart = getCart(current.db, current.store.id, ctx.cookies[cartCookie(current.store.id, current.preview)] || '') || current.cart
     const stripe = stripeFor(current.db, current.store.id)
+    if (current.preview) throw badRequest('Preview checkout cannot complete a payment')
     const intentId = ctx.query.get('payment_intent') ?? cart?.paymentIntentId ?? ''
     if (!cart || !stripe || !intentId) return redirect(`${current.base}/checkout`)
     if (intentId !== cart.paymentIntentId) throw badRequest('This payment does not belong to your cart')
@@ -872,7 +890,7 @@ function readCheckoutForm(body: Record<string, unknown>) {
 
 /** Everything the checkout renders from, in one place: totals, region, the payment provider and the funnel's bump. */
 function checkoutInputFor(current: StoreView, extra: Partial<CheckoutInput> = {}): CheckoutInput {
-  const stripe = stripeFor(current.db, current.store.id)
+  const stripe = current.preview ? null : stripeFor(current.db, current.store.id)
   const amounts = current.store.kind === 'funnel' && !current.cart?.items.length ? { ...current.totals!, shippingCents: 0, taxCents: 0, totalCents: 0 } : current.totals!
   return { totals: amounts, region: regionOf(current), stripe: stripe ? { publishableKey: stripe.config.publishableKey } : null, bump: configuredBump(current), ...extra }
 }
@@ -893,7 +911,7 @@ function renderCheckout(current: StoreView, input: CheckoutInput): string {
 
 /** The cart with one line from the first product, in memory only, so a checkout page can be previewed without buying anything. */
 function withSampleCart(current: StoreView): StoreView {
-  const product = listProducts(current.db, current.store.id, { status: 'published', limit: 1 })[0]
+  const product = listProducts(current.db, current.store.id, { status: current.preview ? 'all' : 'published', limit: 1 })[0]
   const variant = product?.variants[0]
   if (!product || !variant || !current.cart) return current
   const cart = { ...current.cart, items: [{ variantId: variant.id, productId: product.id, title: product.title, variantTitle: variant.title, image: variant.image || product.heroImage, unitCents: variant.priceCents, quantity: 1 }] }
@@ -915,7 +933,7 @@ function afterOrder(ctx: Ctx, current: StoreView, order: ReturnType<typeof compl
     purchaseEventId: order.id, externalId:current.db.one<{customer_id:string}>('SELECT customer_id FROM orders WHERE id=? AND store_id=?',order.id,current.store.id)?.customer_id||undefined, meta: { orderId: order.id },
   })
   if (event) attributeOrder(current.db, current.store.id, order.id, event.sessionId)
-  if (options.clearCart !== false) setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, '', { maxAge: 0 })
+  if (options.clearCart !== false) setCookie(ctx.res, cartCookie(current.store.id, current.preview), '', { maxAge: 0 })
   // The receipt is not allowed to fail the checkout: the order is already
   // written and paid for by the time this runs.
   void sendEmail(current.db, current.store.id, { template: 'order_confirmation', to: order.email, context: orderContext(order, `${ctx.url.origin}${current.base}`) }).catch(() => undefined)
@@ -973,6 +991,6 @@ function cartQuantity(value: unknown, fallback: number): number {
   return quantity
 }
 function cartState(current: StoreView) {
-  const cart = current.cart!
-  return { metaEvents:current.preview?[]:current.metaEvents||[], items: cart.items.map(item => ({ variantId:item.variantId,productId:item.productId,title:item.title,variantTitle:item.variantTitle,image:item.image,quantity:item.quantity,lineCents:convertCents(item.unitCents * item.quantity,current.region,current.store.currency) })), count:cart.items.reduce((sum,item)=>sum+item.quantity,0), totals:paymentTotals(current.db,current.store.id,cart), discountCode:cart.discountCode }
+  const cart = current.cart!, totals = paymentTotals(current.db, current.store.id, cart)
+  return { metaEvents:current.preview?[]:current.metaEvents||[], items:cartDisplayLines(current.db,current.store.id,cart,totals), count:cart.items.reduce((sum,item)=>sum+item.quantity,0), totals, discountCode:cart.discountCode }
 }

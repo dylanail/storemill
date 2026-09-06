@@ -9,6 +9,7 @@ export type CopyReport = {
   failed: Array<{ url: string; reason: string }>
   remaining: string[]
   externalSteps: string[]
+  generatedPages?: Array<{ id: string; role: string; reason: string }>
   images?: ImageLocalizationReport
   captureIssues?: Array<{ url: string; reason: string }>
   interactionIssues?: Array<{ url: string; reason: string }>

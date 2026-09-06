@@ -19,6 +19,8 @@ import { seedTodos } from './todos.ts'
 import { createStore, getStore, setTheme, updateStore, type Store } from './stores.ts'
 import { setBuildMode, setSiteShape } from './build.ts'
 import { addRedirect } from '../seo/schema.ts'
+import { ensureCopiedCheckout } from '../pages/commerce-pages.ts'
+import { installSourceCartShipping } from '../pages/imported-cart.ts'
 
 export type AssetKind = Store['kind']
 export type ImportProgress = { phase: 'pages'|'products'|'wiring'|'done'; percent: number; task: string; copied: number; discovered: number; products: number; images: number; currentUrl: string }
@@ -239,6 +241,7 @@ export async function importAssetFromUrl(
     }
   }
   const installedBundles=new Set<string>()
+  for (const document of documents) if (installSourceCartShipping(db, store.id, document.commerceHtml || document.html)) break
   const pages = documents.map((document, index) => {
     emit({percent:86+Math.floor(10*index/documents.length),task:'Wiring page '+(index+1)+' of '+documents.length+': '+document.title,currentUrl:document.sourceUrl})
     const path = new URL(document.sourceUrl).pathname
@@ -246,7 +249,7 @@ export async function importAssetFromUrl(
     const offerPlan = offerPlans.get(canonicalPageUrl(document.sourceUrl))
     let boundHtml = bindSourceProducts(offerPlan && product ? bindImportedOfferProduct(document.html, offerPlan, product) : document.html,products)
     try {
-      const bundlePlan = planImportedBundle(document.html, document.sourceUrl)
+      const bundlePlan = planImportedBundle(document.html, document.sourceUrl, document.commerceHtml || document.html)
       if (bundlePlan) {
         const bundled=products.find(candidate=>candidate.variants.some(variant=>candidate.metadata['sourceVariant:'+variant.id]===bundlePlan.sourceVariantId))||product
         if (!bundled) throw new Error('No imported product matches this source bundle.')
@@ -277,8 +280,14 @@ export async function importAssetFromUrl(
     return index === 0 ? updatePage(db, store.id, created.id, { isHome: true }) : created
   })
   const page = pages[0] as Page
+  const generatedCheckout = ensureCopiedCheckout(db, store.id)
+  if (generatedCheckout) {
+    pages.push(generatedCheckout)
+    report.generatedPages = [{ id: generatedCheckout.id, role: 'checkout', reason: 'The source did not expose a readable checkout. Added an editable checkout using this asset’s branding and catalog.' }]
+    homeClone.notes.push(report.generatedPages[0]!.reason)
+  }
   const routes = pages.map((created, index) => ({
-    source: documents[index]?.sourceUrl ?? '',
+    source: documents[index]?.sourceUrl ?? new URL('/checkout', homeClone.sourceUrl).href,
     target: created.role === 'cart' ? '/cart' : created.role === 'checkout' ? (pages.find(p=>p.role==='checkout')?.id===created.id?'/checkout':`/pages/${created.handle}`) : index === 0 ? '/' : `/pages/${created.handle}`,
   }))
   for (const [alias, final] of aliases) {

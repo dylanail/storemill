@@ -4,6 +4,7 @@ import { readUpload, saveMediaUpload } from '../lib/uploads.ts'
 import { listProducts } from '../domain/catalog.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { listPages } from '../pages/store.ts'
+import { ensureCopiedCheckout } from '../pages/commerce-pages.ts'
 import { createBlankAsset } from './assets.ts'
 import { environment, getStore, type Store } from './stores.ts'
 
@@ -115,6 +116,8 @@ export function duplicateAsset(db: Db, ownerId: string, sourceStoreId: string, i
     db.run('DELETE FROM stores WHERE id = ? AND owner_id = ?', copy.id, ownerId)
     throw error
   }
+  const checkout = ensureCopiedCheckout(db, copy.id)
+  if (checkout) notes.push('Added an editable checkout using the copied branding and catalog.')
   return {
     store: getStore(db, copy.id) as Store,
     pages: listPages(db, copy.id),

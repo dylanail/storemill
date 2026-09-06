@@ -640,7 +640,7 @@ export function blockContextFor(db: Db, store: Store, base: string, localized?: 
     bundles: products
       .map((product) => {
         const bundle = bundleFor(db, store.id, product.id)
-        return bundle ? { productId: product.id, html: renderBundleWidget({ ...bundle, tiers: bundle.tiers.map(tier => tier.unitPriceCents === undefined ? tier : { ...tier, unitPriceCents: Math.round(tier.unitPriceCents * rate) }) }, product, currency, { locale: localized?.locale }) } : null
+        return bundle ? { productId: product.id, html: renderBundleWidget({ ...bundle, tiers: bundle.tiers.map(tier => tier.unitPriceCents === undefined ? tier : { ...tier, unitPriceCents: Math.round(tier.unitPriceCents * rate), ...(tier.compareAtTotalCents !== undefined ? { compareAtTotalCents: Math.round(tier.compareAtTotalCents * rate) } : {}) }) }, product, currency, { locale: localized?.locale }) } : null
       })
       .filter((entry): entry is { productId: string; html: string } => entry !== null),
   }

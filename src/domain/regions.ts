@@ -212,10 +212,10 @@ export function rateFor(region: Region | null, subtotalCents: number, freeShippi
   const option = (optionId ? region.shipping.find((entry) => entry.id === optionId) : undefined) ?? (region.shipping[0] as ShippingOption)
   // Free shipping earned by a promotion applies to the standard rate; a
   // customer who picks express still pays the difference.
-  if (freeShipping && option.position === 0) return { name: `${option.name} (free)`, amountCents: 0, gapCents: null, optionId: option.id }
+  if (freeShipping && option.position === 0) return { name: `${option.name} (free)`, amountCents: 0, gapCents: 0, optionId: option.id }
   const threshold = option.freeAboveCents
   if (threshold !== null && subtotalCents >= threshold) {
-    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: null, optionId: option.id }
+    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: 0, optionId: option.id }
   }
   return {
     name: option.name,

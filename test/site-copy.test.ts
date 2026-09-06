@@ -61,7 +61,9 @@ test('copy reports crawl limits and external checkout sessions rather than claim
     'https://shop.example/one': document('One'),
   })
   const result = await importAssetFromUrl(db, user.id, { url: 'https://shop.example/', kind: 'store', maxPages: 2, fetchImpl })
-  assert.equal(result.pages.length, 2)
+  assert.equal(result.pages.length, 3)
+  assert.equal(result.report.copied, 2, 'generated checkout is distinct from the two captured source pages')
+  assert.equal(result.report.generatedPages?.[0]?.role, 'checkout')
   assert.equal(result.report.remaining.length, 2)
   assert.equal(result.report.externalSteps.length, 1)
   assert.equal(result.report.complete, false)

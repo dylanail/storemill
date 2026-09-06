@@ -70,7 +70,8 @@ test('a URL creates an editable asset and strips source scripts', async () => {
   assert.equal(listFunnels(db, imported.store.id)[0]?.offerPageId, imported.page.id)
 
   const storeImport = await importAssetFromUrl(db, user.id, { url: 'https://northstar.example/', kind: 'store', fetchImpl })
-  assert.equal(storeImport.pages.length, 2)
+  assert.equal(storeImport.pages.length, 3)
+  assert.ok(storeImport.pages.some(page => page.role === 'checkout'))
   assert.equal(storeImport.products.length, 1)
   const product = storeImport.products[0]!
   assert.equal(product.title, 'North Star Widget')

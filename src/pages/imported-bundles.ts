@@ -11,6 +11,7 @@ export type ImportedBundlePlan = {
   sourceProductId: string
   sourceVariantId: string
   sourceUnitCents: number
+  sourceCompareAtCents?: number
   currency: string
   title: string
   html: string
@@ -38,20 +39,21 @@ function jsonScript(html: string, name: string): any {
 function plain(html: string): string { return decodeMediaAttribute(html.replace(/<!--[\s\S]*?-->|<[^>]+>/g, '')).trim() }
 
 /** Read only an explicitly priced, one-time, single-variant source widget; never infer offers from marketing labels. */
-export function planImportedBundle(html: string, sourceUrl: string): ImportedBundlePlan | null {
+export function planImportedBundle(html: string, sourceUrl: string, sourceMetadata = html): ImportedBundlePlan | null {
   const match = [...html.matchAll(bundlePattern)][0]
   if (!match) return null
   const widget = match[0]
   const blockTag = /<kaching-bundles-block\b(?:[^>"']|"[^"]*"|'[^']*')*>/i.exec(widget)?.[0] ?? ''
-  const settings = jsonAttribute(blockTag, 'deal-block') ?? jsonScript(html, 'kaching-bundles-deal-block-settings')
-  const product = jsonAttribute(blockTag, 'product') ?? jsonScript(html, 'kaching-bundles-product')
-  const config = jsonAttribute(blockTag, 'config') ?? jsonScript(html, 'kaching-bundles-config')
+  const settings = jsonAttribute(blockTag, 'deal-block') ?? jsonScript(sourceMetadata, 'kaching-bundles-deal-block-settings')
+  const product = jsonAttribute(blockTag, 'product') ?? jsonScript(sourceMetadata, 'kaching-bundles-product')
+  const config = jsonAttribute(blockTag, 'config') ?? jsonScript(sourceMetadata, 'kaching-bundles-config')
   if (!settings || !product || !config) throw new Error('Bundle source settings were not captured. Reload the source widget before copying.')
   const currency = String(config.marketCurrencyCode ?? '').toUpperCase()
   const variants = product.variants
   if (!/^[A-Z]{3}$/.test(currency) || !Array.isArray(variants) || variants.length !== 1 || product.requiresSellingPlan || product.sellingPlans?.length) throw new Error('This source bundle needs manual mapping: only one-time, single-variant offers are supported automatically.')
   const variant = variants[0]
   if (!Number.isSafeInteger(variant.price) || variant.price <= 0 || variant.sellingPlans?.length) throw new Error('The source bundle does not have a verified one-time unit price.')
+  const sourceCompareAtCents = Number.isSafeInteger(variant.compareAtPrice) && variant.compareAtPrice > variant.price ? variant.compareAtPrice as number : undefined
   if (!Array.isArray(settings.dealBars) || !settings.dealBars.length || settings.dealBars.length > 5) throw new Error('The source bundle has an unsupported number of tiers.')
   const notes: string[] = []
   const tiers: ImportedBundlePlan['tiers'] = settings.dealBars.map((bar: any) => {
@@ -77,7 +79,7 @@ export function planImportedBundle(html: string, sourceUrl: string): ImportedBun
     if (/^<kaching-bundle\b/i.test(tag)) return `<kaching-bundle data-copy-source-bundle="${escapeHtml(String(product.id))}">`
     return tag.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
   }).replace(/<script\b[\s\S]*?<\/script>/gi, '')
-  return { sourceUrl, sourceProductId: String(product.id), sourceVariantId: String(variant.id), sourceUnitCents: variant.price, currency, title: String(settings.blockTitle ?? ''), html: clean, css, hostId, tiers, notes }
+  return { sourceUrl, sourceProductId: String(product.id), sourceVariantId: String(variant.id), sourceUnitCents: variant.price, ...(sourceCompareAtCents ? { sourceCompareAtCents } : {}), currency, title: String(settings.blockTitle ?? ''), html: clean, css, hostId, tiers, notes }
 }
 
 function verifyProduct(product: Product, plan: ImportedBundlePlan): void {
@@ -92,10 +94,16 @@ export function installImportedBundle(db: Db, storeId: string, productId: string
   const product = getProduct(db, storeId, productId)
   if (!store || !product || store.currency.toUpperCase() !== plan.currency) throw new Error('The copied bundle needs a matching product and store currency.')
   verifyProduct(product, plan)
-  const tiers = plan.tiers.map(tier => ({ quantity: tier.quantity, unitPriceCents: tier.unitPriceCents, discountPercent: 0, label: tier.label, ...(tier.badge ? { badge: tier.badge } : {}) }))
+  const compareAtCents = product.variants[0]!.compareAtCents || plan.sourceCompareAtCents
+  const tiers = plan.tiers.map(tier => ({ quantity: tier.quantity, unitPriceCents: tier.unitPriceCents, ...(compareAtCents ? { compareAtTotalCents: compareAtCents * tier.quantity } : {}), discountPercent: 0, label: tier.label, ...(tier.badge ? { badge: tier.badge } : {}) }))
   const previous = listBundles(db, storeId).find(bundle => bundle.productId === productId)
   if (previous?.status === 'paused') throw new Error('This product has a paused bundle. Review it before enabling a copied offer.')
-  if (previous && JSON.stringify(previous.tiers) !== JSON.stringify(tiers)) throw new Error('This product already has different bundle rules. Review them before replacing the copied offer.')
+  if (previous && JSON.stringify(previous.tiers.map(({compareAtTotalCents, ...tier}) => tier)) !== JSON.stringify(tiers.map(({compareAtTotalCents, ...tier}) => tier))) throw new Error('This product already has different bundle rules. Review them before replacing the copied offer.')
+  if (!product.variants[0]!.compareAtCents && plan.sourceCompareAtCents) db.update('variants', product.variants[0]!.id, { compare_at_cents: plan.sourceCompareAtCents })
+  if (previous) {
+    previous.tiers = previous.tiers.map(tier => ({ ...tier, ...(tier.compareAtTotalCents === undefined && compareAtCents ? { compareAtTotalCents: compareAtCents * tier.quantity } : {}) }))
+    db.update('bundles', previous.id, { tiers: previous.tiers })
+  }
   const bundle = previous ?? upsertBundle(db, storeId, { productId, title: plan.title, tiers })
   let html = mapMediaDocument(plan.html, tag => {
     if (/^<kaching-bundle\b/i.test(tag)) return tag.replace(/>$/, ` data-copy-bundle="${bundle.id}" data-copy-bundle-currency="${plan.currency}" data-copy-product-id="${product.id}" data-copy-variant-id="${product.variants[0]!.id}">`)

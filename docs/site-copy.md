@@ -6,7 +6,7 @@ The page editor supports padding controls, section dragging, desktop/tablet/mobi
 
 Use **Copy from URL** in the stores/funnels hub. The importer follows linked pages and declared next-step URLs, preserves meaningful query parameters, and maps copied navigation to the new site. Add known unlinked steps under the extra URLs field.
 
-The import report shows copied/discovered counts, failed URLs, remaining URLs, and external payment steps. Discovery defaults to 50 pages; the API accepts a limit up to 100. Unlinked, authenticated, session-only, or protected pages cannot be guaranteed by crawling. Partial imports report the gaps.
+The import report shows copied/discovered counts, failed URLs, remaining URLs, and external payment steps. Discovery defaults to 250 pages; the API accepts a limit up to 1,000. Unlinked, authenticated, session-only, or protected pages cannot be guaranteed by crawling. Partial imports report the gaps.
 
 Public URL copies now render the source in a fresh browser, scroll through desktop/tablet/mobile layouts, wait for image decoding, and snapshot embedded review documents before removing source scripts. Embedded snapshots retain their CSS and owned images in scriptless, responsive frames. A browser capture failure stops the copy instead of silently switching to incomplete raw HTML.
 
@@ -36,7 +36,7 @@ Funnels go directly to checkout. They can arrive with an empty order and choose 
 
 Stores keep their copied cart drawers and carry the selected items into checkout. In a copied page's visual editor, **Edit cart drawer** opens the original drawer so its content and styling can be changed; this temporary open state is never saved. Preview tests the functional cart.
 
-Entering checkout does not create or automatically add shipping protection. Only a merchant's explicitly configured order add-on is offered, and the shopper must select it.
+Copied cart add-ons retain explicitly selected source defaults and can be toggled off in the drawer. Their prices come from the destination catalog. Opening checkout itself adds no products. A free-shipping threshold is imported only from an explicit amount in an empty source cart; unknown shipping rates are not inferred.
 
 Copied purchase controls use the destination catalog. Variant selection must match; unsupported recurring subscription offers cannot silently purchase a one-time package. The importer can extract explicitly priced one-time Funnelish packages when structured product data is unavailable. Copied quantity bundles retain their source labels, while actual totals use validated server prices. Any source label/price inconsistency appears in copy notes for review.
 
@@ -44,7 +44,7 @@ Copied checkout pages retain the available source shell while the platform suppl
 
 The supported capture mode is Automatic. Existing Manual settings remain unchanged and must be explicitly switched before checkout can charge. The Payments page shows the correct store webhook URL.
 
-Draft catalog products are editable and selectable in the editor. Public commerce uses published products. An empty funnel with only draft or unavailable products shows that no package is available and disables payment. The saved Rosabella copies can retain their source design for editing while their draft catalog remains unavailable for purchase. No product or page is automatically published by this repair. Keep copies as drafts while reviewing prices, inventory, shipping, and product connections.
+Authenticated previews include draft products and support selecting bundles, adding to cart, editing quantities and reviewing checkout. Preview carts use separate cookies and cannot create payments or orders. Public commerce uses published products. An empty funnel with only draft or unavailable products shows that no package is available and disables payment. Drafts remain unavailable for public purchase. No product or page is automatically published by this repair. Keep copies as drafts while reviewing prices, inventory, shipping, and product connections.
 
 ## Verification
 
@@ -59,3 +59,11 @@ The September 2026 audit used the existing Nuvana and Rosabella imports as visua
 Playwright is a production dependency. The Docker image installs Chromium and its system dependencies. For a local installation, run `npx playwright install chromium`, or set `PLAYWRIGHT_EXECUTABLE_PATH` to the browser executable. Installed macOS Chrome is detected automatically. Capture uses fresh browser contexts; source forms, cart mutations and payment requests are blocked.
 
 Static HTML fixtures can explicitly use `captureMode: 'static'` or `fetchImpl`; their report does not imply JavaScript content was captured. `sourceCapture` accepts pre-rendered HTML and embedded documents for reproducible audits.
+
+## Copied quantity bundles and checkout pages
+
+Bundles and Discounts show exact sale and original package totals. **Bundles → Save bundle prices** edits those totals while preserving the quantity tiers, labels, badges, shipping and gift settings. Exact unit prices are enforced on the server; marketing percentage labels are not used to calculate checkout prices. The copied cards, drawer and checkout read the current rule.
+
+For the Nuvana cushion, the captured packages are 1 × $54.95 (original $109.90), 2 × $93.42 (original $219.80), and 4 × $175.84 (original $439.60). Its “Extra 16%” label differs from the explicit two-unit total; the total wins.
+
+Every URL import and whole-asset duplicate includes an editable Checkout page. An existing captured checkout is retained. If the source only exposes a protected or session-dependent checkout, an owned checkout is added using the copied brand and catalog and identified separately in the copy report. This does not reproduce a private payment-provider session.

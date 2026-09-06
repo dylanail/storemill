@@ -179,6 +179,7 @@ export type Promotion = {
     getProductIds?: string[]
     requiredDistinctProducts?: number
     bundlePriceCents?: number
+    bundleProductId?: string
     tiers?: Array<{ quantity: number; percent: number; unitPriceCents?: number }>
     regionIds?: string[]
     firstOrderOnly?: boolean

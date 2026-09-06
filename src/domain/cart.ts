@@ -7,7 +7,7 @@ import { convertCents, defaultRegion, getRegion, minorUnitRate, rateFor } from '
 import type { Address, LineItem, Totals } from './types.ts'
 
 export type CheckoutAdvertising = { url:string; ip:string; userAgent:string; fbp?:string; fbc?:string; ttp?:string; ttclid?:string }
-export type CheckoutDraft = { email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
+export type CheckoutDraft = { preview?: boolean; email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
 
 export type Cart = {
   id: string
@@ -46,7 +46,7 @@ export function getCart(db: Db, storeId: string, cartId: string): Cart | null {
   return row ? rowToCart(row) : null
 }
 
-export function createCart(db: Db, storeId: string, regionId?: string): Cart {
+export function createCart(db: Db, storeId: string, regionId?: string, options: { preview?: boolean } = {}): Cart {
   const cartId = id('cart')
   const timestamp = now()
   const region = regionId ? getRegion(db, storeId, regionId) : defaultRegion(db, storeId)
@@ -58,6 +58,7 @@ export function createCart(db: Db, storeId: string, regionId?: string): Cart {
     discount_code: '',
     region_id: region?.id ?? null,
     order_id: null,
+    checkout: options.preview ? { preview: true } : {},
     created_at: timestamp,
     updated_at: timestamp,
   })
@@ -78,7 +79,7 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
   const variant = getVariant(db, storeId, variantId)
   if (!variant) throw new Error(`No variant ${variantId}`)
   const product = getProduct(db, storeId, variant.productId)
-  if (!product || product.status !== 'published') throw new Error('That product is not available')
+  if (!product || product.status !== 'published' && !(cart.checkout.preview && product.status === 'draft')) throw new Error('That product is not available')
 
   const items = [...cart.items]
   const existing = items.find((item) => item.variantId === variantId && !item.giftOf)

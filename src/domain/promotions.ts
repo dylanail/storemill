@@ -230,3 +230,33 @@ export function recordPromotionUse(db: Db, promotionIds: string[]) {
     db.run('UPDATE promotions SET usage_count = usage_count + 1 WHERE id = ?', promotionId)
   }
 }
+
+/** Allocate the final server discounts to eligible cart lines, preserving every cent. */
+export function promotionLineDiscounts(db: Db, storeId: string, items: LineItem[], applied: Array<{ id: string; amountCents: number }>, currencyRate = 1): number[] {
+  const discounts = items.map(() => 0)
+  const promotions = listPromotions(db, storeId)
+  const memberships = new Map<string, string[]>()
+  for (const row of db.all<{ product_id: string; collection_id: string }>('SELECT cp.product_id,cp.collection_id FROM collection_products cp JOIN products p ON p.id=cp.product_id WHERE p.store_id=?', storeId)) {
+    memberships.set(row.product_id, [...(memberships.get(row.product_id) || []), row.collection_id])
+  }
+  for (const appliedRule of applied) {
+    const rule = promotions.find(rule => rule.id === appliedRule.id)
+    if (!rule || !appliedRule.amountCents) continue
+    const eligible = (rule.kind === 'bogo' && rule.rules.getProductIds?.length ? items.filter(item => rule.rules.getProductIds!.includes(item.productId)) : eligibleItems(rule, items, memberships)).filter(item => !item.giftOf && item.source !== 'order-bump')
+    const indices = items.map((item, index) => eligible.includes(item) ? index : -1).filter(index => index >= 0)
+    const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
+    const tier = rule.kind === 'tiered' ? [...(rule.rules.tiers || [])].sort((a,b) => b.quantity-a.quantity).find(tier => units >= tier.quantity) : undefined
+    const weights = indices.map(index => tier?.unitPriceCents !== undefined
+      ? Math.min(items[index]!.unitCents * items[index]!.quantity - discounts[index]!, Math.max(0, items[index]!.unitCents - Math.round(tier.unitPriceCents * currencyRate)) * items[index]!.quantity)
+      : items[index]!.unitCents * items[index]!.quantity - discounts[index]!)
+    let remaining = appliedRule.amountCents
+    let weight = weights.reduce((sum, amount) => sum + amount, 0)
+    for (const [position, index] of indices.entries()) {
+      const available = items[index]!.unitCents * items[index]!.quantity - discounts[index]!
+      const take = Math.min(available, weight ? Math.round(remaining * weights[position]! / weight) : 0)
+      discounts[index]! += take
+      remaining -= take; weight -= weights[position]!
+    }
+  }
+  return discounts
+}
