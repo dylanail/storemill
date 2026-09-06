@@ -37,24 +37,4 @@
     }
     updateHint();
   });
-  var toggle = document.getElementById('nav-toggle');
-  var rail = document.querySelector('.rail');
-  if (toggle && rail) {
-    function close() {
-      document.body.classList.remove('nav-open');
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.setAttribute('aria-label', 'Open navigation');
-    }
-    toggle.addEventListener('click', function () {
-      var open = document.body.classList.contains('nav-open');
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
-    });
-    document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && document.body.classList.contains('nav-open')) { close(); toggle.focus(); }
-    });
-    document.addEventListener('click', function (event) {
-      if (!rail.contains(event.target) && !toggle.contains(event.target)) close();
-    });
-  }
 })();

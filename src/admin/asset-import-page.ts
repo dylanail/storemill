@@ -6,7 +6,7 @@ import type { ImportProgress } from '../control/assets.ts'
 export function importJobPage(job: ImportJob): string {
   const progress=json<Partial<ImportProgress>>(job.progress,{}),result=json<Partial<ImportResult>>(job.result,{})
   const running=['queued','working'].includes(job.status)
-  return `<div class="head"><div><h1>Cloning your site</h1><p class="muted">You can leave this page and reopen the clone from All assets.</p></div><a class="btn" href="/admin/stores">All assets</a></div>
+  return `<div class="head"><div><h1>Cloning your site</h1><p class="muted">You can leave this page and reopen the clone from Stores & funnels.</p></div><a class="btn" href="/admin/stores">Stores & funnels</a></div>
   <section class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><h2 id="copy-task" role="status" aria-live="polite">${e(progress.task||job.status)}</h2><strong id="copy-percent">${progress.percent||0}%</strong></div>
   <progress id="copy-progress" aria-label="Estimated clone progress" value="${progress.percent||0}" max="100" style="width:100%;height:24px;margin:20px 0;accent-color:#315be8"></progress>
   <p id="copy-counts">${progress.copied||0} pages copied · ${progress.discovered||1} discovered · ${progress.products||0} products · ${progress.images||0} images</p>

@@ -46,49 +46,61 @@ export function uiIcon(name: IconName, size = 18): string {
 
 export const NAV: NavItem[] = [
   { key: 'dashboard', href: '/admin', label: 'Home', icon: 'home' },
-  { key: 'stores', href: '/admin/stores', label: 'All assets', icon: 'assets' },
-  { key: 'ai', href: '/admin/ai', label: 'Assistant', icon: 'sparkles' },
   { key: 'orders', href: '/admin/orders', label: 'Orders', icon: 'orders', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', icon: 'products', area: 'products' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', icon: 'customers', area: 'customers' },
-  { key: 'speed', href: '/admin/speed', label: 'Store Speed', icon: 'analytics', area: 'store' },
+  { key: 'marketing', href: '/admin/marketing', label: 'Marketing', icon: 'marketing', area: 'emails' },
+  { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
+  { key: 'analytics', href: '/admin/analytics', label: 'Analytics', icon: 'insights', area: 'analytics' },
 ]
 
-function groupsFor(kind: Store['kind']): Array<{ label: string; icon: IconName; children: NavItem[] }> {
-  const first = kind === 'funnel'
-    ? { label: 'Funnel', icon: 'funnel' as const, children: [
-        { key: 'funnels', href: '/admin/funnels', label: 'Funnel flow', icon: 'funnel' as const, area: 'store' },
-        { key: 'pages', href: '/admin/pages', label: 'Funnel pages', icon: 'pages' as const, area: 'store' },
-        { key: 'templates', href: '/admin/templates', label: 'Template library', icon: 'pages' as const, area: 'store' },
-        { key: 'bundles', href: '/admin/bundles', label: 'Offers & bundles', icon: 'bundle' as const, area: 'promotions' },
-        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
-      ] }
-    : { label: 'Online store', icon: 'store' as const, children: [
-        { key: 'store', href: '/admin/store', label: 'Theme & navigation', icon: 'store' as const, area: 'store' },
-        { key: 'pages', href: '/admin/pages', label: 'Store pages', icon: 'pages' as const, area: 'store' },
-        { key: 'templates', href: '/admin/templates', label: 'Template library', icon: 'pages' as const, area: 'store' },
-        { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections' as const, area: 'organization' },
-        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
-        { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle' as const, area: 'promotions' },
-      ] }
-  return [first,
-  { label: 'Marketing', icon: 'marketing', children: [
-    { key: 'marketing', href: '/admin/marketing', label: 'Campaigns & flows', icon: 'marketing', area: 'emails' },
-    { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
-    { key: 'ads', href: '/admin/ads', label: 'Ads', icon: 'ads', area: 'ads' },
-  ] },
-  { label: 'Insights', icon: 'insights', children: [
-    { key: 'analytics', href: '/admin/analytics', label: 'Analytics & attribution', icon: 'analytics', area: 'analytics' },
-    { key: 'cro', href: '/admin/cro', label: 'Experiments', icon: 'experiment', area: 'analytics' },
-    { key: 'profit', href: '/admin/profit', label: 'Profit', icon: 'profit', area: 'analytics' },
-  ] },
-  { label: 'Create', icon: 'build', children: [
-    { key: 'build', href: '/admin/build', label: kind === 'funnel' ? 'Build funnel' : 'Build store', icon: 'build', area: 'store' },
-    { key: 'research', href: '/admin/research', label: 'Research & avatars', icon: 'research', area: 'products' },
-    { key: 'market', href: '/admin/market', label: 'Market strategy', icon: 'analytics', area: 'products' },
-    { key: 'creative', href: '/admin/creative', label: 'Creative', icon: 'creative', area: 'products' },
-  ] },
-  ]
+type NavGroup = { key: string; label: string; icon: IconName; parent?: NavItem; children: NavItem[] }
+function navigation(kind: Store['kind'], active: string): string {
+  const groups: Record<string, NavItem[]> = {
+    products: [
+      { key: 'reviews', href: '/admin/reviews', label: 'Reviews', icon: 'customers', area: 'products' },
+      { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections', area: 'organization' },
+      { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle', area: 'promotions' },
+    ],
+    marketing: [{ key: 'ads', href: '/admin/ads', label: 'Ad campaigns', icon: 'ads', area: 'ads' }],
+    analytics: [
+      { key: 'cro', href: '/admin/cro', label: 'A/B tests', icon: 'experiment', area: 'analytics' },
+      { key: 'profit', href: '/admin/profit', label: 'Profit reports', icon: 'profit', area: 'analytics' },
+    ],
+  }
+  const core=NAV.map(item=>groups[item.key]?navGroup({...item,parent:item,children:groups[item.key]!},active):navLink(item,active)).join('')
+  const content=navGroup({key:'content',label:'Content',icon:'pages',children:[
+    {key:'media',href:'/admin/media',label:'Media & logos',icon:'image',area:'store'},
+    {key:'templates',href:'/admin/templates',label:'Page templates',icon:'pages',area:'store'},
+  ]},active)
+  const channel=navGroup({key:'channel-'+kind,label:kind==='funnel'?'Funnel':'Online store',icon:kind==='funnel'?'funnel':'store',children:[
+    kind==='funnel'?{key:'funnels',href:'/admin/funnels',label:'Funnel flow',icon:'funnel',area:'store'}:{key:'store',href:'/admin/store',label:'Theme & navigation',icon:'store',area:'store'},
+    {key:'pages',href:'/admin/pages',label:kind==='funnel'?'Funnel pages':'Store pages',icon:'pages',area:'store'},
+    {key:'speed',href:'/admin/speed',label:'Performance',icon:'analytics',area:'store'},
+    {key:'domains',href:'/admin/domains',label:'Domains',icon:'store',area:'store'},
+  ]},active)
+  const tools=navGroup({key:'ai-studio',label:'AI studio',icon:'creative',children:[
+    {key:'build',href:'/admin/build',label:kind==='funnel'?'Funnel builder':'Store builder',icon:'build',area:'store'},
+    {key:'research',href:'/admin/research',label:'Customer research',icon:'research',area:'products'},
+    {key:'market',href:'/admin/market',label:'Market strategy',icon:'analytics',area:'products'},
+    {key:'creative',href:'/admin/creative',label:'Ad creative',icon:'creative',area:'products'},
+  ]},active)
+  return `<div class="nav-section" aria-label="Manage your business">${core}${content}</div><div class="nav-section"><p class="nav-caption">Sales channels</p>${channel}${kind==='store'?navLink({key:'funnels',href:'/admin/funnels',label:'Funnels',icon:'funnel',area:'store'},active):''}</div><div class="nav-section"><p class="nav-caption">Tools</p>${navLink({key:'ai',href:'/admin/ai',label:'Assistant',icon:'sparkles'},active)}${tools}${navLink({key:'plugins',href:'/admin/plugins',label:'Integrations',icon:'assets'},active)}</div>`
+}
+function navGroup(group:NavGroup,active:string):string {
+  const selected=group.parent?.key===active||group.children.some(item=>item.key===active)
+  const control=`nav-children-${group.key}`
+  return `<div class="nav-group ${selected?'has-current':''}" data-nav-group="${group.key}" data-active="${selected}">
+    <div class="nav-group-row">${group.parent?`${navLink(group.parent,active)}<button class="nav-expand" type="button" aria-label="${selected?'Collapse':'Expand'} ${escapeHtml(group.label)}" aria-controls="${control}" aria-expanded="${selected}" data-group-label="${escapeHtml(group.label)}">${uiIcon('chevron',12)}</button>`:`<button class="nav-heading" type="button" aria-controls="${control}" aria-expanded="${selected}" data-group-label="${escapeHtml(group.label)}">${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron',12)}</button>`}</div>
+    <div class="nav-children" id="${control}" ${selected?'':'hidden'}>${group.children.map(item=>navLink(item,active,true)).join('')}</div></div>`
+}
+function storeSwitcher(input:ShellInput):string {
+  const store=input.store
+  return `<details class="switcher" id="store-switcher"><summary aria-label="Switch store or funnel"><span class="switcher-mark">${uiIcon(store.kind==='funnel'?'funnel':'store',17)}</span><span class="switcher-current">${escapeHtml(store.name)}</span>${uiIcon('chevron',12)}</summary>
+    <div class="switcher-popover"><label class="switcher-search">${uiIcon('research',16)}<input type="search" placeholder="Search stores and funnels" aria-label="Search stores and funnels" autocomplete="off"></label>
+      <div class="switcher-options">${(['store','funnel'] as const).map(kind=>{const stores=input.stores.filter(item=>item.kind===kind);return stores.length?`<div class="switcher-category" data-store-category><p>${kind==='store'?'Stores':'Funnels'} <span>${stores.length}</span></p>${stores.map(item=>`<a class="switcher-option" href="/admin/switch?storeId=${encodeURIComponent(item.id)}" data-store-name="${escapeHtml(item.name.toLowerCase())}" ${item.id===store.id?'aria-current="true"':''}><span class="switcher-mark">${uiIcon(kind==='funnel'?'funnel':'store',16)}</span><span>${escapeHtml(item.name)}</span>${item.id===store.id?'<span class="switcher-check" aria-label="Current store">✓</span>':''}</a>`).join('')}</div>`:''}).join('')}<p class="switcher-empty" hidden>No matching stores or funnels.</p></div>
+      <div class="switcher-actions"><a href="/admin/stores">${uiIcon('assets',16)} Stores &amp; funnels</a><a href="/admin/stores?new=1#new"><span aria-hidden="true">＋</span> Create store or funnel</a></div>
+    </div></details>`
 }
 
 export type ShellInput = {
@@ -107,15 +119,7 @@ export type ShellInput = {
   modelLabel?: string
 }
 
-/**
- * The admin shell.
- *
- * Three columns, exactly as the product is drawn: a 44px icon rail, the page,
- * and a 300px assistant panel that persists across every page. The panel is
- * part of the frame rather than a page component because the conversation has
- * to survive navigation — one thread across the whole admin, with the current
- * page passed along as context on every message.
- */
+/** Shared admin navigation, selected-store context and persistent assistant launcher. */
 export function shell(input: ShellInput): string {
   const brand = input.store.brand
   const storefrontUrl = input.store.status === 'live' ? input.storeUrl : `/preview/${input.store.slug}`
@@ -125,18 +129,12 @@ export function shell(input: ShellInput): string {
 <title>${escapeHtml(input.title)} — ${escapeHtml(input.store.name)} on storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-${brandHead}<style>${brandStyles}${css(brand.primary ?? '#7a4a2b')}</style>
+${brandHead}<style>${brandStyles}${css(brand.primary ?? '#7a4a2b')}${readFileSync(new URL('./navigation.css',import.meta.url),'utf8')}</style>
 </head><body>
 <div class="top">
   <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="admin-navigation">${uiIcon('menu')}</button>
   <a class="logo storemill-home" href="/admin" aria-label="storemill home">${brandLogo(true)}<span class="storemill-mobile-mark">${brandIcon(true)}</span></a>
-  <form method="get" action="/admin/switch" class="switcher">
-    <select name="storeId" onchange="this.form.submit()" aria-label="Asset">
-      ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)} · ${store.kind}</option>`).join('')}
-    </select>
-  </form>
-  <a class="chip" href="/admin/stores">All assets (${input.stores.length})</a>
-  <a class="chip" href="/admin/stores?new=1#new">+ New asset</a>
+  ${storeSwitcher(input)}
   <div class="spacer"></div>
   <a class="chip" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${escapeHtml(storefrontAction)} ↗</a>
   <form method="post" action="/admin/publish">
@@ -145,20 +143,16 @@ ${brandHead}<style>${brandStyles}${css(brand.primary ?? '#7a4a2b')}</style>
 </div>
 <div class="frame">
   <nav class="rail" id="admin-navigation" aria-label="Sections">
-    <div class="nav-main">${NAV.map((item) => navLink(item, input.active)).join('')}</div>
-    ${groupsFor(input.store.kind).map((group, index) => {
-      const active = group.children.some((item) => item.key === input.active)
-      return `<details class="nav-tree ${active ? 'active' : ''}" ${active || index < 2 ? 'open' : ''}><summary>${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron', 14)}</summary><div>${group.children.map((item) => navLink(item, input.active, true)).join('')}</div></details>`
-    }).join('')}
-    <div class="rail-foot"><a href="/admin/settings" class="${input.active === 'settings' ? 'on' : ''}">${uiIcon('settings')}<b>Settings</b></a><a class="avatar" href="/admin/settings#profile" aria-label="Profile settings">${escapeHtml(input.userName.slice(0, 1).toUpperCase())}</a></div>
+    <div class="rail-scroll">${navigation(input.store.kind,input.active)}</div>
+    <div class="rail-foot">${navLink({key:'stores',href:'/admin/stores',label:'Stores & funnels',icon:'assets'},input.active)}${navLink({key:'settings',href:'/admin/settings',label:'Settings',icon:'settings'},input.active)}</div>
   </nav>
+  <button class="nav-backdrop" type="button" aria-hidden="true" aria-label="Close navigation" tabindex="-1" hidden></button>
   <main class="page">${input.body}</main>
 
 </div>
 <script>
 function askThis(prompt){ var box = document.getElementById('ask'); box.value = prompt; box.focus(); }
 (function(){
-  var navToggle=document.getElementById('nav-toggle');navToggle&&navToggle.addEventListener('click',function(){document.body.classList.toggle('nav-open')});
   // Activity dots: the rail lights up the area a tool is touching, live.
   try {
     var stream = new EventSource('/admin/activity');
@@ -174,13 +168,14 @@ function askThis(prompt){ var box = document.getElementById('ask'); box.value = 
   } catch (error) { /* activity dots are decoration; never break the admin */ }
 })();
 </script>
+<script>${readFileSync(new URL('./navigation.js', import.meta.url), 'utf8')}</script>
 <script>${readFileSync(new URL('./usability.js', import.meta.url), 'utf8')}</script>
 ${assistantWidget(input)}
 </body></html>`
 }
 
 function navLink(item: NavItem, active: string, child = false): string {
-  return `<a href="${item.href}" class="${item.key === active ? 'on' : ''}${child ? ' child' : ''}" title="${escapeHtml(item.label)}" data-area="${item.area ?? ''}">${uiIcon(item.icon)}<b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`
+  return `<a href="${item.href}" class="${item.key === active ? 'on' : ''}${child ? ' child' : ''}" ${item.key===active?'aria-current="page"':''} title="${escapeHtml(item.label)}" data-area="${item.area ?? ''}">${child?'':uiIcon(item.icon)}<b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`
 }
 
 export function bubble(message: ChatMessage): string {

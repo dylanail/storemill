@@ -344,7 +344,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/cro', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'cro', 'Experiments', pages.experimentsPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'cro', 'A/B tests', pages.experimentsPage(ctxFor(current, ctx)))
   })
 
   router.post('/admin/cro/generate', async (ctx) => {
@@ -417,7 +417,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/stores', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'stores', 'All assets', pages.storesPage(ctxFor(current, ctx), current.stores))
+    return page(ctx, current, 'stores', 'Stores & funnels', pages.storesPage(ctxFor(current, ctx), current.stores))
   })
 
   router.get('/admin/stores/:id/delete',ctx=>{
@@ -505,7 +505,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/media', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'media', 'Media', pages.mediaPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'media', 'Media & logos', pages.mediaPage(ctxFor(current, ctx)))
   })
 
   const mediaMutation = (ctx: Ctx) => {
@@ -1208,7 +1208,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/profit', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'profit', 'Profit', pages.profitPage(ctxFor(current, ctx), Number(ctx.query.get('days') ?? 30) || 30))
+    return page(ctx, current, 'profit', 'Profit reports', pages.profitPage(ctxFor(current, ctx), Number(ctx.query.get('days') ?? 30) || 30))
   })
 
   router.post('/admin/profit/spend', async (ctx) => {

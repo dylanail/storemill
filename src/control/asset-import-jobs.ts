@@ -31,7 +31,7 @@ export function startImport(db: Db, ownerId: string, input: Input, requestKey=''
 const workers=new WeakMap<Db,{busy:boolean;controllers:Map<string,AbortController>}>()
 export async function drainImports(db: Db, run=importAssetFromUrl): Promise<void> {
   let state=workers.get(db)
-  if(!state){state={busy:false,controllers:new Map()};workers.set(db,state);db.run("UPDATE asset_import_jobs SET status='failed',error='The server restarted during this clone. Start again to retry; any saved draft remains in All assets.',updated_at=? WHERE status='working'",now())}
+  if(!state){state={busy:false,controllers:new Map()};workers.set(db,state);db.run("UPDATE asset_import_jobs SET status='failed',error='The server restarted during this clone. Start again to retry; any saved draft remains in Stores & funnels.',updated_at=? WHERE status='working'",now())}
   if(state.busy)return
   const job=db.one<ImportJob>("SELECT * FROM asset_import_jobs WHERE status='queued' ORDER BY created_at LIMIT 1")
   if(!job)return

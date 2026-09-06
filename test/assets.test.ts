@@ -23,7 +23,7 @@ test('stores and funnels are separate top-level assets', () => {
   assert.equal(db.one<{ c: number }>('SELECT COUNT(*) c FROM regions WHERE store_id = ?', funnel.id)?.c, 1)
 
   const html = storesPage({ db, store, userName: 'Owner', storeUrl: `/s/${store.slug}` }, listStores(db, user.id))
-  assert.match(html, /All assets/)
+  assert.match(html, /Stores & funnels/)
   assert.match(html, /Today/)
   assert.match(html, /30 days/)
   assert.match(html, /data-kind="store"/)
