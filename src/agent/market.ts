@@ -433,6 +433,7 @@ export async function runAdPlan(db: Db, storeId: string, model?: ModelChoice | n
         `Avatars:\n${JSON.stringify(avatars.map((avatar) => ({ name: avatar.name, parent: avatar.parentId ? avatars.find((other) => other.id === avatar.parentId)?.name : '', label: avatar.label, desire: avatar.desire || avatar.wants, experience: avatar.experience, emotion: avatar.emotion, behaviour: avatar.behaviour, angle: avatar.angle, hooks: avatar.hooks, selected: avatar.selected })))}`,
         research ? `Research: ${JSON.stringify({ category: research.category, positioning: research.positioning, triggers: research.triggers })}` : '',
         analysis ? `Market analysis: ${JSON.stringify({ awareness: analysis.body.awareness, sophistication: analysis.body.sophistication, leadDesire: analysis.body.leadDesire, mechanisms: analysis.body.mechanisms, standOut: analysis.body.standOut, calendar: analysis.body.calendar })}` : '',
+        loopBrief(db, storeId),
         'Write the ad plan: what to test first, second and third, as concept → angle → variations → format → method.',
       ]
         .filter(Boolean)
@@ -460,6 +461,66 @@ export async function runAdPlan(db: Db, storeId: string, model?: ModelChoice | n
     plan = { rows: [...kept, ...plan.rows.filter((row) => !names.has(row.concept.toLowerCase()))], note: plan.note }
   }
   return saveDoc<AdPlan>(db, storeId, { ...(existing ? { id: existing.id } : {}), kind: 'ad-plan', title: 'Ad plan', body: plan, source, model: modelName })
+}
+
+/**
+ * A plan row as a request the ad writer can take.
+ *
+ * The plan named the concept, the angle, the three variations, the format and
+ * the method — and then the owner retyped all of it into the ad drafter by
+ * hand, because nothing connected the two. The row's own words become the
+ * direction, its sub-avatar picks the avatar, and its format maps onto the ad
+ * formats that exist.
+ */
+export function planRowRequest(row: AdPlanRow, avatars: Avatar[]): { direction: string; avatarId?: string; formats: string[]; count: number } {
+  const FORMATS: Record<string, string> = {
+    static: 'static',
+    'product-photo-headline': 'static',
+    meme: 'static',
+    slideshow: 'static',
+    'us-vs-them': 'us-vs-them',
+    'voiceover-b-roll': 'ugc-script',
+    'subtitles-b-roll': 'ugc-script',
+    ugc: 'ugc-script',
+  }
+  const named = row.subAvatar.split('/')[0]?.trim().toLowerCase() ?? ''
+  const avatar = named ? avatars.find((entry) => entry.name.toLowerCase() === named) ?? avatars.find((entry) => entry.name.toLowerCase().includes(named)) : undefined
+  const direction = [
+    row.subAvatar ? `for ${row.subAvatar}` : '',
+    row.angle ? `focus on ${row.angle}` : '',
+    ...row.variations.slice(0, 3).map((hook) => `"${hook.replace(/"/g, '')}"`),
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return {
+    direction,
+    ...(avatar ? { avatarId: avatar.id } : {}),
+    formats: [FORMATS[row.format] ?? 'static'],
+    count: Math.max(1, Math.min(3, row.variations.length || 3)),
+  }
+}
+
+/**
+ * The loops on file, as a brief. The card promised they were "kept here so the
+ * planner and the writers can read them" and nothing read them: an account
+ * could write down that statics keep failing and the planner would keep
+ * proposing statics.
+ */
+export function loopBrief(db: Db, storeId: string, limit = 3): string {
+  const loops = listDocs<Loop>(db, storeId, 'loop').slice(0, limit)
+  if (!loops.length) return ''
+  const lines = loops.map((doc) => {
+    const l = doc.body
+    return [
+      l.failing ? `keeps failing: ${l.failing}` : '',
+      l.working ? `keeps working: ${l.working}` : '',
+      l.actions.length ? `tried: ${l.actions.join('; ')}` : '',
+      l.outcome ? `outcome: ${l.outcome}` : 'outcome: not recorded yet',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  })
+  return `What this account has already learned, from its own feedback loops. Do not propose what has already failed here, and lean on what is working:\n${lines.map((line) => `- ${line}`).join('\n')}`
 }
 
 export function updatePlanRow(db: Db, storeId: string, index: number, patch: Partial<Pick<AdPlanRow, 'status' | 'result' | 'learnings' | 'angle' | 'variations'>>): MarketDoc<AdPlan> {

@@ -6,7 +6,7 @@ export type ProductOption = {
   values: Array<{ value: string; swatch?: string; note?: string }>
 }
 
-export type Media = { url: string; alt: string }
+export type Media = { url: string; alt: string; kind?: 'image' | 'video'; poster?: string }
 
 export type Variant = {
   id: string
@@ -92,6 +92,8 @@ export type LineItem = {
 export type Address = {
   name?: string
   line1?: string
+  line2?: string
+  state?: string
   city?: string
   postal?: string
   country?: string
@@ -105,7 +107,7 @@ export type Totals = {
   taxCents: Cents
   totalCents: Cents
   currency: string
-  appliedPromotions: Array<{ id: string; title: string; code: string; amountCents: Cents }>
+  appliedPromotions: Array<{ id: string; title: string; code: string; amountCents: Cents; kind: string }>
   /** How much more the cart needs to clear the free-shipping threshold. */
   freeShippingGapCents: Cents | null
   shippingOptionId: string
@@ -138,6 +140,8 @@ export type Order = {
   paymentCustomerId: string
   paymentMethodId: string
   shippingOptionId: string
+  /** What the merchant needs to know about this order that the lines cannot say. */
+  notes: string
   upsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents; paymentIntentId?: string }
   downsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents }
   supplierOrder: { supplier?: string; orderId?: string; costCents?: Cents; shippingCents?: Cents; placedAt?: string; carrier?: string }
@@ -175,7 +179,8 @@ export type Promotion = {
     getProductIds?: string[]
     requiredDistinctProducts?: number
     bundlePriceCents?: number
-    tiers?: Array<{ quantity: number; percent: number }>
+    bundleProductId?: string
+    tiers?: Array<{ quantity: number; percent: number; unitPriceCents?: number }>
     regionIds?: string[]
     firstOrderOnly?: boolean
     /** Minimum eligible units before the promotion pays out (bundle tiers). */
@@ -202,6 +207,16 @@ export type Brand = {
   paper?: string
   displayFont?: string
   bodyFont?: string
+  displayWeight?: number
+  bodyWeight?: number
+  surface?: string
+  buttonText?: string
+  border?: string
+  fontFaces?: string
+  themeCustomized?: boolean
+  sourceTheme?: Partial<Pick<Brand, 'primary' | 'secondary' | 'paper' | 'ink' | 'surface' | 'buttonText' | 'border' | 'displayFont' | 'bodyFont' | 'displayWeight' | 'bodyWeight'>>
+  /** Font families discovered in a cloned site's CSS, available for block-level overrides. */
+  fonts?: string[]
   logoSvg?: string
   announcement?: string
   voice?: string

@@ -636,6 +636,110 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE orders ADD COLUMN base_total_cents INTEGER;
     `,
   },
+  {
+    name: '016_ad_clicks',
+    sql: `
+    ALTER TABLE ad_spend ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    name: '017_order_notes',
+    sql: `
+    ALTER TABLE orders ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    name: '018_environment_brand',
+    sql: `
+    ALTER TABLE store_environments ADD COLUMN brand TEXT NOT NULL DEFAULT '{}';
+    UPDATE store_environments SET brand = (SELECT brand FROM stores WHERE stores.id = store_environments.store_id);
+    `,
+  },
+  {
+    name: '019_password_resets',
+    sql: `
+    CREATE TABLE password_resets (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL,
+      used_at TEXT, created_at TEXT NOT NULL);
+    CREATE INDEX password_resets_user ON password_resets(user_id, created_at DESC);
+    `,
+  },
+  {
+    name: '020_block_presets',
+    sql: `
+    -- A configured section can be named once and reused on any of this
+    -- owner's stores or funnels. The definition remains in the catalog (or
+    -- the owner's shared custom-block catalog); this table stores the chosen
+    -- settings, not another rendering implementation.
+    CREATE TABLE block_presets (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_store_id TEXT REFERENCES stores(id) ON DELETE SET NULL,
+      name TEXT NOT NULL, block_type TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (owner_id, name));
+    CREATE INDEX block_presets_owner ON block_presets(owner_id, updated_at DESC);
+    `,
+  },
+  {
+    name: '021_page_revisions',
+    sql: `
+    -- Every deliberate builder save is recoverable. Page revisions are kept
+    -- separately from storefront publishing because a page can be restored
+    -- without rolling back the entire store theme and catalog.
+    CREATE TABLE page_revisions (
+      id TEXT PRIMARY KEY, page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+      store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL, snapshot TEXT NOT NULL DEFAULT '{}',
+      note TEXT NOT NULL DEFAULT 'Saved', created_at TEXT NOT NULL,
+      UNIQUE (page_id, version));
+    CREATE INDEX page_revisions_page ON page_revisions(page_id, version DESC);
+    `,
+  },
+  {
+    name: '022_page_template_library',
+    sql: `
+    CREATE TABLE page_templates (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_store_id TEXT REFERENCES stores(id) ON DELETE SET NULL,
+      name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'page',
+      snapshot TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX page_templates_owner ON page_templates(owner_id, updated_at DESC);
+    `,
+  },
+  {
+    name: '023_media_rebrands',
+    sql: `
+    CREATE TABLE media_rebrands (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      actor_id TEXT NOT NULL, request_key TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL, original_url TEXT NOT NULL DEFAULT '',
+      result_url TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, spec TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued', phase TEXT NOT NULL DEFAULT 'Waiting to start',
+      provider_task TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+      changes TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX media_rebrands_store ON media_rebrands(store_id, created_at DESC);
+    CREATE UNIQUE INDEX media_rebrands_request ON media_rebrands(store_id, request_key) WHERE request_key <> '';
+    `,
+  },
+  { name: '024_funnel_steps_and_health_fixes', sql: `ALTER TABLE funnels ADD COLUMN steps TEXT NOT NULL DEFAULT '[]';
+    CREATE TABLE health_fixes (id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE, path TEXT NOT NULL, check_name TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', before_state TEXT NOT NULL DEFAULT '{}', after_state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE UNIQUE INDEX health_fixes_running ON health_fixes(store_id, path, check_name) WHERE status = 'running';` },
+  { name: '025_media_categories', sql: `CREATE TABLE media_labels (
+    id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    url TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'media', label TEXT NOT NULL DEFAULT '',
+    UNIQUE(store_id,url));` },
+  { name: '026_asset_import_jobs', sql: `CREATE TABLE asset_import_jobs (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    request_key TEXT NOT NULL DEFAULT '', input TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued', progress TEXT NOT NULL DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX asset_import_owner ON asset_import_jobs(owner_id, created_at DESC);
+    CREATE UNIQUE INDEX asset_import_request ON asset_import_jobs(owner_id,request_key) WHERE request_key <> '';
+    CREATE TABLE post_purchase_offers (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE, page_id TEXT NOT NULL,
+      status TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '{}', payment_intent_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
 ]
 
 function migrate(db: Db) {

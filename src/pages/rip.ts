@@ -8,6 +8,7 @@ import { authorBlocks, type Format } from '../agent/directions.ts'
 import { directionFor, getAvatar, listAvatars } from '../agent/avatars.ts'
 import { modelFor, type ModelChoice } from '../agent/models.ts'
 import { latestResearch, rulesResearch } from '../agent/research.ts'
+import { latestDoc, type MarketAnalysis } from '../agent/market.ts'
 import type { BlockInstance } from './blocks.ts'
 import { createPage, newBlock, type Page } from './store.ts'
 
@@ -158,7 +159,7 @@ export function blocksFromOutline(sections: RipSection[], product: { id: string;
   return blocks
 }
 
-const UA = 'Mozilla/5.0 (compatible; AmborasRip/1.0)'
+const UA = 'Mozilla/5.0 (compatible; storemillRip/1.0)'
 
 export async function ripFunnel(url: string, fetcher: Fetcher = realFetcher): Promise<Omit<RipResult, 'blocks'>> {
   const response = await fetcher(url)
@@ -197,7 +198,8 @@ export async function ripToPage(db: Db, store: Store, request: RipRequest): Prom
   const extra = request.keepAngle
     ? `The structure was copied from a competitor's page that ran this angle: ${read.angle.angle}${read.angle.headline ? ` — its headline promised "${read.angle.headline}"` : ''}${read.angle.audience ? `, aimed at ${read.angle.audience}` : ''}. Sell the SAME reason to buy for ${product.title}, but do not reuse any phrase, sentence or claim from the source; every word must be yours and every claim must be true of this product. Where a placeholder says [Reason N] or [Explains …], write that section for this product.`
     : `The structure was copied from a competitor's page; its angle is NOT to be used. Write every section for ${product.title} in the direction given above, reusing no phrase from any competitor, and replace every bracketed placeholder with real copy for this product.`
-  const authored = await authorBlocks(choice, blocks, { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format }, extra)
+  const market = latestDoc<MarketAnalysis>(db, store.id, 'analysis')?.body ?? null
+  const authored = await authorBlocks(choice, blocks, { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format, market }, extra)
   const page = createPage(db, store.id, {
     title: `${product.title} — copied structure${request.keepAngle ? ` (${read.angle.angle} angle)` : ' (new angle)'}`,
     kind: 'landing',

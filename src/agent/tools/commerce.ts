@@ -4,6 +4,7 @@ import { cancelOrder, fulfillOrder, getOrder, listOrders, refundOrder, returnOrd
 import { createPromotion, listPromotions, setPromotionStatus } from '../../domain/promotions.ts'
 import { getStore } from '../../control/stores.ts'
 import { format } from '../../lib/money.ts'
+import { refundThroughProvider } from '../../payments/stripe.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 export const commerceTools: Tool[] = defineTools([
@@ -25,7 +26,7 @@ export const commerceTools: Tool[] = defineTools([
       return {
         summary: `Created the ${collection.title} collection with ${collection.productIds.length} product${collection.productIds.length === 1 ? '' : 's'}.`,
         data: { id: collection.id, handle: collection.handle },
-        artifacts: [{ type: 'link', href: `/collections/${collection.id}`, label: collection.title }],
+        artifacts: [{ type: 'link', href: '/admin/collections', label: collection.title }],
       }
     },
   },
@@ -106,6 +107,10 @@ export const commerceTools: Tool[] = defineTools([
       getQuantity: { type: 'number', integer: true, min: 1 },
       productIds: { type: 'array', of: { type: 'string' } },
       firstOrderOnly: { type: 'boolean' },
+      // 'tiered' was in the enum with no way to say what the tiers are, so the
+      // engine read an empty list, discounted nothing, and the promotion sat
+      // in the table marked active for ever.
+      tiers: { type: 'array', of: { type: 'string' }, help: 'For kind "tiered": one "quantity|percent" per entry, e.g. "2|10", "3|20".' },
       endsAt: { type: 'string', help: 'ISO date the promotion stops.' },
     },
     handler(args, ctx) {
@@ -114,6 +119,14 @@ export const commerceTools: Tool[] = defineTools([
       for (const key of ['minSubtotalCents', 'buyQuantity', 'getQuantity', 'productIds', 'firstOrderOnly']) {
         if (args[key] !== undefined) rules[key] = args[key]
       }
+      const tiers = ((args.tiers as string[] | undefined) ?? [])
+        .map((entry) => {
+          const [quantity = '', percent = ''] = String(entry).split('|')
+          return { quantity: Math.max(1, Math.round(Number(quantity) || 0)), percent: Math.max(0, Math.min(100, Number(percent) || 0)) }
+        })
+        .filter((tier) => tier.quantity > 0 && tier.percent > 0)
+      if (tiers.length) rules.tiers = tiers
+      if (args.kind === 'tiered' && !tiers.length) throw new Error('A tiered promotion needs its tiers: pass tiers as "quantity|percent" entries, e.g. ["2|10","3|20"].')
       const promotion = createPromotion(ctx.db, ctx.storeId, {
         title: args.title as string,
         kind: args.kind as 'percentage',
@@ -220,13 +233,23 @@ export const commerceTools: Tool[] = defineTools([
       amountCents: { type: 'number', integer: true, min: 1, help: 'Leave empty to refund the remaining balance.' },
       reason: { type: 'string' },
     },
-    handler(args, ctx) {
-      const order = refundOrder(ctx.db, ctx.storeId, args.orderId as string, {
+    async handler(args, ctx) {
+      const existing = getOrder(ctx.db, ctx.storeId, args.orderId as string)
+      if (!existing) throw new Error('No order with that id or number')
+      // "This moves money" was only true from the admin's own button: this
+      // tool used to write the refund row and say so without ever calling the
+      // provider, leaving the customer's card untouched.
+      const moved = await refundThroughProvider(ctx.db, ctx.storeId, existing, args.amountCents as number | undefined)
+      if (!moved.ok) throw new Error(moved.message)
+      const order = refundOrder(ctx.db, ctx.storeId, existing.id, {
         ...(args.amountCents ? { amountCents: args.amountCents as number } : {}),
         ...(args.reason ? { reason: args.reason as string } : {}),
       })
       const refunded = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
-      return { summary: `Refunded ${format(refunded, order.currency)} on order #${order.displayId}.`, data: { paymentStatus: order.paymentStatus } }
+      return {
+        summary: `Refunded ${format(refunded, order.currency)} on order #${order.displayId}${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}.`,
+        data: { paymentStatus: order.paymentStatus },
+      }
     },
   },
   {
@@ -259,9 +282,14 @@ export const commerceTools: Tool[] = defineTools([
     description: 'Accept a return: restock the items and refund the order.',
     risk: 'confirm',
     schema: { orderId: { type: 'string', required: true }, reason: { type: 'string' } },
-    handler(args, ctx) {
-      const order = returnOrder(ctx.db, ctx.storeId, args.orderId as string, (args.reason as string) ?? '')
-      return { summary: `Return accepted on #${order.displayId}; stock is back and the refund is issued.` }
+    async handler(args, ctx) {
+      const existing = getOrder(ctx.db, ctx.storeId, args.orderId as string)
+      if (!existing) throw new Error('No order with that id or number')
+      if (existing.fulfillmentStatus === 'returned') return { summary: `#${existing.displayId} was already returned; nothing was restocked or refunded twice.` }
+      const moved = await refundThroughProvider(ctx.db, ctx.storeId, existing)
+      if (!moved.ok) throw new Error(moved.message)
+      const order = returnOrder(ctx.db, ctx.storeId, existing.id, (args.reason as string) ?? '')
+      return { summary: `Return accepted on #${order.displayId}; stock is back and ${format(order.totalCents, order.currency)} is refunded.` }
     },
   },
   {

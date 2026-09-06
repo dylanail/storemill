@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { createStore, getStore } from '../src/control/stores.ts'
-import { createProduct, getProduct, updateProduct } from '../src/domain/catalog.ts'
+import { canReserve, createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart } from '../src/domain/cart.ts'
-import { completeCart, recordSupplierOrder, markDelivered } from '../src/domain/orders.ts'
-import { carrierFor, deliveryEstimate, importReviews, marginFor, parseCsv, profitReport, recordAdSpend, recentPurchases, trackingFor, importProductFromUrl, createFromImport, askQuestion, answerQuestion, listQuestions } from '../src/domain/ops.ts'
+import { completeCart, recordSupplierOrder, markDelivered, recordUpsell } from '../src/domain/orders.ts'
+import { createPromotion } from '../src/domain/promotions.ts'
+import { totals } from '../src/domain/cart.ts'
+import { carrierFor, deliveryEstimate, importReviews, marginFor, parseCsv, profitReport, recordAdSpend, recentPurchases, roasLines, trackingFor, importProductFromUrl, createFromImport, askQuestion, answerQuestion, listQuestions } from '../src/domain/ops.ts'
 import { ensureShippingProtection, funnelForProducts, resolveBump, resolveOffer, upsertFunnel } from '../src/domain/funnels.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, readDirection, redirectContent, writeAdvertorial, writePdp } from '../src/agent/directions.ts'
 import { readBrief } from '../src/agent/copy.ts'
@@ -18,6 +20,7 @@ import { sessionFor, track } from '../src/analytics/events.ts'
 import { sweepAbandonedCarts } from '../src/email/abandoned.ts'
 import { saveCheckoutDraft } from '../src/domain/cart.ts'
 import { listReviews } from '../src/domain/reviews.ts'
+import { execute } from '../src/agent/registry.ts'
 
 function shop() {
   const { db, user } = fresh()
@@ -186,10 +189,54 @@ test('products import from a Shopify store JSON or an Open Graph page', async ()
   assert.equal(product.supplier.costCents, 1990)
   assert.equal(product.variants[0]?.priceCents, 4999, 'marked up to the next hundred, ending in 99')
   assert.equal(product.status, 'draft')
+
+  // The markup is on the landed cost. Multiplying the item alone put the
+  // supplier's freight through at cost: $19.90 plus $7 of shipping at 2.5x
+  // priced at $49.99 against a $26.90 cost — 1.9x, which no ad account carries.
+  const landed = createFromImport(db, store.id, shopify, { asSupplier: true, markup: 2.5, supplierShippingCents: 700 })
+  assert.equal(landed.supplier.shippingCents, 700)
+  assert.equal(landed.variants[0]?.priceCents, 6699, '(1990 + 700) × 2.5, to the next hundred less a penny')
   const og = await importProductFromUrl('https://supplier.example.com/item/9', fetchImpl)
   assert.equal(og.title, 'Steel Widget')
   assert.equal(og.priceCents, 420)
   assert.deepEqual(og.images, ['https://supplier.example.com/img/w.jpg'])
+})
+
+test('a product is checked against the qualification criteria before anything is built on it', async () => {
+  // docs/knowledge/product-research.md opens the whole method with this and
+  // none of it was anywhere in the product: a store could be built end to end
+  // around a $9 seasonal item at 1.4x on a declining trend, and nothing would
+  // say so until the ad spend had already gone.
+  const { db, store, user } = shop()
+  const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
+
+  const bad = createProduct(db, store.id, { title: 'Novelty Snowman', status: 'draft', variants: [{ title: 'One', priceCents: 900, inventory: 5 }], supplier: { costCents: 600, shippingCents: 40 } })
+  const skipped = await execute('qualify_product', { productId: bad.id, trend: 'declining', seasonal: true }, ctx)
+  const result = skipped.data as { decision: string; checks: Array<{ key: string; verdict: string; detail: string }> }
+  assert.equal(result.decision, 'skip')
+  assert.equal(result.checks.find((check) => check.key === 'aov')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'markup')?.verdict, 'fail', '$9.00 on a $6.40 landed cost is 1.4x')
+  assert.equal(result.checks.find((check) => check.key === 'unit-price')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'trend')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'seasonality')?.verdict, 'warn')
+  assert.equal(result.checks.find((check) => check.key === 'stand-out')?.verdict, 'fail', 'no way to stand out found is a reason not to run it')
+  assert.ok(result.checks.every((check) => check.detail), 'every check says what it found')
+
+  // The judgements stick to the product, so the next run remembers them.
+  assert.match(getProduct(db, store.id, bad.id)?.metadata.qualify ?? '', /declining/)
+  const again = await execute('qualify_product', { productId: bad.id, standOut: 'Nobody sells one that folds' }, ctx)
+  assert.match((again.data as { checks: Array<{ key: string; verdict: string }> }).checks.find((check) => check.key === 'trend')?.verdict ?? '', /fail/, 'the trend from the earlier run is still on file')
+
+  // The glove: $100 on a $38 landed cost, a flat trend, a stand-out named.
+  const good = await execute('qualify_product', { productId: listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id, trend: 'flat', weightGrams: 600, standOut: 'Repairs, for club coaches who buy for a room' }, ctx)
+  const passing = good.data as { decision: string; markup: number; summary: string; margin: { breakevenRoas: number | null } }
+  assert.equal(passing.markup, 2.63, 'the markup is on the landed cost, the supplier\'s shipping included')
+  assert.equal(passing.decision, 'work', 'nothing disqualifies it, but 2.63x is under the 3x line')
+  assert.match(passing.summary, /markup on landed cost/)
+  assert.ok(passing.margin.breakevenRoas, 'and the qualification quotes the same breakeven the profit page does')
+  updateProduct(db, store.id, listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id, { supplier: { costCents: 2500, shippingCents: 500 } })
+  const priced = await execute('qualify_product', { productId: listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id }, ctx)
+  assert.equal((priced.data as { decision: string }).decision, 'run', 'at 3.3x on $30 landed every criterion passes')
 })
 
 test('questions are answered before they show, and social proof is only real orders', () => {
@@ -254,4 +301,72 @@ test('one person\'s platform: a store carries no plan, and hidden products stay 
   assert.equal(listProducts(db, store.id, {}).length, 0)
   assert.equal(listProducts(db, store.id, { includeHidden: true }).length, 1)
   assert.ok(getProduct(db, store.id, 'nope') === null)
+})
+
+test('the two ROAS lines are computed, and the report says which side of them the spend is on', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Lines', prompt: 'lines' })
+
+  // 67% margin → breakeven 1.5, target 2.5 (the course's own worked example).
+  assert.deepEqual(roasLines(67), { breakevenRoas: 1.5, targetRoas: 2.5 })
+  assert.deepEqual(roasLines(55), { breakevenRoas: 1.82, targetRoas: 2.82 })
+  assert.deepEqual(roasLines(0), { breakevenRoas: null, targetRoas: null })
+  assert.deepEqual(roasLines(-12), { breakevenRoas: null, targetRoas: null }, 'a product that loses money has no line to scale on')
+
+  const margin = marginFor(10_000, { costCents: 2_000, shippingCents: 500 } as never)
+  assert.equal(margin.marginPercent, 72)
+  assert.equal(margin.breakevenRoas, 1.39)
+  assert.equal(margin.targetRoas, 2.39)
+
+  const empty = profitReport(db, store.id, 30)
+  assert.equal(empty.roas, null)
+  assert.equal(empty.verdict, null, 'nothing to judge without spend')
+  assert.equal(empty.cpcCents, null)
+
+  recordAdSpend(db, store.id, { day: new Date().toISOString(), platform: 'Meta', amountCents: 20_000, clicks: 400 })
+  recordAdSpend(db, store.id, { day: new Date().toISOString(), platform: 'TikTok', amountCents: 99_000 })
+  const spent = profitReport(db, store.id, 30)
+  assert.equal(spent.clicks, 400)
+  assert.equal(spent.cpcCents, 50, 'CPC divides only the spend that had clicks logged with it, not the day someone forgot')
+  assert.equal(spent.adSpendCents, 119_000, 'while the spend total still counts every row')
+  assert.equal(spent.spendDays, 1)
+  assert.equal(spent.roas, 0)
+  assert.equal(spent.verdict, null, 'no revenue means no margin, and a line has to be divided into something')
+})
+
+test('the order bump is an add-on, not a second unit that triggers a quantity offer', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bump', prompt: 'bump' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const glove = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 34_000, inventory: 20 }] })
+  const protection = ensureShippingProtection(db, store.id, 299)
+  createPromotion(db, store.id, { title: 'Buy two, save 15%', kind: 'bundle', value: 15, automatic: true, rules: { buyQuantity: 2 } })
+
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, glove.variants[0]!.id, 1)
+  assert.equal(totals(db, store.id, cart).discountCents, 0, 'one glove is not two of anything')
+
+  const withBump = addToCart(db, store.id, cart.id, protection.variants[0]!.id, 1, 'order-bump', 299)
+  const after = totals(db, store.id, withBump)
+  assert.equal(after.discountCents, 0, 'and $2.99 of shipping protection does not make it two')
+  assert.equal(after.subtotalCents, 34_299)
+})
+
+test('a post-purchase offer will not charge for stock that is not there', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Stock', prompt: 'stock' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const glove = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 10_000, inventory: 5 }] })
+  const extra = createProduct(db, store.id, { title: 'Wraps', status: 'published', variants: [{ title: 'One', priceCents: 2_000, inventory: 0 }] })
+  const soldOut = extra.variants[0]!
+  assert.equal(canReserve(db, soldOut.id, 1), false, 'the check the offer makes before it charges')
+
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, glove.variants[0]!.id, 1)
+  const order = completeCart(db, store.id, cart.id, { email: 'b@example.com' })
+  const line = { variantId: soldOut.id, productId: extra.id, title: 'Wraps', variantTitle: 'One', image: '', unitCents: 2_000, quantity: 1, source: 'post-purchase' }
+  assert.throws(
+    () => recordUpsell(db, store.id, order.id, { offered: soldOut.id, accepted: true, line, amountCents: 2_000 }),
+    /out of stock/,
+    'and the last line of defence if it slips through',
+  )
+  assert.equal(getVariant(db, store.id, soldOut.id)?.inventory, 0, 'nothing went negative')
 })

@@ -91,7 +91,7 @@ test('store backup is complete within one store and excludes authentication sess
   createProduct(db, first.id, { title: 'Included', variants: [{ title: 'One', priceCents: 100 }] })
   createProduct(db, second.id, { title: 'Excluded', variants: [{ title: 'One', priceCents: 100 }] })
   const backup = exportStore(db, first.id)
-  assert.equal(backup.format, 'amboras-store-backup')
+  assert.equal(backup.format, 'storemill-store-backup')
   assert.equal(backup.tables.stores?.length, 1)
   assert.equal(backup.tables.products?.length, 1)
   assert.equal(backup.tables.products?.[0]?.title, 'Included')

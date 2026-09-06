@@ -231,6 +231,13 @@ export function getVariant(db: Db, storeId: string, variantId: string): Variant 
  * the admin exposes; without it a sold-out variant refuses the reservation
  * rather than letting the storefront oversell.
  */
+/** Whether a reserve would succeed, without moving anything: the check a post-purchase offer needs before it charges. */
+export function canReserve(db: Db, variantId: string, quantity: number): boolean {
+  const row = db.one<{ inventory: number; allow_backorder: number }>('SELECT inventory, allow_backorder FROM variants WHERE id = ?', variantId)
+  if (!row) return false
+  return row.inventory >= quantity || bool(row.allow_backorder)
+}
+
 export function reserveInventory(db: Db, variantId: string, quantity: number): boolean {
   const row = db.one<{ inventory: number; allow_backorder: number }>(
     'SELECT inventory, allow_backorder FROM variants WHERE id = ?',
@@ -331,6 +338,17 @@ export function createCollection(db: Db, storeId: string, input: { title: string
 export function setCollectionProducts(db: Db, storeId: string, collectionId: string, productIds: string[], mode: 'set' | 'add' | 'remove' = 'set') {
   const collection = getCollection(db, storeId, collectionId)
   if (!collection) throw new Error(`No collection ${collectionId}`)
+  // The ids reach here from a model or from something pasted into the admin,
+  // and the insert had no store check: a hallucinated or another store's id
+  // was accepted, counted in the collection, and then dropped by every read —
+  // a collection that says five products and shows three.
+  if (mode !== 'remove') {
+    const mine = new Set(
+      db.all<{ id: string }>(`SELECT id FROM products WHERE store_id = ? AND id IN (${productIds.map(() => '?').join(',') || "''"})`, storeId, ...productIds).map((row) => row.id),
+    )
+    const strangers = productIds.filter((productId) => !mine.has(productId))
+    if (strangers.length) throw new Error(`Not products of this store: ${strangers.join(', ')}`)
+  }
   db.tx(() => {
     if (mode === 'set') db.run('DELETE FROM collection_products WHERE collection_id = ?', collection.id)
     if (mode === 'remove') {

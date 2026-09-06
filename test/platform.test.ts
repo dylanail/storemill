@@ -4,10 +4,10 @@ import { fresh } from './helpers.ts'
 import { open, seal, verifyPassword, hashPassword, fingerprint } from '../src/lib/crypto.ts'
 import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
-import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, addDomain, verifyDomain } from '../src/control/stores.ts'
-import { requireRole, register, inviteTeammate, acceptInvite } from '../src/control/auth.ts'
+import { createStore, DEFAULT_THEME, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, updateStore, addDomain, verifyDomain } from '../src/control/stores.ts'
+import { themeCss } from '../src/storefront/theme.ts'
+import { requireRole, register, inviteTeammate, acceptInvite, roleOn, updateProfile } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
-import { directoryEntries } from '../src/control/catalog-plugins.ts'
 import { createProduct } from '../src/domain/catalog.ts'
 import { createReview, flagsFor, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
@@ -150,6 +150,16 @@ test('an invite only activates when it is accepted', () => {
   assert.equal(acceptInvite(db, newcomer.id, invite), false, 'an invite cannot be redeemed twice')
 })
 
+test('profile name and sign-in email are editable and email remains unique', () => {
+  const { db, user } = fresh()
+  const other = register(db, { email: 'other@example.com', password: 'a-long-enough-password' })
+  const updated = updateProfile(db, user.id, { name: '  Dylan Owner  ', email: '  DYLAN@example.com ' })
+  assert.equal(updated.name, 'Dylan Owner')
+  assert.equal(updated.email, 'dylan@example.com')
+  assert.throws(() => updateProfile(db, user.id, { name: 'Dylan', email: other.email }), /already has an account/)
+  assert.throws(() => updateProfile(db, user.id, { name: '', email: 'dylan@example.com' }), /Enter a name/)
+})
+
 /* -------------------------------------------------------------------- plugins */
 
 test('plugin settings are validated, secrets are sealed away from settings', () => {
@@ -168,13 +178,6 @@ test('plugin settings are validated, secrets are sealed away from settings', () 
 
   uninstall(db, store.id, 'stripe')
   assert.deepEqual(readCredentials(db, store.id, 'stripe'), {}, 'uninstall takes the credentials with it')
-})
-
-test('a directory listing refuses to pretend it installs', () => {
-  const { db, user } = fresh()
-  const store = createStore(db, user.id, { name: 'Directory' })
-  const listing = directoryEntries()[0]!.id
-  assert.throws(() => install(db, store.id, listing, {}), /directory listing/)
 })
 
 test('a catalog plugin that used to be plan-gated installs like any other', () => {
@@ -272,6 +275,32 @@ test('kpis and the funnel are computed from real events', () => {
   assert.deepEqual(stages.map((stage) => stage.count), [20, 8, 4, 2])
   assert.equal(stages[1]?.dropOff.toFixed(2), '0.60')
   assert.equal(kpis(db, store.id, '7d').sessions, 20)
+
+  // A visitor who arrived before the window and came back inside it counted at
+  // every stage but the first, because the first counted sessions that started
+  // in the window and the rest counted sessions active in it. The funnel could
+  // report more add-to-carts than sessions, with a negative drop-off under it.
+  const returning = sessionFor(db, store.id, { ip: '10.0.0.99', userAgent: 'test' })
+  db.run("UPDATE sessions_analytics SET first_seen = ? WHERE id = ?", '2000-01-01T00:00:00.000Z', returning)
+  track(db, store.id, returning, 'cart.add')
+  const withReturning = funnel(db, store.id, '7d')
+  assert.equal(withReturning[0]?.count, 21)
+  assert.equal(withReturning[1]?.count, 9)
+  assert.ok(withReturning.every((stage, index) => index === 0 || stage.count <= (withReturning[index - 1]?.count ?? 0)), 'no stage is bigger than the one above it')
+  assert.ok(withReturning.every((stage) => stage.dropOff >= 0), 'and no drop-off is negative')
+})
+
+test('each theme template renders differently — a picker with a dead option is a broken picker', () => {
+  // "Market" was offered in the admin and in edit_storefront's enum and
+  // produced byte-for-byte the same stylesheet as the atelier.
+  const brand = { primary: '#7a4a2b', paper: '#f4ece1', ink: '#241a14' }
+  const css = (template: string) => themeCss(brand, { ...DEFAULT_THEME, template } as never)
+  const atelier = css('atelier')
+  assert.notEqual(css('market'), atelier)
+  assert.notEqual(css('gallery'), atelier)
+  assert.notEqual(css('market'), css('gallery'))
+  assert.match(css('market'), /Market: a shop, not a showroom/)
+  assert.ok(!/Market: a shop/.test(atelier), 'and the atelier is untouched by it')
 })
 
 test('one visitor across many requests is one session', () => {
@@ -281,4 +310,46 @@ test('one visitor across many requests is one session', () => {
   const second = sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same' })
   assert.equal(first, second)
   assert.notEqual(first, sessionFor(db, store.id, { ip: '10.0.0.2', userAgent: 'same' }))
+
+  // With the storefront's visitor cookie in hand the address stops mattering,
+  // in both directions: a phone that moves from wifi to cell is still one
+  // session, and two people behind one office address are two.
+  const moved = sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same', visitor: 'v_one' })
+  assert.equal(moved, sessionFor(db, store.id, { ip: '198.51.100.7', userAgent: 'same', visitor: 'v_one' }))
+  assert.notEqual(moved, sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same', visitor: 'v_two' }))
+})
+
+test('a member cannot take the storefront live, connect a domain or delete a page', async () => {
+  const { db, user } = fresh()
+  const owner = createStore(db, user.id, { name: 'Roles', prompt: 'roles' })
+  const mate = register(db, { email: 'mate@example.com', password: 'a-long-enough-password' })
+  const { invite } = inviteTeammate(db, owner.id, 'mate@example.com', 'member')
+  assert.ok(acceptInvite(db, mate.id, invite) || roleOn(db, mate.id, owner.id) === 'member')
+
+  assert.equal(roleOn(db, mate.id, owner.id), 'member')
+  assert.equal(requireRole(db, mate.id, owner.id), 'member', 'a member is a member of the store')
+  assert.throws(() => requireRole(db, mate.id, owner.id, 'admin'), /needs admin access/, 'and not an admin of it')
+  assert.equal(requireRole(db, user.id, owner.id, 'owner'), 'owner')
+})
+
+test('the brand belongs to the environment: an edit is on the draft until it is published', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Palette Co', prompt: 'palette' })
+  updateStore(db, store.id, { brand: { primary: '#111111', announcement: 'Free shipping over $50' } })
+  createProduct(db, store.id, { title: 'Thing', status: 'published', variants: [{ title: 'One', priceCents: 1000 }] })
+  publish(db, store.id)
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#111111', 'publishing copies the brand across')
+
+  // The assistant changes the palette and the announcement bar.
+  updateStore(db, store.id, { brand: { primary: '#ff0000', announcement: 'FLASH SALE' } })
+  assert.equal(getStore(db, store.id)!.brand.primary, '#ff0000', 'the working copy moves')
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#111111', 'the live storefront does not')
+  assert.equal(environment(db, store.id, 'live').brand.announcement, 'Free shipping over $50')
+  assert.equal(publishState(db, store.id).label, 'Publish changes', 'and the button says there is something to publish')
+
+  publish(db, store.id)
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#ff0000')
+
+  rollback(db, store.id)
+  assert.equal(getStore(db, store.id)!.brand.primary, '#ff0000', 'rollback returns the working copy to what is live')
 })

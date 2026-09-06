@@ -1,13 +1,19 @@
+import { listImports } from '../control/asset-import-jobs.ts'
+import { mediaRebrandStyle, rebrandHistory } from './media-rebrand-page.ts'
+import { themeEditorPage } from './theme-page.ts'
+import { roleOptions } from './library-page.ts'
 import { escapeHtml } from '../lib/http.ts'
-import { format } from '../lib/money.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
+import { format, minorDigits } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
 import { listCollections, listProducts, lowStock } from '../domain/catalog.ts'
 import { listCustomers, segment } from '../domain/customers.ts'
 import { listOrders, getOrder } from '../domain/orders.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
-import { listRegions } from '../domain/regions.ts'
+import { listRegions, type Region } from '../domain/regions.ts'
 import { environment, type Store } from '../control/stores.ts'
+import { listTeam } from '../control/auth.ts'
 import { listAudit, listTodos } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
 import { listInstalled } from '../control/plugins.ts'
@@ -32,16 +38,20 @@ import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact, uiIcon, type IconName } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
-import { listCustomBlocks } from '../pages/custom-blocks.ts'
+import { listCustomBlocks, type CustomBlock } from '../pages/custom-blocks.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 import { seventeenTrackConfigured } from '../shipping/seventeen-track.ts'
 import { domainsFor } from '../control/domains.ts'
 import { listFlows, recentFlowDeliveries } from '../email/flows.ts'
 import { serverEventSummary } from '../analytics/server-events.ts'
 import { listAssistantQueue } from '../agent/queue.ts'
-import { listStoreMedia, storeCoverImage } from '../control/media.ts'
+import { listStoreMedia, storeCoverImage, mediaKind } from '../control/media.ts'
+import { listBlogs } from '../domain/content.ts'
+import { PHOTO_BRIEFS, shotOf } from '../creative/briefs.ts'
+import { qualifyCatalogProduct, readQualifyNotes } from '../domain/qualify.ts'
+import { fontFamiliesFromClone, fontFamilyName } from '../control/assets.ts'
 
-type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
+type Ctx = { db: Db; store: Store; userName: string; userId?: string; userEmail?: string; storeUrl: string; flash?: string }
 
 const pct = (value: number) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 
@@ -75,6 +85,7 @@ function flash(ctx: Ctx): string {
 
 export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string {
   const noun = ctx.store.kind === 'funnel' ? 'Funnel' : 'Store'
+  const storefrontUrl = ctx.store.status === 'live' ? ctx.storeUrl : `/preview/${ctx.store.slug}`
   const days = range === '24h' ? 2 : range === '7d' ? 7 : range === '30d' ? 30 : 90
   const series = revenueSeries(ctx.db, ctx.store.id, days)
   const stats = kpis(ctx.db, ctx.store.id, range)
@@ -98,7 +109,7 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
   return `${flash(ctx)}
   <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? `${noun} is live` : `Draft ${noun.toLowerCase()}`}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
       <p class="muted">${escapeHtml(ctx.store.name)} · ${products.filter((product) => product.status === 'published').length} published products</p></div>
-    <div class="dash-actions"><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/funnels' : '/admin/store'}">${ctx.store.kind === 'funnel' ? 'Edit funnel flow' : 'Customize store'}</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View ${noun.toLowerCase()} ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
+    <div class="dash-actions"><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/funnels' : '/admin/store'}">${ctx.store.kind === 'funnel' ? 'Edit funnel flow' : 'Customize store'}</a><a class="btn" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${ctx.store.status === 'live' ? 'View' : 'Preview'} ${noun.toLowerCase()} ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
       ${(['24h', '7d', '30d', '90d'] as const).map((option) => `<option value="${option}" ${option === range ? 'selected' : ''}>Last ${option}</option>`).join('')}
     </select></form></div></div>
   <div class="commerce-kpis">${tiles.map(([label, value, delta, icon]) => `<div class="metric-card"><div class="label"><span>${label}</span>${uiIcon(icon, 16)}</div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
@@ -108,7 +119,7 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
     <div class="card dash-card"><div class="dash-card-head"><h2>Next things to do</h2><a href="/admin/build" class="muted" style="font-size:11px">See plan</a></div><div class="pulse-list" style="margin-top:.55rem">${todos.length ? todos.map((todo) => `<a href="/admin${escapeHtml(todo.href)}" style="background:#fafafa;color:var(--ink);border-color:var(--line)"><span>${escapeHtml(todo.label)}</span><strong>→</strong></a>`).join('') : '<div class="dash-empty">Setup is clear. Keep an eye on orders and experiments.</div>'}</div></div></div>
   <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><h2>Recent orders</h2><a class="btn" href="/admin/orders">View all</a></div><div class="order-list">${orders.length ? orders.slice(0, 6).map((order) => `<a class="order-item" href="/admin/orders/${escapeHtml(order.id)}"><span class="order-badge">#${order.displayId}</span><span><strong>${escapeHtml(order.email)}</strong><small>${order.items.length} item${order.items.length === 1 ? '' : 's'} · ${order.createdAt.slice(0, 10)}</small></span><span style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong><small>${escapeHtml(order.fulfillmentStatus)}</small></span></a>`).join('') : '<div class="dash-empty">No orders yet. Your first one will appear here.</div>'}</div></div>
     <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products">${uiIcon('products', 17)}<strong>Add product</strong></a><a href="/admin/pages">${uiIcon('pages', 17)}<strong>Build page</strong></a><a href="/admin/ads">${uiIcon('ads', 17)}<strong>Draft ads</strong></a><a href="/admin/cro">${uiIcon('experiment', 17)}<strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
-  <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>${noun} preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} ${noun.toLowerCase()}.</p></div><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/pages' : '/admin/store'}">Open builder</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="${noun} preview" loading="lazy"></iframe></div></div>`
+`
 }
 
 function salesChart(series: Array<{ day: string; revenue: number; orders: number }>): string {
@@ -132,10 +143,10 @@ export function experimentsPage(ctx: Ctx): string {
   const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
   const experiments = listExperiments(ctx.db, ctx.store.id)
   const productById = new Map(products.map((product) => [product.id, product]))
-  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">Autonomous CRO</div><h1 class="serif">Experiments</h1>
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">Autonomous CRO</div><h1 class="serif">A/B tests</h1>
     <p class="muted" style="margin:.25rem 0 0;max-width:720px">Stable visitor assignment, Bayesian decisions, and guardrails against small-sample winners. A winner can promote itself; every promotion keeps the exact previous traffic split for rollback.</p></div></div>
   <div class="grid2"><div>
-    ${experiments.length ? experiments.map((experiment) => experimentCard(ctx, experiment, productById.get(experiment.surface.slice(4))?.handle)).join('') : `<div class="card cro-empty"><div class="cro-orb">◒</div><h2>No experiments running</h2><p class="muted">Generate a few product-page angles below. Traffic stays on the same version for each visitor, and Amboras waits for enough purchases before choosing.</p></div>`}
+    ${experiments.length ? experiments.map((experiment) => experimentCard(ctx, experiment, productById.get(experiment.surface.slice(4))?.handle)).join('') : `<div class="card cro-empty"><div class="cro-orb">◒</div><h2>No experiments running</h2><p class="muted">Generate a few product-page angles below. Traffic stays on the same version for each visitor, and storemill waits for enough purchases before choosing.</p></div>`}
   </div><div>
     <form method="post" action="/admin/cro/generate" class="card cro-launch"><div class="eyebrow">New experiment</div><h2>Generate and test page angles</h2>
       <div class="field" style="margin-top:.8rem"><label>Product</label><select name="productId" required><option value="">Choose a product</option>${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')}</select></div>
@@ -168,7 +179,7 @@ export function productsPage(ctx: Ctx, status: string, search: string): string {
   const products = listProducts(ctx.db, ctx.store.id, { status, ...(search ? { search } : {}), limit: 200 })
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Products</h1>
     <p class="muted" style="margin:.25rem 0 0">${products.length} shown</p></div>
-    <form method="get" class="row"><input name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px">
+    <form method="get" class="row"><input aria-label="Search" name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px">
       <input type="hidden" name="status" value="${escapeHtml(status)}"><button class="btn" type="submit">Search</button></form></div>
   <form method="post" action="/admin/products/import" class="card row" style="align-items:flex-end">
     <div class="field" style="flex:2;margin:0"><label>Import a product from a URL — any Shopify store's product page, or a supplier page with Open Graph tags</label><input name="url" type="url" required placeholder="https://some-store.com/products/the-thing"></div>
@@ -227,15 +238,15 @@ export function productDetail(ctx: Ctx, productId: string): string {
   </div>
   <div>
     <div class="card"><h2>Media</h2><div class="grid3" style="grid-template-columns:repeat(2,1fr);margin-top:.6rem">
-      ${[product.heroImage, ...product.media.map((entry) => entry.url)]
-        .filter(Boolean)
+      ${(product.media.length ? product.media : product.heroImage ? [{ url: product.heroImage, alt: product.title }] : [])
         .slice(0, 4)
-        .map((url) => `<img src="${escapeHtml(url)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`)
+        .map((entry) => mediaKind(entry.url)==='video'?`<div><video src="${escapeHtml(entry.url)}" controls playsinline preload="metadata" aria-label="${escapeHtml(entry.alt)}" style="width:100%;border-radius:8px"></video></div>`:`<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
         .join('')}</div>
       <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
         <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>
         <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
           .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
+        <div class="field"><label>Which creative brief does it satisfy?</label><select name="shot"><option value="">Not one of the standard shots</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}">${escapeHtml(brief.name)}</option>`).join('')}</select></div>
         <button class="btn primary" type="submit">Upload and stage</button></form>
       <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery.</p></div>
     ${regenerateCard(ctx, product)}
@@ -249,7 +260,12 @@ export function productDetail(ctx: Ctx, productId: string): string {
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.title ?? product.title)}</p>
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.description ?? '')}</p></div>
   </div></div>
-  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${versionsCard(ctx, product)}</div>`
+  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${qualificationCard(ctx, product)}</div>
+  <div class="grid2" style="margin-top:1rem">${versionsCard(ctx, product)}</div>`
+}
+
+function shotPicker(productId: string, url: string, current: string): string {
+  return `<form method="post" action="/admin/products/${escapeHtml(productId)}/media/label" class="row" style="gap:.25rem;margin-top:.3rem"><input type="hidden" name="mediaUrl" value="${escapeHtml(url)}"><select name="shot" aria-label="which shot" style="flex:1;font-size:11px"><option value="">which shot?</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}" ${brief.id === current ? 'selected' : ''}>${escapeHtml(brief.name)}</option>`).join('')}</select><button class="btn" type="submit">Label</button></form>`
 }
 
 function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
@@ -276,12 +292,21 @@ function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
     <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
 }
 
+function qualificationCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
+  const notes = readQualifyNotes(product.metadata)
+  const result = qualifyCatalogProduct(product, notes)
+  const tone = { pass: 'ok', warn: 'warn', fail: 'bad' } as const
+  const decision = { run: 'ok', work: 'warn', skip: 'bad' } as const
+  const flag = (name: string, label: string, on: boolean) => `<label class="row" style="font-size:12px;gap:.3rem"><input type="checkbox" name="${name}" value="true" ${on ? 'checked' : ''}> ${label}</label>`
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Product qualification</h2><span class="tag ${decision[result.decision]}">${result.decision}</span></div><p class="muted" style="font-size:12px">${escapeHtml(result.summary)}</p><table class="data"><tbody>${result.checks.map((check) => `<tr><td><span class="tag ${tone[check.verdict]}">${check.verdict}</span> ${escapeHtml(check.label)}</td><td>${escapeHtml(check.detail)}<div class="muted" style="font-size:11px">${escapeHtml(check.rule)}</div></td></tr>`).join('')}</tbody></table><form method="post" action="/admin/products/${escapeHtml(product.id)}/qualify" style="margin-top:.7rem"><div class="row"><div class="field" style="flex:1"><label>Trend</label><select name="trend">${['unknown', 'up', 'flat', 'declining', 'spike'].map((trend) => `<option value="${trend}" ${notes.trend === trend ? 'selected' : ''}>${trend}</option>`).join('')}</select></div><div class="field"><label>Weight grams</label><input name="weightGrams" value="${notes.weightGrams ?? ''}"></div><div class="field"><label>Expected AOV</label><input name="aovCents" value="${notes.aovCents ?? ''}"></div></div><div class="row" style="flex-wrap:wrap">${flag('seasonal', 'Seasonal', Boolean(notes.seasonal))}${flag('tech', 'Tech/battery', Boolean(notes.tech))}${flag('patented', 'Patented', Boolean(notes.patented))}${flag('bigBrand', 'Big brand', Boolean(notes.bigBrand))}${flag('printOnDemand', 'Print on demand', Boolean(notes.printOnDemand))}</div><div class="field"><label>How it stands out</label><input name="standOut" value="${escapeHtml(notes.standOut ?? '')}" placeholder="Underserved avatar or unique mechanism"></div><button class="btn primary" type="submit">Save qualification</button></form></div>`
+}
+
 function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
   const stats = versionStats(ctx.db, ctx.store.id, product.id)
   const advertorials = versionsFor(ctx.db, ctx.store.id, product.id).filter((page) => page.role === 'advertorial')
   const currency = ctx.store.currency
   return `<div class="card"><h2>Versions &amp; split test</h2>
-    <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a visitor is assigned one by their session and sees it every time. Weight 0 keeps it out.</p>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a durable visitor assignment stays sticky across sessions and network changes. Weight 0 keeps it out.</p>
     ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th></th></tr></thead><tbody>
       ${stats.map((row) => `<tr><td><a href="/admin/pages/${escapeHtml(row.pageId)}/edit">${escapeHtml(row.title.replace(`${product.title} — `, ''))}</a><div class="muted" style="font-size:11px">${escapeHtml(row.format)} · ${row.status}</div></td>
         <td><form method="post" action="/admin/versions/${escapeHtml(row.pageId)}/weight" class="row" style="gap:.3rem"><input name="weight" value="${row.weight}" style="width:52px"><button class="btn" type="submit">Set</button></form></td>
@@ -346,9 +371,11 @@ export function orderDetail(ctx: Ctx, orderId: string): string {
       <table class="data" style="margin-top:.4rem"><tr><td>Subtotal</td><td style="text-align:right">${format(order.subtotalCents, order.currency)}</td></tr>
       ${order.discountCents ? `<tr><td>Discount ${escapeHtml(order.discountCode)}</td><td style="text-align:right">-${format(order.discountCents, order.currency)}</td></tr>` : ''}
       <tr><td>Shipping</td><td style="text-align:right">${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</td></tr>
-      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table></div>
+      ${order.taxCents ? `<tr><td>Tax</td><td style="text-align:right">${format(order.taxCents, order.currency)}</td></tr>` : ''}
+      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table>
+      ${order.notes ? `<div class="notice" style="margin-top:.7rem;border-left-color:var(--warn);font-size:12px">${escapeHtml(order.notes)}</div>` : ''}</div>
     <div class="card"><h2>Customer</h2><p style="margin:.3rem 0 0">${escapeHtml(order.email)}</p>
-      <p class="muted" style="font-size:12px;margin:.3rem 0 0">${escapeHtml([order.address.name, order.address.line1, order.address.city, order.address.postal, order.address.country].filter(Boolean).join(', '))}</p></div>
+      <p class="muted" style="font-size:12px;margin:.3rem 0 0">${escapeHtml([order.address.name, order.address.line1, order.address.line2, order.address.city, order.address.state, order.address.postal, order.address.country].filter(Boolean).join(', '))}</p></div>
     ${order.refunds.length ? `<div class="card"><h2>Refunds</h2>${order.refunds.map((refund) => `<p class="muted" style="font-size:12px;margin:.3rem 0 0">${format(refund.amountCents, order.currency)} — ${escapeHtml(refund.reason || 'no reason given')}</p>`).join('')}</div>` : ''}
     ${order.fulfillments.length ? `<div class="card"><h2>Fulfilments</h2>${order.fulfillments.map((fulfillment) => `<p class="muted" style="font-size:12px;margin:.3rem 0 0">${escapeHtml(fulfillment.provider)} ${escapeHtml(fulfillment.tracking)}</p>`).join('')}</div>` : ''}
   </div></div>`
@@ -361,7 +388,7 @@ export function customersPage(ctx: Ctx, search: string): string {
   const stats = segment(ctx.db, ctx.store.id)
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Customers</h1>
     <p class="muted" style="margin:.25rem 0 0">${stats.total} total · ${Math.round(stats.repeatRate * 100)}% repeat · ${format(stats.lifetimeValueCents, ctx.store.currency)} average lifetime value</p></div>
-    <form method="get" class="row"><input name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px"><button class="btn">Search</button></form></div>
+    <form method="get" class="row"><input aria-label="Search" name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px"><button class="btn">Search</button></form></div>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Customer</th><th>Email</th><th>Orders</th><th>Spend</th><th>Marketing</th></tr></thead><tbody>
   ${customers.length ? customers.map((customer) => `<tr><td>${escapeHtml(customer.name || '—')}</td><td class="muted">${escapeHtml(customer.email)}</td>
     <td>${customer.ordersCount}</td><td>${format(customer.spendCents, ctx.store.currency)}</td>
@@ -373,7 +400,7 @@ export function customersPage(ctx: Ctx, search: string): string {
 export function collectionsPage(ctx: Ctx): string {
   const collections = listCollections(ctx.db, ctx.store.id)
   return `${flash(ctx)}<div class="head"><h1 class="serif">Collections</h1>
-    <form method="post" action="/admin/collections" class="row"><input name="title" placeholder="New collection" style="width:200px" required><button class="btn primary">Create</button></form></div>
+    <form method="post" action="/admin/collections" class="row"><input name="title" aria-label="New collection name" placeholder="New collection" style="width:200px" required><button class="btn primary">Create</button></form></div>
   <div class="grid3">${collections.map((collection) => `<div class="card"><h2>${escapeHtml(collection.title)}</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0">${escapeHtml(collection.description || '—')}</p>
     <p class="muted" style="font-size:12px">${collection.productIds.length} products · /collections/${escapeHtml(collection.handle)}</p></div>`).join('')
@@ -382,6 +409,7 @@ export function collectionsPage(ctx: Ctx): string {
 
 export function promotionsPage(ctx: Ctx): string {
   const promotions = listPromotions(ctx.db, ctx.store.id)
+  const bundles = listBundles(ctx.db, ctx.store.id)
   const products = listProducts(ctx.db, ctx.store.id, { limit: 200 })
   const regions = listRegions(ctx.db, ctx.store.id)
   const productIds = products.map((product) => `${product.title}: ${product.id}`).join(' · ')
@@ -390,14 +418,15 @@ export function promotionsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="title" required placeholder="Build your own kit"></div><div class="field" style="flex:1"><label>Type</label><select name="kind"><option value="percentage">Percentage off</option><option value="fixed">Fixed amount off</option><option value="free_shipping">Free shipping</option><option value="bogo">Buy X, get Y</option><option value="mix_match">Mix and match</option><option value="fixed_bundle">Fixed-price bundle</option><option value="tiered">Quantity tiers</option></select></div><div class="field" style="width:120px"><label>Value</label><input type="number" min="0" name="value" value="10"></div></div>
     <div class="row"><div class="field" style="flex:1"><label>Code (blank for automatic)</label><input name="code" placeholder="KIT20"></div><label class="check"><input type="checkbox" name="automatic" value="true"> Automatic</label><label class="check"><input type="checkbox" name="combinable" value="true"> Can combine</label><label class="check"><input type="checkbox" name="firstOrderOnly" value="true"> First order only</label></div>
     <div class="row"><div class="field" style="flex:1"><label>Eligible product IDs</label><input name="productIds" placeholder="Comma separated"></div><div class="field" style="flex:1"><label>Buy product IDs</label><input name="buyProductIds" placeholder="For cross-product BOGO"></div><div class="field" style="flex:1"><label>Get product IDs</label><input name="getProductIds" placeholder="Reward products"></div></div>
+    <div class="field"><label>Quantity tiers (for tiered promotions)</label><input name="tiers" placeholder="2|10, 3|20 — quantity|percent"></div>
     <div class="row"><div class="field"><label>Minimum subtotal</label><input type="number" min="0" name="minSubtotalCents" placeholder="10000"></div><div class="field"><label>Minimum quantity</label><input type="number" min="0" name="minQuantity"></div><div class="field"><label>Buy qty</label><input type="number" min="1" name="buyQuantity"></div><div class="field"><label>Get qty</label><input type="number" min="1" name="getQuantity"></div><div class="field"><label>Distinct products</label><input type="number" min="1" name="requiredDistinctProducts"></div><div class="field"><label>Bundle price</label><input type="number" min="0" name="bundlePriceCents"></div><div class="field"><label>Use limit</label><input type="number" min="1" name="maxUses"></div><div class="field"><label>Market</label><select name="regionId"><option value="">All markets</option>${regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.name)}</option>`).join('')}</select></div></div>
     <p class="muted" style="font-size:11px">Product reference: ${escapeHtml(productIds || 'Add products first.')}</p><button class="btn primary" type="submit">Create promotion</button></form></details>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Promotion</th><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Used</th><th></th></tr></thead><tbody>
   ${promotions.length ? promotions.map((promotion) => `<tr><td>${escapeHtml(promotion.title)}</td>
     <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
-    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'fixed_bundle' ? format(promotion.rules.bundlePriceCents ?? promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : promotion.kind === 'tiered' ? `${promotion.rules.tiers?.length ?? 0} tiers` : `${promotion.value}%`}</td>
+    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'fixed_bundle' ? format(promotion.rules.bundlePriceCents ?? promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : promotion.kind === 'tiered' ? `${promotion.rules.tiers?.length ?? 0} tiers${promotion.rules.bundleProductId ? ' · <a href="/admin/bundles">View bundle prices</a>' : ''}${(bundles.find(bundle => bundle.productId === promotion.rules.bundleProductId)?.tiers || promotion.rules.tiers || []).filter(t => t.unitPriceCents !== undefined).map(t => { const product = products.find(product => product.id === promotion.rules.bundleProductId); const original = ('compareAtTotalCents' in t && typeof t.compareAtTotalCents === 'number' ? t.compareAtTotalCents : (product?.variants[0]?.compareAtCents || product?.variants[0]?.priceCents || 0) * t.quantity); return `<br>Buy ${t.quantity}: ${format(t.unitPriceCents! * t.quantity, ctx.store.currency)}${original > t.unitPriceCents! * t.quantity ? ` <s>${format(original, ctx.store.currency)}</s>` : ''}`; }).join('')}` : `${promotion.value}%`}</td>
     <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
-    <td style="text-align:right">${promotion.status === 'active' ? `<form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/disable"><button class="btn">Disable</button></form>` : ''}</td></tr>`).join('')
+    <td style="text-align:right"><form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/${promotion.status === 'active' ? 'disable' : 'enable'}"><button class="btn">${promotion.status === 'active' ? 'Disable' : 'Enable'}</button></form></td></tr>`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
   </tbody></table></div>`
 }
@@ -413,7 +442,7 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
   const serverEvents = serverEventSummary(ctx.db, ctx.store.id)
   return `${flash(ctx)}<div class="head"><div><h1>Analytics</h1>
     <p class="muted" style="margin:.25rem 0 0">First-party sessions, last-touch revenue attribution and server-event delivery health.</p></div>
-    <form method="get"><select name="range" onchange="this.form.submit()">${(['24h', '7d', '30d', '90d'] as const)
+    <form method="get"><select aria-label="Reporting range" name="range" onchange="this.form.submit()">${(['24h', '7d', '30d', '90d'] as const)
       .map((option) => `<option ${option === range ? 'selected' : ''}>${option}</option>`)
       .join('')}</select></form></div>
   ${kpiRow(ctx, range)}
@@ -473,40 +502,9 @@ export function reviewsPage(ctx: Ctx, status: string): string {
 
 /* ------------------------------------------------------------- store designer */
 
-export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): string {
-  const draft = environment(ctx.db, ctx.store.id, 'draft')
-  const live = environment(ctx.db, ctx.store.id, 'live')
-  const dirty = JSON.stringify(draft.theme) !== JSON.stringify(live.theme)
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Store designer</h1>
-    <p class="muted" style="margin:.25rem 0 0">Draft v${draft.version}${dirty ? ' — has changes that are not live' : ' — matches what is live'}. Live v${live.version}${live.publishedAt ? `, published ${live.publishedAt.slice(0, 10)}` : ''}.</p></div>
-    <div class="row"><form method="post" action="/admin/rollback"><button class="btn">Discard draft</button></form>
-      <form method="post" action="/admin/publish"><button class="btn primary">Publish</button></form></div></div>
-  <div class="grid2"><div class="preview">
-      <div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}?draft=1</span></div>
-      <iframe src="/preview/${escapeHtml(ctx.store.slug)}" title="Draft preview"></iframe></div>
-    <div>
-      <div class="card"><h2>Theme</h2>
-        <form method="post" action="/admin/theme">
-          <div class="field"><label>Template</label><select name="template">${['atelier', 'gallery', 'market']
-            .map((option) => `<option ${option === draft.theme.template ? 'selected' : ''}>${option}</option>`).join('')}</select></div>
-          <div class="field"><label>Corner radius</label><select name="radius">${['0px', '2px', '8px', '999px']
-            .map((option) => `<option ${option === draft.theme.radius ? 'selected' : ''}>${option}</option>`).join('')}</select></div>
-          <div class="field"><label>Density</label><select name="density">${['roomy', 'compact']
-            .map((option) => `<option ${option === draft.theme.density ? 'selected' : ''}>${option}</option>`).join('')}</select></div>
-          <div class="field"><label>Hero headline</label><input name="heroHeadline" value="${escapeHtml(draft.theme.heroHeadline ?? '')}"></div>
-          <div class="field"><label>Announcement bar</label><input name="announcement" value="${escapeHtml(ctx.store.brand.announcement ?? '')}"></div>
-          <button class="btn primary" type="submit">Save to draft</button></form></div>
-      <div class="card"><h2>Sections</h2><p class="muted" style="font-size:12px">${draft.theme.sections.map((section) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(section)}</span>`).join('')}</p>
-        <p class="muted" style="font-size:11.5px;margin-top:.6rem">Ask the assistant to reorder or drop sections — it edits the draft, never the live theme.</p></div>
-      <div class="card" id="code"><h2>Custom code</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">CSS and a script for every page, after the theme. The assistant writes here too (set_store_code); one page gets a custom-code block, one section a block of its own.</p>
-        <form method="post" action="/admin/theme/code">
-          <div class="field"><label>CSS</label><textarea name="customCss" rows="4" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${escapeHtml(draft.theme.customCss ?? '')}</textarea></div>
-          <div class="field"><label>JavaScript (end of every page)</label><textarea name="customJs" rows="4" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${escapeHtml(draft.theme.customJs ?? '')}</textarea></div>
-          <button class="btn primary" type="submit">Save to draft</button></form></div>
-      <div class="card"><h2>Build log</h2>${draft.buildLog.slice(-6).reverse().map((entry) => `<p class="muted" style="font-size:11.5px;margin:.2rem 0">${entry.at.slice(11, 19)} — ${escapeHtml(entry.message)}</p>`).join('') || '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
-    </div></div>
-  <div class="grid2" style="margin-top:1rem"><div>${healthCard(ctx, health)}</div><div>${popupCard(ctx)}${legalCard(ctx)}</div></div>
-  ${messages.length ? '' : ''}`
+export function storePage(ctx: Ctx, _messages: ChatMessage[], health = false): string {
+  return flash(ctx)+themeEditorPage({store:ctx.store,draft:environment(ctx.db,ctx.store.id,'draft'),live:environment(ctx.db,ctx.store.id,'live'),pages:listPages(ctx.db,ctx.store.id),storeUrl:ctx.storeUrl})+
+    `<details class="card"><summary>Store tools</summary><div class="grid2">${healthCard(ctx,health)}<div>${popupCard(ctx)}${legalCard(ctx)}</div></div></details>`
 }
 
 /* ------------------------------------------------------------------ marketing */
@@ -562,7 +560,7 @@ export function pluginsPage(ctx: Ctx, category: string, search: string): string 
   const sorted = [...all].sort((a, b) => Number(b.source === 'first-party') - Number(a.source === 'first-party'))
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Integrations</h1>
     <p class="muted" style="margin:.25rem 0 0">${allPlugins().length} in the directory · ${allPlugins().filter((plugin) => plugin.source === 'first-party').length} installable · ${installed.size} installed</p></div>
-    <form method="get" class="row"><input name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px"><button class="btn">Search</button></form></div>
+    <form method="get" class="row"><input aria-label="Search" name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px"><button class="btn">Search</button></form></div>
   <div class="tabs"><a class="${category === 'all' ? 'on' : ''}" href="/admin/plugins">All</a>
     ${pluginCategories().slice(0, 9).map((entry) => `<a class="${category === entry.name ? 'on' : ''}" href="/admin/plugins?category=${encodeURIComponent(entry.name)}">${escapeHtml(entry.name)} ${entry.count}</a>`).join('')}</div>
   <div class="grid3">${sorted.slice(0, 60).map((plugin) => {
@@ -606,21 +604,72 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
 
 /* ------------------------------------------------------------------- settings */
 
+function regionsCard(ctx: Ctx, regions: Region[]): string {
+  const region = (entry: Region) => `<details style="border-top:1px solid var(--line);padding:.5rem 0">
+    <summary style="cursor:pointer"><strong>${escapeHtml(entry.name)}</strong> <span class="muted">${escapeHtml(entry.locale)} · ${escapeHtml(entry.currency)} · ${escapeHtml(entry.countries.join(', ') || 'no countries')}${entry.taxRate ? ` · tax ${(entry.taxRate * 100).toFixed(2)}%` : ''}</span>${entry.isDefault ? ' <span class="tag ok">default</span>' : ` <span class="tag">× ${entry.exchangeRate}</span>`}</summary>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}" style="margin:.5rem 0">
+      <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" value="${escapeHtml(entry.name)}" required></div>
+        <div class="field" style="width:6rem"><label>Locale</label><input name="locale" value="${escapeHtml(entry.locale)}" required></div>
+        <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" value="${escapeHtml(entry.currency)}" required></div>
+        <div class="field" style="width:6rem"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" min="0.000001" value="${entry.exchangeRate}" required></div>
+        <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" value="${(entry.taxRate * 100).toFixed(2)}"></div></div>
+      <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" value="${escapeHtml(entry.countries.join(', '))}" placeholder="US, CA"></div>
+      <label class="row" style="font-size:12px;margin-bottom:.5rem"><input type="checkbox" name="isDefault" value="true" ${entry.isDefault ? 'checked disabled' : ''} style="width:auto"> The region a country no one claims falls back to</label>
+      <div class="row"><button class="btn primary" type="submit">Save region</button>
+        ${regions.length > 1 ? `<button class="btn" type="submit" formaction="/admin/regions/${escapeHtml(entry.id)}/delete" formnovalidate onclick="return confirm('Delete ${escapeHtml(entry.name)} and its rates?')">Delete region</button>` : ''}</div></form>
+    <table class="data" style="margin:.2rem 0"><tbody>${entry.shipping.map((option) => `<tr><td>
+      <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end">
+        <input type="hidden" name="optionId" value="${escapeHtml(option.id)}">
+        <div class="field" style="flex:2;margin:0"><label>Rate</label><input name="name" value="${escapeHtml(option.name)}" required></div>
+        <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" value="${(option.amountCents / 100).toFixed(2)}" required></div>
+        <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" value="${option.freeAboveCents === null ? '' : (option.freeAboveCents / 100).toFixed(2)}" placeholder="—"></div>
+        <button class="btn primary" type="submit">Save</button>
+        ${entry.shipping.length > 1 ? `<button class="btn" type="submit" formaction="/admin/shipping/${escapeHtml(option.id)}/delete" formnovalidate>Remove</button>` : ''}
+      </form>${option.position === 0 ? '<div class="muted" style="font-size:11px">The standard rate: this is the one a free-shipping promotion covers.</div>' : ''}</td></tr>`).join('')}</tbody></table>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end;margin-bottom:.4rem">
+      <div class="field" style="flex:2;margin:0"><label>Add a rate</label><input name="name" placeholder="Express (2 day)" required></div>
+      <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" placeholder="24.00" required></div>
+      <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" placeholder="—"></div>
+      <button class="btn" type="submit">Add</button></form>
+  </details>`
+  return `<div class="card" id="regions"><h2>Regions and shipping</h2>
+    <p class="muted" style="font-size:12px;margin:.2rem 0 .4rem">What each region is charged in, what it is quoted for shipping, and the tax on it. The cart and checkout use these settings while 17TRACK handles customer-facing tracking.</p>
+    ${regions.map(region).join('') || '<p class="muted" style="font-size:12px">No regions yet — add one below, or the checkout has no currency and no rate.</p>'}
+    <details style="border-top:1px solid var(--line);padding:.5rem 0"><summary class="muted" style="cursor:pointer;font-size:12.5px">Add a region</summary>
+      <form method="post" action="/admin/regions" style="margin-top:.5rem">
+        <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" required placeholder="United Kingdom"></div>
+          <div class="field" style="width:6rem"><label>Locale</label><input name="locale" value="en-GB" required></div>
+          <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" required placeholder="GBP"></div>
+          <div class="field" style="width:6rem"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" min="0.000001" value="1" required></div>
+          <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" placeholder="20"></div></div>
+        <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" required placeholder="GB, IE"></div>
+        <div class="row"><div class="field" style="flex:2"><label>Standard rate</label><input name="shippingName" value="Standard shipping"></div>
+          <div class="field" style="width:7rem"><label>Price</label><input name="shippingAmount" placeholder="9.00"></div>
+          <div class="field" style="width:8rem"><label>Free over</label><input name="shippingFreeAbove" placeholder="200.00"></div></div>
+        <button class="btn primary" type="submit">Add region</button></form></details></div>`
+}
+
 export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
   const domains = domainsFor(ctx.db, ctx.store.id)
+  const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
+    <div class="card" id="profile"><div class="row" style="justify-content:space-between"><div><h2>Your profile</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">The name shown in your dashboard and the email used to sign in.</p></div><span class="avatar" aria-hidden="true">${escapeHtml(ctx.userName.slice(0, 1).toUpperCase())}</span></div>
+      <form method="post" action="/admin/profile" style="margin-top:.7rem"><div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" value="${escapeHtml(ctx.userName)}" maxlength="80" autocomplete="name" required></div><div class="field" style="flex:1"><label>Email</label><input name="email" type="email" value="${escapeHtml(ctx.userEmail ?? '')}" autocomplete="email" required></div></div><button class="btn primary" type="submit">Save profile</button></form></div>
     ${modelsCard(ctx)}
     ${pixelsCard(ctx)}
+    <div class="card"><h2>Team access</h2><p class="muted" style="font-size:12px;margin:.25rem 0 .6rem">Owners can invite a teammate as an admin or member. Admins can manage the asset; members can work without publishing, deleting, or changing protected settings.</p>
+      <form method="post" action="/admin/team" class="row" style="margin:.6rem 0">
+        <input name="email" type="email" required aria-label="Teammate email" placeholder="teammate@example.com" style="flex:1">
+        <select aria-label="Teammate role" name="role" style="width:110px"><option value="member">member</option><option value="admin">admin</option></select>
+        <button class="btn primary" type="submit">Invite</button></form>
+      ${team.map((member) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.4rem 0"><span>${escapeHtml(member.email)}</span><span class="tag">${escapeHtml(member.role)} · ${escapeHtml(member.status)}</span></div>`).join('') || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
     <div class="card"><div class="row" style="justify-content:space-between"><div><h2>Tracking &amp; backup</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Customer tracking pages use cached 17TRACK carrier events. Export a complete store backup whenever you want.</p></div><span class="tag ${seventeenTrackConfigured() ? 'ok' : 'warn'}">17TRACK ${seventeenTrackConfigured() ? 'connected' : 'needs key'}</span></div>
       <div class="row" style="margin-top:.8rem"><a class="btn primary" href="/admin/settings/export">Download JSON backup</a><span class="muted" style="font-size:11.5px">Products, orders, pages, analytics, experiments and settings; login sessions excluded.</span></div>
-      ${seventeenTrackConfigured() ? '' : '<p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Set AMBORAS_17TRACK_API_KEY on the server. Carrier links and estimated delivery still work without it.</p>'}</div>
-    <div class="card"><h2>Markets, languages &amp; currencies</h2><p class="muted" style="font-size:12px">Product prices are stored in ${escapeHtml(ctx.store.currency)} and converted at checkout with the rate you control.</p>
-      ${regions.map((region) => `<details style="border-top:1px solid var(--line);padding:.6rem 0"><summary class="row" style="justify-content:space-between;cursor:pointer"><span><strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.locale)} · ${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span></span><span class="tag ${region.isDefault ? 'ok' : ''}">${region.isDefault ? 'default' : `× ${region.exchangeRate}`}</span></summary><form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" value="${escapeHtml(region.name)}"></div><div class="field"><label>Countries</label><input name="countries" value="${escapeHtml(region.countries.join(', '))}"></div><div class="field"><label>Locale</label><input name="locale" value="${escapeHtml(region.locale)}"></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="${escapeHtml(region.currency)}"></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" min="0.000001" value="${region.exchangeRate}"></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="${region.taxRate * 100}"></div></div><label class="check"><input type="checkbox" name="isDefault" value="true" ${region.isDefault ? 'checked' : ''}> Default market</label><button class="btn primary" type="submit">Save market</button></form>
-        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency, region.locale)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency, region.locale)}` : ''}</div>`).join('')}<form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}/shipping" class="row" style="margin-top:.65rem"><div class="field" style="flex:1;margin:0"><label>Shipping option</label><input name="name" placeholder="Standard shipping" required></div><div class="field" style="width:110px;margin:0"><label>Charge</label><input type="number" min="0" name="amountCents" placeholder="900" required></div><div class="field" style="width:120px;margin:0"><label>Free over</label><input type="number" min="0" name="freeAboveCents" placeholder="20000"></div><button class="btn" type="submit">Add rate</button></form></details>`).join('')}
-      <details class="create-panel" style="margin-top:.5rem"><summary><strong>Add market</strong></summary><form method="post" action="/admin/settings/regions" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" placeholder="Europe" required></div><div class="field"><label>Countries</label><input name="countries" placeholder="DE, FR, ES" required></div><div class="field"><label>Locale</label><input name="locale" value="de-DE" required></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="EUR" required></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" value="0.92" required></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="0"></div></div><button class="btn primary" type="submit">Add market</button></form></details></div>
+      ${seventeenTrackConfigured() ? '' : '<p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Set STOREMILL_17TRACK_API_KEY on the server. Carrier links and estimated delivery still work without it.</p>'}</div>
+    ${regionsCard(ctx, regions)}
   </div>
   <div>
     ${domains.length ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Existing domains</h2><a class="btn" href="/admin/domains">Manage</a></div>${domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span></div>`).join('')}</div>` : ''}
@@ -640,7 +689,7 @@ function pixelsCard(ctx: Ctx): string {
   ]
   return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Customer event pixels &amp; server APIs</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Browser pixels plus retried server events. Meta and TikTok share purchase event IDs with the browser for deduplication.</p></div><span class="tag">${pixels.filter((pixel) => pixel.current).length}/3 connected</span></div>${pixels.map((pixel) => {
     const serverConnected = pixel.server && hasCredentials(ctx.db, ctx.store.id, pixel.id)
-    return `<form method="post" action="/admin/settings/pixels/${pixel.id}" style="border-top:1px solid var(--line);padding:.7rem 0"><div class="row" style="align-items:flex-end"><div style="width:170px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current && (!pixel.server || serverConnected) ? 'ok' : pixel.current ? 'warn' : ''}" style="margin-top:.25rem">${pixel.current ? pixel.server ? serverConnected ? 'browser + server' : 'browser only' : 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div>${pixel.server ? `<div class="field" style="flex:1;margin:0"><label>Server API token</label><input type="password" name="accessToken" value="" placeholder="${serverConnected ? 'Saved — leave blank to keep' : 'Paste access token'}"></div>` : ''}<button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></div></form>`
+    return `<form method="post" action="/admin/settings/pixels/${pixel.id}" style="border-top:1px solid var(--line);padding:.7rem 0"><div class="row" style="align-items:flex-end"><div style="width:170px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current && (!pixel.server || serverConnected) ? 'ok' : pixel.current ? 'warn' : ''}" style="margin-top:.25rem">${pixel.current ? pixel.server ? serverConnected ? 'browser + server' : 'browser only' : 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div>${pixel.server ? `<div class="field" style="flex:1;margin:0"><label>Server API token</label><input type="password" name="accessToken" value="" placeholder="${serverConnected ? 'Saved — leave blank to keep' : 'Paste access token'}"></div>` : ''}<button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></div>${pixel.id==='meta-pixel'?`<details style="margin-top:12px"><summary>Verify in Meta Events Manager</summary><p class="muted">Open Test events in Events Manager, enter its test code below, save, and visit the live storefront. Check PageView, ViewContent, AddToCart, InitiateCheckout, and a completed test purchase. Browser and server copies share an event ID. Remove the test code when finished. Draft previews never send events.</p><label class="field">Test event code<input name="testEventCode" value="${escapeHtml(getInstalled(ctx.db,ctx.store.id,'meta-pixel')?.settings.testEventCode||'')}" placeholder="TEST12345"></label><a href="https://developers.facebook.com/documentation/ads-commerce/conversions-api/deduplicate-pixel-and-server-events" target="_blank" rel="noopener">Meta setup documentation ↗</a></details>`:''}</form>`
   }).join('')}</div>`
 }
 
@@ -654,9 +703,9 @@ function modelsCard(ctx: Ctx): string {
     <form method="post" action="/admin/settings/models">
       ${resolved.map((row) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0">
         <div style="flex:1"><div style="font-size:13px">${escapeHtml(row.name)}</div><div class="muted" style="font-size:11.5px">${escapeHtml(row.note)} Now: ${escapeHtml(row.label)}.</div></div>
-        <select name="${row.task}" style="width:220px"><option value="">Default</option>${entries.map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${row.stored === `${entry.provider}:${entry.model}` ? 'selected' : ''} ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}</select></div>`).join('')}
+        <select aria-label="${escapeHtml(row.name)} model" name="${row.task}" style="width:220px"><option value="">Default</option>${entries.map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${row.stored === `${entry.provider}:${entry.model}` ? 'selected' : ''} ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}</select></div>`).join('')}
       <div class="row" style="margin-top:.6rem"><button class="btn primary" type="submit">Save</button></div></form>
-    <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">${entries.filter((entry) => entry.available).map((entry) => `${escapeHtml(entry.name)}: ${escapeHtml(entry.note)}`).join(' · ') || 'Model ids live in configuration: AMBORAS_MODEL for Claude, AMBORAS_OPENAI_MODEL for GPT.'}</p></div>`
+    <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">${entries.filter((entry) => entry.available).map((entry) => `${escapeHtml(entry.name)}: ${escapeHtml(entry.note)}`).join(' · ') || 'Model ids live in configuration: STOREMILL_MODEL for Claude, STOREMILL_OPENAI_MODEL for GPT.'}</p></div>`
 }
 
 /* --------------------------------------------------------------- profit */
@@ -666,8 +715,8 @@ export function profitPage(ctx: Ctx, days: number): string {
   const spend = listAdSpend(ctx.db, ctx.store.id, days)
   const currency = ctx.store.currency
   const peak = Math.max(1, ...report.perDay.map((day) => Math.abs(day.profit)))
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Profit</h1><p class="muted" style="margin:.25rem 0 0">Revenue less refunds, supplier cost, supplier shipping, card fees and the ad spend you log. Nothing estimated.</p></div>
-    <form method="get"><select name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Profit reports</h1><p class="muted" style="margin:.25rem 0 0">Revenue less refunds, supplier cost, supplier shipping, card fees and the ad spend you log. Nothing estimated.</p></div>
+    <form method="get"><select aria-label="Reporting period" name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
   <div class="kpis"><div class="kpi"><div class="label">Revenue</div><div class="value">${format(report.revenueCents, currency)}</div><div class="delta">${report.orders} orders</div></div>
     <div class="kpi"><div class="label">COGS + supplier shipping</div><div class="value">−${format(report.cogsCents + report.supplierShippingCents, currency)}</div></div>
     <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
@@ -685,9 +734,9 @@ export function profitPage(ctx: Ctx, days: number): string {
 export function funnelsPage(ctx: Ctx): string {
   const funnels = listFunnels(ctx.db, ctx.store.id)
   const standalone = ctx.store.kind === 'funnel'
-  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const products = listProducts(ctx.db, ctx.store.id, { includeHidden:true, limit: 1000 })
   const pages = listPages(ctx.db, ctx.store.id)
-  const variantOptions = (selected?: string) => `<option value="">— pick automatically —</option>` + products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === selected ? 'selected' : ''}>${escapeHtml(product.title)} — ${escapeHtml(variant.title)} (${format(variant.priceCents, ctx.store.currency)})</option>`)).join('')
+  const variantOptions = (selected?: string) => `<option value="">— pick automatically —</option>` + products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === selected ? 'selected' : ''}>${escapeHtml(product.title)}${product.status==='draft'?' (draft)':''} — ${escapeHtml(variant.title)} (${format(variant.priceCents, ctx.store.currency)})</option>`)).join('')
   const pageOptions = (role: string, selected?: string) => `<option value="">— none —</option>` + pages.filter((page) => page.role === role || page.kind === role || role === 'any').map((page) => `<option value="${escapeHtml(page.id)}" ${page.id === selected ? 'selected' : ''}>${escapeHtml(page.title)}</option>`).join('')
   const form = (funnel?: ReturnType<typeof listFunnels>[number]) => `<form method="post" action="/admin/funnels" class="card">
     ${funnel ? `<input type="hidden" name="id" value="${escapeHtml(funnel.id)}">` : ''}
@@ -696,85 +745,104 @@ export function funnelsPage(ctx: Ctx): string {
       <div class="field" style="flex:1"><label>Product (the checkout finds the funnel through it)</label><select name="productId"><option value="">any</option>${products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === funnel?.productId ? 'selected' : ''}>${escapeHtml(product.title)}</option>`).join('')}</select></div></div>
     <div class="row"><div class="field" style="flex:1"><label>1 · Advertorial page</label><select name="advertorialPageId">${pageOptions('advertorial', funnel?.advertorialPageId)}</select></div>
       <div class="field" style="flex:1"><label>2 · Offer page</label><select name="offerPageId">${pageOptions('any', funnel?.offerPageId)}</select></div></div>
-    <div class="eyebrow" style="margin:.4rem 0">3 · Checkout order bump</div>
+    <div class="eyebrow" style="margin:.4rem 0">3 · Checkout order bump</div><label class="field">Offer an order bump<select name="bumpEnabled"><option value="true" ${funnel?.bump.enabled!==false?'selected':''}>Enabled</option><option value="false" ${funnel?.bump.enabled===false?'selected':''}>Disabled</option></select></label>
     <div class="row"><div class="field" style="flex:2"><label>Bump product (default: shipping protection)</label><select name="bumpVariantId">${variantOptions(funnel?.bump.variantId)}</select></div>
       <div class="field" style="flex:1"><label>Label</label><input name="bumpLabel" value="${escapeHtml(funnel?.bump.label ?? '')}" placeholder="Protect my order"></div><div class="field" style="width:110px"><label>Price</label><input name="bumpPriceCents" value="${funnel?.bump.priceCents ?? ''}" placeholder="299"></div></div>
-    <div class="eyebrow" style="margin:.4rem 0">4 · One-click upsell</div>
+    <fieldset style="border:0;padding:0;min-width:0" ${funnel?.steps.some(step=>step.offer)?'hidden disabled':''}><div class="eyebrow" style="margin:.4rem 0">4 · One-click upsell</div>
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="upsellVariantId">${variantOptions(funnel?.upsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="upsellDiscount" value="${funnel?.upsell.discountPercent ?? 20}"></div></div>
     <div class="field"><label>Headline</label><input name="upsellHeadline" value="${escapeHtml(funnel?.upsell.headline ?? '')}" placeholder="Add a second pair for 20% off?"></div>
     <div class="eyebrow" style="margin:.4rem 0">5 · Downsell (only if the upsell is declined)</div>
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
     <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
-    <div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
+    </fieldset><div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
     <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
+    <label class="field">Funnel status<select name="status"><option value="active" ${funnel?.status!=='paused'?'selected':''}>Active</option><option value="paused" ${funnel?.status==='paused'?'selected':''}>Paused</option></select></label>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
-    ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
+    ${funnel ? `<div class="card"><h3>Funnel pages</h3>${funnel.steps.map(step => `<article style="padding:16px 0;border-bottom:1px solid #ddd"><p><a href="/admin/pages/${escapeHtml(step.pageId)}/edit">${escapeHtml(step.label)}</a> · ${escapeHtml(step.role||pages.find(page=>page.id===step.pageId)?.role||'page')}</p>${step.offer?`<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/steps/${escapeHtml(step.pageId)}"><label class="field">Offer product and default option<select name="variantId">${variantOptions(step.offer.variantId)}</select></label><div class="row"><label class="field">Discount %<input type="number" name="discount" min="0" max="100" value="${step.offer.discountPercent||0}"></label><label class="field">Offer status<select name="enabled"><option value="true" ${step.offer.enabled!==false?'selected':''}>Enabled</option><option value="false" ${step.offer.enabled===false?'selected':''}>Disabled</option></select></label></div><label class="field">After accepting<select name="nextPageId">${pageOptions('any',step.nextPageId)}</select></label><label class="field">After declining<select name="declinePageId">${pageOptions('any',step.declinePageId)}</select></label><p class="muted">None ends the offer sequence at the order confirmation. Prices and package options can be edited in Products.</p><button class="btn" type="submit">Save this offer</button></form>`:''}</article>`).join('')}<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/clone"><button class="btn" type="submit">Clone whole funnel</button></form></div><form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
   return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${standalone ? 'Funnel asset' : 'Store campaign'}</div><h1 class="serif">${standalone ? 'Funnel flow' : 'Sales funnels'}</h1><p class="muted" style="margin:.25rem 0 0">${standalone ? 'A focused Funnelish-style conversion path, separate from a catalog store.' : 'Optional conversion paths attached to this full store. For a standalone Funnelish build, create a Funnel from All Assets.'} Each content step opens in the same AI page builder.</p></div><a class="btn primary" href="/admin/pages">Build a funnel page</a></div>
   <div class="funnel-path" aria-label="Funnel path"><div><span>1</span><b>Ad traffic</b><small>Campaign link</small></div><i>→</i><div><span>2</span><b>Front door</b><small>Advertorial or quiz</small></div><i>→</i><div><span>3</span><b>PDP / sales page</b><small>The offer and proof</small></div><i>→</i><div><span>4</span><b>Checkout</b><small>Order bump</small></div><i>→</i><div><span>5</span><b>Post-purchase</b><small>Upsell · downsell · thanks</small></div></div>
-  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
+  <p><a class="btn" href="/admin/pages">Clone a reference funnel</a></p><div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
 }
 
 /* ------------------------------------------------------------ pages hub */
 
 export function pagesPage(ctx: Ctx): string {
   const pages = listPages(ctx.db, ctx.store.id)
-  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 50 })
-  const productOptions = products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 200 })
+  const productOptions = products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}${product.status === 'published' ? '' : ' (draft)'}</option>`).join('')
   const funnel = ctx.store.kind === 'funnel'
   return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${funnel ? 'Funnel asset' : 'Store asset'}</div><h1 class="serif">${funnel ? 'Funnel pages' : 'Store pages'}</h1>
-    <p class="muted" style="margin:.25rem 0 0">${funnel ? 'Build the advertorial or quiz, sales page, PDP and checkout path as separate editable steps.' : 'Build the home, editorial, campaign and information pages around the full catalog storefront.'} Every page can use blocks, HTML or a cloned reference.</p></div></div>
+    <p class="muted" style="margin:.25rem 0 0">${funnel ? 'Build the advertorial or quiz, sales page, PDP and checkout path as separate editable steps.' : 'Build the home, editorial, campaign and information pages around the full catalog storefront.'} Every page can use blocks, HTML or a cloned reference.</p></div><a class="btn" href="/admin/templates">Template library</a></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
       <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template">${PAGE_TEMPLATES.map((template) => `<option value="${escapeHtml(template.key)}" title="${escapeHtml(template.description)}">${escapeHtml(template.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
       <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
       <button class="btn primary" type="submit">Create and open the editor</button></form>
-    <form method="post" action="/admin/pages/clone" class="card"><h2>Clone a reference page</h2>
+    <form method="post" action="/admin/pages/clone" class="card"><h2>Clone a reference page or funnel</h2><div class="field"><label for="clone-scope">What to clone</label><select id="clone-scope" name="scope"><option value="page">This page only</option><option value="funnel">Whole site / funnel — all linked pages</option></select></div><details><summary>Optional extra pages</summary><label class="field">Direct URLs for unlinked steps<textarea name="additionalUrls" rows="3" placeholder="https://example.com/upsell"></textarea></label><p class="muted">Copies reachable home, menu, policy, product and funnel pages into a separate asset. Include direct links here only for pages that the source does not expose publicly.</p></details>
       <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Paste any URL. Its stylesheets are inlined, every link and image made absolute, images copied into your uploads. You get the page, as HTML, to edit or use as a template.</p>
       <div class="field"><label>URL</label><input name="url" type="url" required placeholder="https://"></div>
+      <div class="field"><label>Page type</label><select name="role">${roleOptions()}</select></div>
+      <div class="field"><label>Connected product</label><select name="productId"><option value="">Choose a product</option>${productOptions}</select></div>
       <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="keepScripts" value="true"> Keep scripts (pixels, chat widgets, the source's app)</label>
       <button class="btn primary" type="submit">Clone it</button></form>
     <form method="post" action="/admin/pages/html" class="card"><h2>Paste raw HTML</h2>
       <div class="field" style="margin-top:.6rem"><label>Title</label><input name="title" placeholder="My page" required></div>
-      <div class="field"><label>HTML</label><textarea name="html" rows="5" placeholder="<!doctype html>…"></textarea></div>
+      <div class="field"><label>Page type</label><select name="role">${roleOptions()}</select></div><div class="field"><label>HTML</label><textarea name="html" rows="5" placeholder="<!doctype html>…"></textarea></div>
       <button class="btn primary" type="submit">Create</button></form>
   </div>
   <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
+  ${blogCard(ctx)}
   ${customBlocksCard(ctx)}
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
   ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}${page.role === 'checkout' ? ` <span class="tag ${page.status === 'published' ? 'ok' : 'warn'}" title="The most recently updated published checkout page is the store's /checkout">checkout</span>` : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
     <td><span class="tag ${page.status === 'published' ? 'ok' : 'warn'}">${page.status}</span></td><td class="muted">${page.updatedAt.slice(0, 16).replace('T', ' ')}</td>
     <td style="text-align:right"><div class="row" style="justify-content:flex-end"><a class="btn" href="/admin/pages/${escapeHtml(page.id)}/edit">Edit</a>
-      <a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(page.handle)}" target="_blank" rel="noopener">View ↗</a>
+      <a class="btn" href="${escapeHtml(page.status === 'published' && ctx.store.status === 'live' ? ctx.storeUrl : '/preview/' + ctx.store.slug)}/pages/${escapeHtml(page.handle)}" target="_blank" rel="noopener">${page.status === 'published' && ctx.store.status === 'live' ? 'View' : 'Preview'} ↗</a>
       <form method="post" action="/admin/pages/${escapeHtml(page.id)}/duplicate"><button class="btn">Duplicate</button></form>
       <form method="post" action="/admin/pages/${escapeHtml(page.id)}/delete" onsubmit="return confirm('Delete this page?')"><button class="btn">Delete</button></form></div></td></tr>`).join('')
     : '<tr><td colspan="6" class="muted" style="padding:1.4rem">No pages yet. Start from the advertorial template, clone a page, or paste HTML.</td></tr>'}
   </tbody></table></div>`
 }
 
+function blogCard(ctx: Ctx): string {
+  const blogs = listBlogs(ctx.db, ctx.store.id)
+  const articleForm = (blogId: string, entry: (typeof blogs)[number]['articles'][number] | null) => `<form method="post" action="${entry ? `/admin/articles/${escapeHtml(entry.id)}` : `/admin/blogs/${escapeHtml(blogId)}/articles`}" style="padding:.5rem 0">
+    <div class="row"><div class="field" style="flex:2"><label>Title</label><input name="title" value="${escapeHtml(entry?.title ?? '')}" required></div><div class="field" style="width:9rem"><label>Status</label><select name="status">${(['draft', 'scheduled', 'published'] as const).map((status) => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${status}</option>`).join('')}</select></div><div class="field" style="width:13rem"><label>Publish at</label><input name="publishAt" type="datetime-local" value="${entry?.publishedAt ? escapeHtml(entry.publishedAt.slice(0, 16)) : ''}"></div></div>
+    <div class="field"><label>Excerpt</label><input name="excerpt" value="${escapeHtml(entry?.excerpt ?? '')}"></div><div class="field"><label>Body</label><textarea name="body" rows="5">${escapeHtml(entry?.body ?? '')}</textarea></div>
+    <div class="row"><button class="btn primary" type="submit">${entry ? 'Save article' : 'Create article'}</button>${entry ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/blogs/${escapeHtml(blogs.find((blog) => blog.id === blogId)?.handle ?? '')}/${escapeHtml(entry.handle)}" target="_blank" rel="noopener">View ↗</a><button class="btn" type="submit" formaction="/admin/articles/${escapeHtml(entry.id)}/delete" formnovalidate>Delete</button>` : ''}</div></form>`
+  return `<div class="card" id="blog" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Blog</h2><span class="muted" style="font-size:12px">${blogs.reduce((sum, blog) => sum + blog.articles.length, 0)} articles</span></div>
+    ${blogs.map((blog) => `<details style="border-top:1px solid var(--line);padding:.5rem 0"><summary><strong>${escapeHtml(blog.title)}</strong> <span class="muted">/blogs/${escapeHtml(blog.handle)}</span></summary>${blog.articles.map((entry) => `<details style="border-top:1px solid var(--line);padding:.3rem 0"><summary><span class="tag ${entry.status === 'published' ? 'ok' : 'warn'}">${entry.status}</span> ${escapeHtml(entry.title)}</summary>${articleForm(blog.id, entry)}</details>`).join('')}<details><summary class="muted">Write an article</summary>${articleForm(blog.id, null)}</details><form method="post" action="/admin/blogs/${escapeHtml(blog.id)}/delete"><button class="btn" type="submit">Delete blog</button></form></details>`).join('')}
+    <form method="post" action="/admin/blogs" class="row" style="margin-top:.6rem"><input name="title" required aria-label="New blog title" placeholder="New blog title" style="flex:1"><button class="btn" type="submit">Create blog</button></form></div>`
+}
+
 /** The blocks this store defined for itself, and the form to define one. The model can do the same through create_block. */
 function customBlocksCard(ctx: Ctx): string {
   const blocks = listCustomBlocks(ctx.db, ctx.store.id)
   return `<div class="card" id="blocks" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Your own blocks</h2><span class="muted" style="font-size:12px">${blocks.length ? `${blocks.length} defined` : 'None yet'} · when no block in the catalog does the job, define one; the assistant can too</span></div>
-    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'}</div></td>
-      <td style="width:6rem;text-align:right"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block?')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
-    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>
-    <form method="post" action="/admin/blocks" style="margin-top:.6rem">
-      <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="Ingredient strip"></div><div class="field" style="flex:1"><label>Type (optional, custom-…)</label><input name="type" placeholder="custom-ingredient-strip"></div><div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="✚"></div></div>
-      <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" placeholder="A row of ingredient chips with a percentage each"></div>
-      <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|"></textarea></div>
-      <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;"></textarea></div>
-      <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2"></textarea></div>
-      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2"></textarea></div>
-      <button class="btn primary" type="submit">Save the block</button></form></details></div>`
+    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'}</div><details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer;font-size:12px">Edit it</summary>${blockForm(block)}</details></td>
+      <td style="width:6rem;text-align:right;vertical-align:top"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block? Pages that use it keep the section until you take it off them.')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
+    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>${blockForm()}</details></div>`
+}
+
+function blockForm(block?: CustomBlock): string {
+  const fields = (block?.fields ?? []).map((field) => [field.key, field.label ?? field.key, field.multiline ? 'text' : field.type, field.default === undefined ? '' : String(field.default)].join('|').replace(/\|+$/, '')).join('\n')
+  return `<form method="post" action="/admin/blocks" style="margin-top:.6rem">
+    <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required value="${escapeHtml(block?.name ?? '')}" placeholder="Ingredient strip"></div><div class="field" style="flex:1"><label>Type${block ? '' : ' (optional, custom-…)'}</label><input name="type" value="${escapeHtml(block?.type ?? '')}" ${block ? 'readonly' : ''} placeholder="custom-ingredient-strip"></div><div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="${escapeHtml(block?.icon ?? '✚')}"></div></div>
+    <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" value="${escapeHtml(block?.description ?? '')}" placeholder="A row of ingredient chips with a percentage each"></div>
+    <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3">${escapeHtml(fields)}</textarea></div>
+    <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required>${escapeHtml(block?.template ?? '')}</textarea></div>
+    <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2">${escapeHtml(block?.css ?? '')}</textarea></div>
+    <div class="field"><label>JavaScript (optional; runs once per page that uses the block)</label><textarea name="js" rows="2">${escapeHtml(block?.js ?? '')}</textarea></div>
+    <button class="btn primary" type="submit">${block ? 'Save changes' : 'Save the block'}</button></form>`
 }
 
 /* --------------------------------------------------------------- bundles */
 
 export function bundlesPage(ctx: Ctx): string {
   const bundles = listBundles(ctx.db, ctx.store.id)
-  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 250 })
   const titles = new Map(products.map((product) => [product.id, product]))
   const tiersField = (tiers: typeof DEFAULT_TIERS) => tiers.map((tier) => `${tier.quantity}|${tier.discountPercent}|${tier.label}|${tier.badge ?? ''}|${tier.freeShipping ? 'ship' : ''}|${tier.giftVariantId ?? ''}|${tier.giftLabel ?? ''}`).join('\n')
   const variantOptions = products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}">${escapeHtml(product.title)} — ${escapeHtml(variant.title)}</option>`)).join('')
@@ -782,7 +850,13 @@ export function bundlesPage(ctx: Ctx): string {
     <p class="muted" style="margin:.25rem 0 0">Quantity breaks on the product page: buy 1, buy 2 and save, buy 3 and save more with free shipping and a gift. The tiers are enforced in the cart, not just drawn on the page.</p></div></div>
   <div class="grid2"><div>
     ${bundles.length ? bundles.map((bundle) => { const product = titles.get(bundle.productId); return `<div class="card"><div class="row" style="justify-content:space-between"><h2>${escapeHtml(product?.title ?? bundle.productId)}</h2><span class="tag ${bundle.status === 'active' ? 'ok' : ''}">${bundle.status}</span></div>
-      <table class="data" style="margin:.5rem 0"><thead><tr><th>Tier</th><th>Qty</th><th>Off</th><th>Badge</th><th>Unlocks</th></tr></thead><tbody>${bundle.tiers.map((tier) => `<tr><td>${escapeHtml(tier.label)}</td><td>${tier.quantity}</td><td>${tier.discountPercent}%</td><td>${escapeHtml(tier.badge ?? '—')}</td><td class="muted">${[tier.freeShipping ? 'free shipping' : '', tier.giftVariantId ? `gift: ${escapeHtml(tier.giftLabel || tier.giftVariantId)}` : ''].filter(Boolean).join(', ') || '—'}</td></tr>`).join('')}</tbody></table>
+      <form method="post" action="/admin/bundles/${escapeHtml(bundle.id)}/prices"><table class="data" style="margin:.5rem 0"><thead><tr><th>Tier</th><th>Qty</th><th>Sale total (${escapeHtml(ctx.store.currency)})</th><th>Original total</th><th>Badge</th></tr></thead><tbody>${bundle.tiers.map((tier, index) => {
+        const unit = Math.min(...(product?.variants.map(v => v.priceCents) || [0]));
+        const total = tier.unitPriceCents !== undefined ? tier.unitPriceCents * tier.quantity : Math.round(unit * tier.quantity * (1 - tier.discountPercent / 100));
+        const compare = tier.compareAtTotalCents ?? Math.max(...(product?.variants.map(v => v.compareAtCents || v.priceCents) || [unit])) * tier.quantity;
+        const digits = minorDigits(ctx.store.currency), amount = (n: number) => (n / 10 ** digits).toFixed(digits);
+        return `<tr><td>${escapeHtml(tier.label)}</td><td>${tier.quantity}</td><td><input aria-label="${escapeHtml(tier.label)} sale total" name="sale${index}" type="number" min="0.01" step="${digits ? '0.01' : '1'}" value="${amount(total)}" required style="min-width:90px;width:100%"></td><td><input aria-label="${escapeHtml(tier.label)} original total" name="compare${index}" type="number" min="0" step="${digits ? '0.01' : '1'}" value="${amount(compare)}" required style="min-width:90px;width:100%"></td><td>${escapeHtml(tier.badge || '—')}</td></tr>`;
+      }).join('')}</tbody></table><button class="btn" type="submit">Save bundle prices</button><p class="muted">Sale totals are enforced automatically in cart and checkout. Original totals show the comparison price.</p></form>
       <div class="row"><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product?.handle ?? '')}" target="_blank" rel="noopener">See it on the page ↗</a>
         <form method="post" action="/admin/bundles/${escapeHtml(bundle.id)}/delete"><button class="btn">Remove</button></form></div></div>` }).join('')
       : '<div class="card"><p class="muted">No bundles yet. Create one on the right — it appears on that product page and in any "Bundle offer" block.</p></div>'}
@@ -804,15 +878,15 @@ export function bundlesPage(ctx: Ctx): string {
 export function paymentsPage(ctx: Ctx): string {
   const stripe = getInstalled(ctx.db, ctx.store.id, 'stripe')
   const connected = Boolean(stripe && hasCredentials(ctx.db, ctx.store.id, 'stripe'))
-  const webhookUrl = `${ctx.storeUrl.startsWith('http') ? ctx.storeUrl : '{your store address}'}/webhooks/stripe`
+  const webhookUrl = `${publicStoreUrl(ctx.db, ctx.store)}/webhooks/stripe`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Payments</h1>
-    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes directly to your Stripe account; Amboras adds no platform fee.</p></div>
+    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes directly to your Stripe account; storemill adds no platform fee.</p></div>
     <span class="tag ${connected ? 'ok' : 'warn'}">${connected ? 'Stripe connected' : 'Demo mode — orders place without a charge'}</span></div>
   <div class="grid2"><form method="post" action="/admin/plugins/stripe/settings" class="card"><h2>Stripe keys</h2>
     <div class="field" style="margin-top:.6rem"><label>Publishable key</label><input name="publishableKey" value="${escapeHtml(String(stripe?.settings.publishableKey ?? ''))}" placeholder="pk_live_…" required></div>
     <div class="field"><label>Secret key ${connected ? '<span class="muted">— sealed; paste again to replace</span>' : ''}</label><input name="secretKey" placeholder="sk_live_…" ${connected ? '' : 'required'}></div>
     <div class="field"><label>Webhook signing secret</label><input name="webhookSecret" placeholder="whsec_…"></div>
-    <div class="field"><label>Capture</label><select name="captureMode"><option ${stripe?.settings.captureMode === 'automatic' ? 'selected' : ''}>automatic</option><option ${stripe?.settings.captureMode === 'manual' ? 'selected' : ''}>manual</option></select></div>
+    <div class="field"><label>Capture</label><select name="captureMode"><option value="automatic" ${stripe?.settings.captureMode !== 'manual' ? 'selected' : ''}>Automatic · charge when payment succeeds</option>${stripe?.settings.captureMode === 'manual' ? '<option value="manual" selected>Manual · checkout unavailable</option>' : ''}</select>${stripe?.settings.captureMode === 'manual' ? '<p class="help">This checkout supports automatic capture. Select Automatic to enable payments; your existing setting has been preserved.</p>' : ''}</div>
     <label class="row" style="font-size:12px;margin-bottom:.7rem"><input type="checkbox" name="saveCards" value="true" ${stripe?.settings.saveCards !== false ? 'checked' : ''}> Save cards for one-click post-purchase offers</label>
     <button class="btn primary" type="submit">${connected ? 'Update' : 'Connect Stripe'}</button></form>
   <div>
@@ -835,9 +909,9 @@ export function storesPage(ctx: Ctx, stores: Store[]): string {
   const funnelCount = stores.length - storeCount
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">All assets</h1>
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Stores & funnels</h1>
     <p class="muted" style="margin:.25rem 0 0">${storeCount} store${storeCount === 1 ? '' : 's'} · ${funnelCount} funnel${funnelCount === 1 ? '' : 's'}. Stores are full catalogs; funnels are focused conversion paths.</p></div>
-    <a class="btn primary" href="#new">+ New asset</a></div>
+    <a class="btn primary" href="/admin/stores?new=1#new" data-new-asset>+ New store or funnel</a></div>
   <div class="asset-tabs"><button class="on" type="button" data-filter="all">All ${stores.length}</button><button type="button" data-filter="store">Stores ${storeCount}</button><button type="button" data-filter="funnel">Funnels ${funnelCount}</button></div>
   <div class="asset-grid" id="asset-grid">${stores.map((store) => {
     const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
@@ -845,31 +919,43 @@ export function storesPage(ctx: Ctx, stores: Store[]): string {
     const todayRevenue = ctx.db.one<{ revenue: number | null }>("SELECT SUM(COALESCE(base_total_cents, total_cents)) revenue FROM orders WHERE store_id = ? AND created_at >= ? AND status != 'cancelled'", store.id, todayStart.toISOString())?.revenue ?? 0
     const month = salesSummary(ctx.db, store.id, 30)
     const cover = storeCoverImage(ctx.db, store.id)
+    const storefrontUrl = store.status === 'live' ? `/s/${store.slug}` : `/preview/${store.slug}`
     return `<article class="asset-card" data-kind="${store.kind}">
-      <a class="asset-cover" href="/admin/switch?storeId=${escapeHtml(store.id)}">${cover ? `<img src="${escapeHtml(cover)}" alt="">` : `<span>${uiIcon(store.kind === 'funnel' ? 'funnel' : 'store', 30)}</span>`}<em>${store.kind}</em></a>
-      <div class="asset-body"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2>${escapeHtml(store.name)}</h2><p>${escapeHtml(store.brand.slogan || store.prompt.slice(0, 90) || `Blank ${store.kind}`)}</p></div><span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
+      <a class="asset-cover" aria-label="Open ${escapeHtml(store.name)}" href="/admin/switch?storeId=${escapeHtml(store.id)}"><span aria-hidden="true">${uiIcon(store.kind === 'funnel' ? 'funnel' : 'store', 30)}</span>${cover ? `<img src="${escapeHtml(cover)}" alt="${escapeHtml(store.name)} homepage hero" loading="lazy" decoding="async" onerror="this.hidden=true">` : ''}<em>${store.kind}</em></a>
+      <div class="asset-body"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2>${escapeHtml(store.name)}</h2><p>${escapeHtml(store.brand.slogan || store.prompt.slice(0, 90) || `Blank ${store.kind}`)}</p></div><span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status[0]?.toUpperCase()}${store.status.slice(1)}</span></div>
         <div class="asset-facts"><span>${products} product${products === 1 ? '' : 's'}</span><span>${pages} page${pages === 1 ? '' : 's'}</span></div>
-        <div class="asset-metrics"><div><small>Today</small><strong>${format(todayRevenue, store.currency)}</strong></div><div><small>30 days</small><strong>${format(month.revenueCents, store.currency)}</strong><em>${month.orders} order${month.orders === 1 ? '' : 's'}</em></div></div>
-        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">View ↗</a></div></div>
+        <div class="asset-metrics"><div><small>Today revenue</small><strong>${format(todayRevenue, store.currency)}</strong></div><div><small>30 days / 30d revenue</small><strong>${format(month.revenueCents, store.currency)}</strong><em>${month.orders} order${month.orders === 1 ? '' : 's'} / 30d</em></div></div>
+        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${store.status === 'live' ? 'View' : 'Preview'} ↗</a><form method="post" action="/admin/stores/${escapeHtml(store.id)}/duplicate"><button class="btn" type="submit">Duplicate ${store.kind === 'funnel' ? 'funnel' : 'store'}</button></form><form method="post" action="/admin/stores/${escapeHtml(store.id)}/status"><input type="hidden" name="status" value="${store.status === 'paused' ? 'live' : 'paused'}"><button class="btn" type="submit">${store.status === 'paused' ? 'Reopen' : 'Pause'}</button></form><details class="asset-more"><summary class="btn" aria-label="More actions for ${escapeHtml(store.name)}">•••</summary><a href="/admin/stores/${escapeHtml(store.id)}/delete" style="display:block;color:#b42318;padding:10px">Delete ${store.kind}…</a></details></div></div>
     </article>`
   }).join('')}</div>
+  ${listImports(ctx.db,ctx.userId||ctx.store.ownerId).length ? `<section class="card"><h2>Recent site clones</h2>${listImports(ctx.db,ctx.userId||ctx.store.ownerId).slice(0,6).map(job=>{const progress=JSON.parse(job.progress);return `<p><a href="/admin/imports/${escapeHtml(job.id)}">${escapeHtml(JSON.parse(job.input).name||new URL(JSON.parse(job.input).url).hostname)}</a> · ${escapeHtml(job.status)} · ${Number(progress.percent)||0}% · ${Number(progress.copied)||0} pages <span class="muted">${escapeHtml(progress.task||'')}</span></p>`}).join('')}</section>` : ''}
   <section id="new" class="section-title" style="margin-top:1.5rem"><div><h2>Create an asset</h2><p class="muted">Start clean, run the full AI build, or clone the front end from one link.</p></div></section>
-  <div class="grid2 asset-create"><form method="post" action="/admin/assets/import" class="card"><div class="row" style="justify-content:space-between"><h2>Clone from a link</h2><span class="tag">fastest</span></div><p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Creates a separate store or funnel, copies the page and image assets locally, and opens it for HTML or block editing. Source scripts and pixels are removed.</p>
-    <div class="field"><label>Store or funnel URL</label><input name="url" type="url" required placeholder="https://example.com"></div><div class="row"><div class="field" style="flex:1"><label>Name (optional)</label><input name="name" placeholder="Use the page title"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn primary" type="submit" onclick="this.textContent='Cloning…'">Clone and open</button></form>
+  <div class="grid2 asset-create"><form method="post" action="/admin/assets/import" class="card" id="clone-asset-form"><div class="row" style="justify-content:space-between"><h2>Clone from a link</h2><span class="tag">fastest</span></div><p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Copies all reachable pages: home, navigation, products, policies, checkout and funnel steps, including linked shop subdomains. Imports the catalog and supported sale rules into a separate draft. Track progress and review any gaps.</p>
+    <div class="field"><label>Store or funnel URL</label><input name="url" type="url" required placeholder="https://example.com"></div><details style="margin-bottom:14px"><summary>Optional extra pages</summary><label class="field">Other page URLs (one per line)<textarea name="additionalUrls" rows="3" placeholder="https://example.com/checkout&#10;https://example.com/upsell"></textarea></label><p class="muted" style="font-size:12px">Linked pages are discovered automatically. Add unlinked checkout, upsell or thank-you pages here.</p></details><div class="row"><div class="field" style="flex:1"><label>Name (optional)</label><input name="name" placeholder="Use the page title"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><div class="row"><button class="btn primary" id="clone-asset-submit" type="submit">Clone and open</button><div class="row" id="clone-asset-progress" hidden><span class="muted" style="font-size:12px">Cloning pages and images…</span><button class="btn" id="clone-asset-cancel" type="button">Cancel clone</button></div></div></form>
   <div><form method="post" action="/admin/assets/create" class="card"><h2>Start blank</h2><div class="row" style="margin-top:.7rem"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="New brand"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn" type="submit">Create blank asset</button></form><div class="card"><h2>AI build from a brief</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .7rem">Research, brand, products, imagery and the appropriate store or funnel page plan.</p><a class="btn" href="/onboarding">Start a new store or funnel with AI</a></div></div></div>
-  <script>(function(){var buttons=document.querySelectorAll('.asset-tabs button');var cards=document.querySelectorAll('.asset-card');buttons.forEach(function(button){button.addEventListener('click',function(){buttons.forEach(function(item){item.classList.remove('on')});button.classList.add('on');cards.forEach(function(card){card.hidden=button.dataset.filter!=='all'&&card.dataset.kind!==button.dataset.filter})})})})()</script>`
+  <script>(function(){
+    var buttons=document.querySelectorAll('.asset-tabs button'),cards=document.querySelectorAll('.asset-card'),create=document.getElementById('new');
+    buttons.forEach(function(button){button.addEventListener('click',function(){buttons.forEach(function(item){item.classList.remove('on')});button.classList.add('on');cards.forEach(function(card){card.hidden=button.dataset.filter!=='all'&&card.dataset.kind!==button.dataset.filter})})});
+    function openCreate(event){if(event)event.preventDefault();create&&create.scrollIntoView({behavior:'smooth',block:'start'});var input=document.querySelector('#clone-asset-form input[name=url]');setTimeout(function(){input&&input.focus()},350)}
+    document.querySelectorAll('[data-new-asset]').forEach(function(link){link.addEventListener('click',openCreate)});if(location.hash==='#new'||new URLSearchParams(location.search).has('new'))setTimeout(openCreate,0);
+    var form=document.getElementById('clone-asset-form'),submit=document.getElementById('clone-asset-submit'),progress=document.getElementById('clone-asset-progress'),cancel=document.getElementById('clone-asset-cancel'),controller;
+    function setCloning(active){submit.hidden=active;submit.disabled=active;progress.hidden=!active;form.setAttribute('aria-busy',String(active))}
+    form&&form.addEventListener('submit',async function(event){event.preventDefault();if(controller)return;var request=new AbortController();controller=request;setCloning(true);try{var response=await fetch(form.action,{method:'POST',body:new FormData(form),credentials:'same-origin',signal:request.signal});if(!response.ok||!response.redirected)throw new Error('The clone request did not finish successfully');if(controller===request&&!request.signal.aborted)location.assign(response.url)}catch(error){if(controller===request&&!request.signal.aborted)location.assign('/admin/stores?flash='+encodeURIComponent('!Could not clone that asset. Try again.'))}finally{if(controller===request){controller=null;setCloning(false)}}});
+    cancel&&cancel.addEventListener('click',function(){if(!controller)return;var request=controller;controller=null;request.abort();setCloning(false)});
+  })()</script>`
 }
 
 /* --------------------------------------------------------------- media */
 
 export function mediaPage(ctx: Ctx): string {
-  const assets = listStoreMedia(ctx.db, ctx.store.id)
-  const local = assets.filter((asset) => asset.url.startsWith('/_uploads/')).length
-  const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${ctx.store.kind} asset</div><h1 class="serif">Media</h1><p class="muted" style="margin:.25rem 0 0">Every image used by ${escapeHtml(ctx.store.name)} — uploads, generated scenes, cloned pages, products, variants, collections and page blocks.</p></div><span class="tag">${assets.length} images · ${local} locally owned</span></div>
-  <form method="post" action="/admin/media/upload" enctype="multipart/form-data" class="card media-upload"><div><h2>Add an image</h2><p class="muted">Saved to this ${ctx.store.kind}'s library and ready to paste into any builder field.</p></div><input type="file" name="image" accept="image/*" required><button class="btn primary" type="submit">Upload</button></form>
-  ${assets.length ? `<div class="media-grid">${assets.map((asset) => `<figure class="media-card"><a href="${escapeHtml(asset.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(asset.url)}" alt="${escapeHtml(asset.label)}" loading="lazy"></a><figcaption><div><strong>${escapeHtml(asset.label)}</strong><span>${escapeHtml(asset.source)}${size(asset.bytes) ? ` · ${size(asset.bytes)}` : ''}</span></div><button class="btn" type="button" data-copy="${escapeHtml(asset.url)}">Copy URL</button></figcaption></figure>`).join('')}</div>` : '<div class="card cro-empty"><div class="cro-orb">'+uiIcon('image', 24)+'</div><h2>No images yet</h2><p class="muted">Upload the first product photo, clone a reference, or generate imagery from the Assistant.</p></div>'}
-  <script>document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){navigator.clipboard.writeText(button.dataset.copy);button.textContent='Copied';setTimeout(function(){button.textContent='Copy URL'},1200)})})</script>`
+  const assets=listStoreMedia(ctx.db,ctx.store.id),logos=assets.filter(asset=>asset.category==='logo'),media=assets.filter(asset=>asset.category!=='logo')
+  const storeQuery='storeId='+encodeURIComponent(ctx.store.id),e=escapeHtml
+  const card=(asset:typeof assets[number])=>`<figure class="media-card" data-category="${asset.category}">${asset.kind==='video'?`<video src="${e(asset.url)}" controls playsinline preload="metadata" aria-label="${e(asset.label)}"></video>`:asset.kind==='embed'?`<a href="${e(asset.url)}" target="_blank" rel="noopener">Embedded video · open player</a>`:`<a href="${e(asset.url)}" target="_blank" rel="noopener"><img src="${e(asset.url)}" alt="${e(asset.label)}" loading="lazy"></a>`}<figcaption><div><strong>${e(asset.label)}</strong><span>${e(asset.source)} · ${asset.kind}${asset.bytes?' · '+(asset.bytes/1024/1024).toFixed(1)+' MB':''}</span></div><div class="media-actions">${asset.kind!=='embed'?`<a class="btn primary" href="/admin/media/rebrand?${storeQuery}&source=${encodeURIComponent(asset.url)}">Rebrand</a>`:'<span class="muted">Upload the original video to rebrand</span>'}<button class="btn" type="button" data-copy="${e(asset.url)}">Copy URL</button>${asset.kind==='image'?`<form method="post" action="/admin/media/classify?${storeQuery}"><input type="hidden" name="url" value="${e(asset.url)}"><input type="hidden" name="label" value="${e(asset.label)}"><input type="hidden" name="category" value="${asset.category==='logo'?'media':'logo'}"><button class="btn" type="submit">${asset.category==='logo'?'Move to other media':'Move to logos'}</button></form>`:''}</div></figcaption></figure>`
+  return `${mediaRebrandStyle}${flash(ctx)}<div class="head"><div><div class="eyebrow">${ctx.store.kind} asset</div><h1 class="serif">Media &amp; logos</h1><p class="muted">Keep brand logos separate from product images and videos. Use logos as references when regenerating media in the page editor.</p></div><span class="tag">${logos.length} logos · ${media.length} other media</span></div>
+  <form method="post" action="/admin/media/upload?${storeQuery}" enctype="multipart/form-data" class="card media-upload"><div><h2>Add an image, video or logo</h2><p class="muted">Images up to 12MB; MP4, WebM or MOV videos up to 100MB.</p></div><label>Save in<select name="category"><option value="media">Images & videos</option><option value="logo">Logos</option></select></label><input type="file" name="image" aria-label="Upload image or video" accept="image/*,video/mp4,video/webm,video/quicktime" required><button class="btn primary" type="submit">Upload</button></form>
+  <section aria-label="Logo assets"><h2>Logos <span class="tag">${logos.length}</span></h2>${logos.length?`<div class="media-grid">${logos.map(card).join('')}</div>`:'<div class="card"><p class="muted">Upload a logo and choose Logos above, or move an existing image here. PNG and SVG retain transparent backgrounds.</p></div>'}</section>
+  <section aria-label="Images and videos" style="margin-top:28px"><h2>Images & videos <span class="tag">${media.length}</span></h2>${media.length?`<div class="media-grid">${media.map(card).join('')}</div>`:'<div class="card"><p class="muted">No other media yet. Upload a photo or video, clone a reference, or generate imagery from the Assistant.</p></div>'}</section>
+  ${rebrandHistory(ctx.db,ctx.store)}<script>document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',async function(){try{await navigator.clipboard.writeText(button.dataset.copy);button.textContent='Copied';setTimeout(function(){button.textContent='Copy URL'},1200)}catch{button.textContent='Open the media to copy its URL'}})})</script>`
 }
 
 /* ------------------------------------------------------------- research page */
@@ -928,7 +1014,7 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
   return `${flash(ctx)}<div class="head"><div><h1>Assistant</h1>
     <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated against its schema and audited; it edits the draft, and publishing is yours.</p></div></div>
   <div class="grid2"><div>
-    <form class="card" method="post" action="/admin/ask" id="ai-composer"><div class="eyebrow">Ask Amboras</div><input type="hidden" name="page" value="ai"><textarea id="ai-ask" name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">Requests run in order, so you can queue the next job while one is working.</span><div class="row"><button class="btn" id="ai-voice" type="button">${uiIcon('mic', 15)} Dictate</button><button class="btn primary" type="submit">${uiIcon('send', 14)} Queue request</button></div></div></form>
+    <form class="card" method="post" action="/admin/ask" id="ai-composer"><div class="eyebrow">Ask storemill</div><input type="hidden" name="page" value="ai"><textarea id="ai-ask" aria-label="Message assistant" name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">Requests run in order, so you can queue the next job while one is working.</span><div class="row"><button class="btn" id="ai-voice" type="button">${uiIcon('mic', 15)} Dictate</button><button class="btn primary" type="submit">${uiIcon('send', 14)} Queue request</button></div></div></form>
     <script>(function(){var button=document.getElementById('ai-voice');var Speech=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Speech){button.disabled=true;button.title='Voice input is not supported in this browser';return}button.addEventListener('click',function(){var r=new Speech();r.lang='en-US';button.textContent='Listening…';r.onresult=function(e){var box=document.getElementById('ai-ask');box.value=(box.value+' '+e.results[0][0].transcript).trim()};r.onend=function(){button.textContent='Dictate'};r.onerror=r.onend;r.start()})})();</script>
     ${queue.length ? `<div class="card"><h2>Request queue</h2>${queue.map((request) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.55rem 0"><span style="min-width:0"><strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${escapeHtml(request.text)}</strong><small class="muted">${request.createdAt.slice(11, 19)} · ${escapeHtml(request.page || 'global')}</small></span><span class="row"><span class="tag ${request.status === 'completed' ? 'ok' : request.status === 'failed' ? 'bad' : request.status === 'running' ? 'warn' : ''}">${request.status}</span>${request.status === 'queued' ? `<form method="post" action="/admin/assistant/queue/${escapeHtml(request.id)}/cancel"><button class="btn" type="submit">Cancel</button></form>` : ''}</span></div>`).join('')}</div>` : ''}
     <div class="card" style="max-height:56vh;overflow:auto">

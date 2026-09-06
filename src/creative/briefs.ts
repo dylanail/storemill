@@ -92,6 +92,23 @@ export const PHOTO_BRIEFS: PhotoBrief[] = [
   { id: 'texture', name: 'The texture macro', what: 'The material itself, filling the frame: the serum on skin, the weave, the grain, the foam cut edge.', why: 'Skincare and materials sell on texture; the gallery and the ingredients section use it.', how: 'Macro, raking light from one side, no product packaging in frame.', optional: true },
 ]
 
+/** The brief an image is labelled with, if any. */
+export function shotOf(alt: string): string {
+  return /photo:([a-z0-9-]+)/i.exec(alt ?? '')?.[1]?.toLowerCase() ?? ''
+}
+
+/**
+ * Labels an image with the brief it satisfies, or clears the label. The
+ * checklist reads these markers out of the alt text; until there was a control
+ * that wrote one, coverage could never move past the hero shot, and every
+ * product showed twelve missing shots forever.
+ */
+export function labelShot(alt: string, shotId: string): string {
+  const rest = (alt ?? '').replace(/\s*photo:[a-z0-9-]+/gi, '').replace(/\s{2,}/g, ' ').trim()
+  if (!shotId) return rest
+  return rest ? `${rest} photo:${shotId}` : `photo:${shotId}`
+}
+
 /** Which briefs a product already has, read from its media alt text and tags ("photo:hero"). */
 export function photoCoverage(product: Product): { have: PhotoBrief[]; missing: PhotoBrief[]; optional: PhotoBrief[] } {
   const text = [...product.media.map((media) => media.alt), ...product.tags, product.metadata.photos ?? ''].join(' ').toLowerCase()

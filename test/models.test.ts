@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createPage, getPage, listPageRevisions } from '../src/pages/store.ts'
+import { captureAssistantContext } from '../src/agent/context.ts'
 import { fresh } from './helpers.ts'
 import { anyModel, catalog, complete, completeJson, defaultChoice, modelFor, parseChoice, planWithTools, resolvedModels, S, useModelTransport, type ModelChoice } from '../src/agent/models.ts'
 import { createStore, updateStore } from '../src/control/stores.ts'
@@ -12,6 +14,8 @@ import { suggestAvatars } from '../src/agent/avatars.ts'
 import { readCompetitor } from '../src/agent/angles.ts'
 import { listProducts } from '../src/domain/catalog.ts'
 import { listPromotions } from '../src/domain/promotions.ts'
+import { saveAnswers } from '../src/control/build.ts'
+import { seedDefaultRegion } from '../src/domain/regions.ts'
 
 /**
  * The model path, exercised end to end against a fake network: the request
@@ -283,5 +287,101 @@ test('avatars and competitor pages are written by the model when one is configur
     assert.equal(angle.offer.guarantee, '90-day money back')
     assert.equal(angle.offer.comparePrice, '$149')
     assert.match(angle.notes.join(' '), /Read by Claude Opus 5/)
+  })
+})
+
+test('the eight buyer answers reach the research step they are collected for', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Answers', prompt: 'a sleep supplement' })
+  saveAnswers(db, store.id, {
+    who: { value: 'Shift nurses in their thirties' },
+    tried: { value: 'Melatonin, and it left them groggy' },
+    instinct: { unknown: true },
+  })
+
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    const network = fakeNetwork(() =>
+      anthropicText(
+        JSON.stringify({ category: 'supplements', positioning: 'x', audience: [], triggers: [], objections: [], competitors: [], keywords: [], proofPoints: [], comparison: { rows: [] }, priceAnchor: { lowCents: 1000, midCents: 2000, highCents: 3000, note: '' }, sourceNotes: [] }),
+      ),
+    )
+    await runResearch(db, store.id, { prompt: 'a sleep supplement' })
+    const sent = JSON.stringify(network.calls)
+    assert.match(sent, /Shift nurses in their thirties/, 'what the owner told the build about their buyer is in the research prompt')
+    assert.match(sent, /left them groggy/)
+    assert.match(sent, /does not know/, 'and so is what they said they do not know, which is what research is for')
+  })
+})
+
+test('the assistant answers from what the tools returned, not before they ran', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Answers Co', prompt: 'a boxing gear store' })
+  seedDefaultRegion(db, store.id, 'USD')
+
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    let call = 0
+    const net = fakeNetwork(() => {
+      call++
+      // First call: the plan, with a tool call and a preamble written blind.
+      if (call === 1) {
+        return anthropicText('', {
+          stop_reason: 'tool_use',
+          content: [
+            { type: 'text', text: 'Let me look.' },
+            { type: 'tool_use', id: 'tu_1', name: 'create_product', input: { title: 'The Wrap', priceCents: 1800 } },
+          ],
+        })
+      }
+      // Second call: the answer, written with the result in hand.
+      return anthropicText('The Wrap is in the catalog at $18.00.')
+    })
+
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'add the wrap for $18' })
+    assert.equal(result.assistant.content, 'The Wrap is in the catalog at $18.00.')
+
+    // The last call is the answering turn: it carries what the tools returned.
+    const last = JSON.stringify(net.calls.at(-1)!.body)
+    assert.match(last, /What the tools returned/, 'the tool results go back to the model')
+    assert.match(last, /The Wrap/)
+    assert.ok(net.calls.length > 1, 'which means more than the one planning call')
+  })
+})
+
+test('with no model the assistant still answers, from the tools own summaries', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Rules Co', prompt: 'a boxing gear store' })
+  seedDefaultRegion(db, store.id, 'USD')
+  await withEnv({}, async () => {
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'Create a 15% discount on code SPRING15' })
+    assert.match(result.assistant.content, /SPRING15/)
+  })
+})
+
+
+test('assistant reads copied HTML and uses the observed hash to finish the edit in one request', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    const { db, user } = fresh()
+    const store = createStore(db, user.id, { name: 'Context test' })
+    const page = createPage(db, store.id, { title: 'Imported home', mode: 'html', rawHtml: '<!doctype html><h1>Old heading</h1><p>Preserve this paragraph.</p>' })
+    let step = 0
+    const net = fakeNetwork(({ body }) => {
+      step++
+      if (step === 1) return anthropicText('', { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'read_1', name: 'read_page_html', input: { pageId: page.id, search: 'Old heading' } }] })
+      if (step === 2) {
+        const prompt = (body.messages as Array<{content:string}>).at(-1)!.content
+        const hash = /"hash":"([a-f0-9]+)"/.exec(prompt)?.[1]
+        assert.ok(hash, 'the actual read result must reach the second planning call')
+        assert.match(prompt, /Old heading/)
+        return anthropicText('', { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'write_1', name: 'replace_page_html', input: { pageId: page.id, hash, find: 'Old heading', replacement: 'New heading' } }] })
+      }
+      return anthropicText('Updated the heading on Imported home.')
+    })
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'Change this heading to New heading', page: captureAssistantContext(db, store.id, 'editor', { path: '/admin/pages/' + page.id + '/edit' }) })
+    assert.deepEqual(result.failures, [])
+    assert.equal(getPage(db, store.id, page.id)!.rawHtml, '<!doctype html><h1>New heading</h1><p>Preserve this paragraph.</p>')
+    assert.equal(listPageRevisions(db, store.id, page.id).length, 2)
+    assert.equal(net.calls.length, 3)
+    assert.match(JSON.stringify(net.calls[0]!.body.system), /Imported home/)
+    assert.equal(result.assistant.content, 'Updated the heading on Imported home.')
   })
 })

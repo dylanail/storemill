@@ -81,7 +81,9 @@ export function personaToAvatar(persona: Persona, triggers: string[], objections
     objection: objection?.objection ?? '',
     answer: objection?.answer ?? '',
     source: 'research',
-    selected: true,
+    // Whether an avatar is the one being written to is suggestAvatars' call,
+    // not a property of the persona it came from.
+    selected: false,
   }
 }
 
@@ -143,7 +145,7 @@ async function modelAvatars(choice: ModelChoice, research: Research): Promise<Av
     name: 'avatars',
     maxTokens: 6000,
   })
-  return (parsed.avatars ?? []).map((avatar) => ({ ...avatar, tone: TONES.includes(avatar.tone as Tone) ? avatar.tone : 'plain', hooks: (avatar.hooks ?? []).slice(0, 5), tier: (['niche', 'mid', 'mass'] as const).includes(avatar.tier as 'niche') ? avatar.tier : ('' as const), source: 'research' as const, selected: true }))
+  return (parsed.avatars ?? []).map((avatar) => ({ ...avatar, tone: TONES.includes(avatar.tone as Tone) ? avatar.tone : 'plain', hooks: (avatar.hooks ?? []).slice(0, 5), tier: (['niche', 'mid', 'mass'] as const).includes(avatar.tier as 'niche') ? avatar.tier : ('' as const), source: 'research' as const, selected: false }))
 }
 
 /**
@@ -151,6 +153,13 @@ async function modelAvatars(choice: ModelChoice, research: Research): Promise<Av
  * without one the personas are mapped by rules. Existing avatars with the
  * same name are left alone: the merchant's edits are theirs, and re-running
  * should add what is new, not overwrite what they fixed.
+ *
+ * One of them arrives switched on, not all of them. Everything that writes to
+ * an avatar takes the first selected one, so a set where every avatar is on is
+ * a set where "selected" means nothing and the ad is written to whichever row
+ * the database returned first. The core avatar — the largest share — is the
+ * one on; the rest are suggestions to switch on deliberately. And a store that
+ * has already chosen keeps its choice: a second run adds, it does not re-pick.
  */
 export async function suggestAvatars(db: Db, storeId: string, model?: ModelChoice | null): Promise<Avatar[]> {
   const research = latestResearch(db, storeId)
@@ -165,10 +174,13 @@ export async function suggestAvatars(db: Db, storeId: string, model?: ModelChoic
     suggested = []
   }
   if (!suggested.length) suggested = research.audience.map((persona, index) => personaToAvatar(persona, research.triggers, research.objections, index))
-  const existing = new Set(listAvatars(db, storeId).map((avatar) => avatar.name.toLowerCase()))
-  for (const avatar of suggested) {
+  const already = listAvatars(db, storeId)
+  const chosen = already.some((avatar) => avatar.selected)
+  const core = suggested.reduce((best, avatar, index) => ((avatar.share ?? 0) > (suggested[best]?.share ?? 0) ? index : best), 0)
+  const existing = new Set(already.map((avatar) => avatar.name.toLowerCase()))
+  for (const [index, avatar] of suggested.entries()) {
     if (!avatar.name?.trim() || existing.has(avatar.name.toLowerCase())) continue
-    saveAvatar(db, storeId, avatar)
+    saveAvatar(db, storeId, { ...avatar, selected: !chosen && index === core })
     existing.add(avatar.name.toLowerCase())
   }
   return listAvatars(db, storeId)

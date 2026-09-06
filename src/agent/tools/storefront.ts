@@ -1,13 +1,14 @@
 import { listProducts } from '../../domain/catalog.ts'
 import { statsFor } from '../../domain/reviews.ts'
 import { environment, getStore, publish, publishState, rollback, setTheme, updateStore } from '../../control/stores.ts'
-import { addShippingOption, createRegion, defaultRegion, listRegions } from '../../domain/regions.ts'
+import { createRegion, defaultRegion, listRegions, setShippingOption } from '../../domain/regions.ts'
 import { inviteTeammate } from '../../control/auth.ts'
 import { refreshTodos } from '../../control/todos.ts'
 import { addRedirect, listSeoPages, productJsonLd, upsertSeoPage, validateProductSchema } from '../../seo/schema.ts'
 import type { Brand } from '../../domain/types.ts'
 import { brandDescription, brandName, brandVoice, paletteFor, readBrief, slogan } from '../copy.ts'
 import { generate } from '../images.ts'
+import { publicStoreUrl } from '../../lib/urls.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const SECTIONS = ['announcement', 'hero', 'featured', 'story', 'collection-grid', 'reviews', 'newsletter', 'footer']
@@ -52,7 +53,7 @@ export const storefrontTools: Tool[] = defineTools([
       }
       updateStore(ctx.db, ctx.storeId, { name, brand })
       return {
-        summary: `Brand set: ${name}, "${brand.slogan}", ${brand.primary} on ${brand.paper}.`,
+        summary: `Brand set on the draft: ${name}, "${brand.slogan}", ${brand.primary} on ${brand.paper}. Publish to make it live.`,
         data: brand,
         artifacts: [{ type: 'image', urls: [brand.logoSvg ?? store.brand.logoSvg ?? ''].filter(Boolean), caption: `${name} mark` }],
       }
@@ -61,14 +62,14 @@ export const storefrontTools: Tool[] = defineTools([
   {
     name: 'generate_brand_logo',
     area: 'store',
-    description: 'Draw a new brand mark from the current palette.',
+    description: 'Draw a new brand mark from the current palette. Goes to the draft; publish makes it live.',
     schema: { note: { type: 'string', help: 'Optional steer for the mark.' } },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       if (!store) throw new Error('No store')
       const logoSvg = await generate({ subject: `${store.name} ${(args.note as string) ?? ''} monogram`, kind: 'logo', label: store.name, palette: store.brand })
       updateStore(ctx.db, ctx.storeId, { brand: { logoSvg } })
-      return { summary: `New mark for ${store.name}.`, artifacts: [{ type: 'image', urls: [logoSvg], caption: `${store.name} mark` }] }
+      return { summary: `New mark for ${store.name}, on the draft. Publish to make it live.`, artifacts: [{ type: 'image', urls: [logoSvg], caption: `${store.name} mark` }] }
     },
   },
   {
@@ -115,7 +116,7 @@ export const storefrontTools: Tool[] = defineTools([
       return {
         summary: `Draft updated (${Object.keys(patch).join(', ')}). It is not live until you publish.`,
         data: draft.theme,
-        artifacts: [{ type: 'link', href: '/store', label: 'Open the store designer' }],
+        artifacts: [{ type: 'link', href: '/admin/store', label: 'Open the store designer' }],
       }
     },
   },
@@ -149,11 +150,11 @@ export const storefrontTools: Tool[] = defineTools([
   {
     name: 'set_announcement',
     area: 'store',
-    description: 'Set the announcement bar text at the top of the storefront.',
+    description: 'Set the announcement bar text at the top of the storefront. Goes to the draft; publish makes it live.',
     schema: { text: { type: 'string', required: true, max: 120 } },
     handler(args, ctx) {
       updateStore(ctx.db, ctx.storeId, { brand: { announcement: args.text as string } })
-      return { summary: `Announcement bar now reads "${args.text}".` }
+      return { summary: `Announcement bar on the draft now reads "${args.text}". Publish to make it live.` }
     },
   },
   {
@@ -220,14 +221,14 @@ export const storefrontTools: Tool[] = defineTools([
         countries: args.countries as string[],
         taxRate: args.taxRate as number,
       })
-      addShippingOption(ctx.db, region.id, { name: 'Standard shipping', amountCents: 900, freeAboveCents: 20000 })
+      setShippingOption(ctx.db, region.id, { name: 'Standard shipping', amountCents: 900, freeAboveCents: 20000 })
       return { summary: `${region.name} is live in ${region.currency} for ${region.countries.join(', ')}, with a standard rate and a free-shipping threshold.`, data: region }
     },
   },
   {
     name: 'set_shipping_rate',
     area: 'setup',
-    description: 'Add or change a shipping rate, with an optional free-shipping threshold, for a region.',
+    description: 'Add or change a shipping rate, with an optional free-shipping threshold, for a region. A rate of the same name is changed rather than duplicated.',
     schema: {
       name: { type: 'string', required: true },
       amountCents: { type: 'number', integer: true, min: 0, required: true },
@@ -239,13 +240,41 @@ export const storefrontTools: Tool[] = defineTools([
         ? listRegions(ctx.db, ctx.storeId).find((entry) => entry.id === args.regionId)
         : defaultRegion(ctx.db, ctx.storeId)
       if (!region) throw new Error('No region to attach the rate to')
-      const option = addShippingOption(ctx.db, region.id, {
+      const before = region.shipping.length
+      const option = setShippingOption(ctx.db, region.id, {
         name: args.name as string,
         amountCents: args.amountCents as number,
         freeAboveCents: (args.freeAboveCents as number) ?? null,
       })
       refreshTodos(ctx.db, ctx.storeId)
-      return { summary: `${option.name} added to ${region.name}.`, data: option }
+      const added = listRegions(ctx.db, ctx.storeId).find((entry) => entry.id === region.id)?.shipping.length !== before
+      return { summary: `${option.name} ${added ? 'added to' : 'changed on'} ${region.name}.`, data: option }
+    },
+  },
+  {
+    name: 'list_regions',
+    area: 'setup',
+    description: 'The selling regions on this store: currency, countries, tax and the shipping rates the cart quotes from.',
+    schema: {},
+    handler(_args, ctx) {
+      const regions = listRegions(ctx.db, ctx.storeId)
+      return {
+        summary: regions.length
+          ? `${regions.length} region${regions.length === 1 ? '' : 's'}: ${regions.map((region) => `${region.name} (${region.currency})`).join(', ')}.`
+          : 'No regions. The checkout has no currency and no rate until there is one.',
+        data: regions,
+        artifacts: [{
+          type: 'table',
+          columns: ['Region', 'Currency', 'Countries', 'Tax', 'Rates'],
+          rows: regions.map((region) => [
+            `${region.name}${region.isDefault ? ' (default)' : ''}`,
+            region.currency,
+            region.countries.join(', '),
+            `${(region.taxRate * 100).toFixed(2)}%`,
+            region.shipping.map((option) => `${option.name} ${(option.amountCents / 100).toFixed(2)}${option.freeAboveCents === null ? '' : ` free over ${(option.freeAboveCents / 100).toFixed(2)}`}`).join(' · '),
+          ]),
+        }],
+      }
     },
   },
   {
@@ -296,7 +325,7 @@ export const storefrontTools: Tool[] = defineTools([
       const products = listProducts(ctx.db, ctx.storeId, { status: 'published', limit: 100 })
       const rows: string[][] = []
       for (const product of products) {
-        const node = productJsonLd(store, product, `https://${store.slug}/products/${product.handle}`, statsFor(ctx.db, ctx.storeId, product.id))
+        const node = productJsonLd(store, product, `${publicStoreUrl(ctx.db, store)}/products/${product.handle}`, statsFor(ctx.db, ctx.storeId, product.id))
         for (const issue of validateProductSchema(node)) rows.push([product.title, issue.level, issue.message])
       }
       const errors = rows.filter((row) => row[1] === 'error').length

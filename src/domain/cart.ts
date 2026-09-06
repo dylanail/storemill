@@ -3,10 +3,11 @@ import { id } from '../lib/ids.ts'
 import { bundleFor, tierFor } from './bundles.ts'
 import { getProduct, getVariant } from './catalog.ts'
 import { applyPromotions } from './promotions.ts'
-import { convertCents, defaultRegion, getRegion, rateFor } from './regions.ts'
+import { convertCents, defaultRegion, getRegion, minorUnitRate, rateFor } from './regions.ts'
 import type { Address, LineItem, Totals } from './types.ts'
 
-export type CheckoutDraft = { email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean }
+export type CheckoutAdvertising = { url:string; ip:string; userAgent:string; fbp?:string; fbc?:string; ttp?:string; ttclid?:string }
+export type CheckoutDraft = { preview?: boolean; email?: string; name?: string; phone?: string; address?: Address; billingSame?: boolean; billingAddress?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
 
 export type Cart = {
   id: string
@@ -45,7 +46,7 @@ export function getCart(db: Db, storeId: string, cartId: string): Cart | null {
   return row ? rowToCart(row) : null
 }
 
-export function createCart(db: Db, storeId: string, regionId?: string): Cart {
+export function createCart(db: Db, storeId: string, regionId?: string, options: { preview?: boolean } = {}): Cart {
   const cartId = id('cart')
   const timestamp = now()
   const region = regionId ? getRegion(db, storeId, regionId) : defaultRegion(db, storeId)
@@ -57,6 +58,7 @@ export function createCart(db: Db, storeId: string, regionId?: string): Cart {
     discount_code: '',
     region_id: region?.id ?? null,
     order_id: null,
+    checkout: options.preview ? { preview: true } : {},
     created_at: timestamp,
     updated_at: timestamp,
   })
@@ -71,15 +73,16 @@ export function setCartRegion(db: Db, storeId: string, cartId: string, regionId:
   return getCart(db, storeId, cart.id) as Cart
 }
 
-export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string): Cart {
+/** A trusted server-side price override is used by configured order bumps. */
+export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number): Cart {
   const cart = getCart(db, storeId, cartId) ?? createCart(db, storeId)
   const variant = getVariant(db, storeId, variantId)
   if (!variant) throw new Error(`No variant ${variantId}`)
   const product = getProduct(db, storeId, variant.productId)
-  if (!product || product.status !== 'published') throw new Error('That product is not available')
+  if (!product || product.status !== 'published' && !(cart.checkout.preview && product.status === 'draft')) throw new Error('That product is not available')
 
   const items = [...cart.items]
-  const existing = items.find((item) => item.variantId === variantId)
+  const existing = items.find((item) => item.variantId === variantId && !item.giftOf)
   if (existing) existing.quantity += quantity
   else {
     items.push({
@@ -88,7 +91,7 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
       title: product.title,
       variantTitle: variant.title,
       image: variant.image || product.heroImage,
-      unitCents: variant.priceCents,
+      unitCents: unitCents ?? variant.priceCents,
       quantity,
       ...(source ? { source } : {}),
     })
@@ -138,6 +141,19 @@ export function reconcileGifts(db: Db, storeId: string, items: LineItem[]): Line
       giftOf: productId,
     })
   }
+  for (const item of paid) {
+    const owner = getProduct(db, storeId, item.productId)
+    let giftIds: unknown
+    try { giftIds = JSON.parse(owner?.metadata['includedGifts:' + item.variantId] || '[]') } catch { continue }
+    if (!Array.isArray(giftIds)) continue
+    for (const giftId of new Set(giftIds.slice(0, 30))) {
+      if (typeof giftId !== 'string') continue
+      const variant = getVariant(db, storeId, giftId), product = variant ? getProduct(db, storeId, variant.productId) : null
+      if (!variant || !product || product.metadata.sourcePurpose !== 'gift' || variant.priceCents !== 0) continue
+      if (kept.some(line => line.giftOf === item.productId && line.variantId === giftId)) continue
+      kept.push({variantId:variant.id,productId:product.id,title:product.title,variantTitle:variant.title+' — included',image:variant.image||product.heroImage,unitCents:0,quantity:item.quantity,source:'package-gift',giftOf:item.productId})
+    }
+  }
   return kept
 }
 
@@ -182,7 +198,7 @@ export function totals(db: Db, storeId: string, cart: Cart, opts: { isFirstOrder
     code: cart.discountCode,
     subtotalCents,
     regionId: region?.id,
-    currencyRate: convertCents(100, region, sourceCurrency) / 100,
+    currencyRate: minorUnitRate(region, sourceCurrency),
     ...(opts.isFirstOrder === undefined ? {} : { isFirstOrder: opts.isFirstOrder }),
   })
   const discounted = Math.max(0, subtotalCents - promo.discountCents)

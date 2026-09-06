@@ -1,5 +1,7 @@
+import { productGalleryRuntime } from './product-gallery-runtime.ts'
+import { columnLayoutStyle } from './column-layout.ts'
 import { escapeHtml } from '../lib/http.ts'
-import { format } from '../lib/money.ts'
+import { format, minorDigits } from '../lib/money.ts'
 import type { Schema } from '../lib/validate.ts'
 import { check } from '../lib/validate.ts'
 
@@ -29,6 +31,7 @@ export type BlockContext = {
     title: string
     subtitle: string
     image: string
+    media?: Array<{url:string;alt:string;kind?:'image'|'video';poster?:string}>
     priceCents: number
     variants: Array<{ id: string; title: string; priceCents: number }>
     options: Array<{ title: string; values: Array<{ value: string; swatch?: string }> }>
@@ -38,6 +41,14 @@ export type BlockContext = {
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
   /** The blocks this store defined for itself (custom-blocks.ts), resolved alongside the catalog. */
   custom?: BlockDefinition[]
+  /**
+   * Where this page's call to action leads inside its funnel: the offer page
+   * for an advertorial, the checkout for an offer page. The funnel model is
+   * ad → advertorial → offer → checkout, and the advertorial's own CTA
+   * defaults to `#offer`, an anchor on itself — so the offer page a merchant
+   * had chosen in the funnel editor was never linked from anywhere.
+   */
+  funnelNext?: string
   /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
   live?: {
     purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
@@ -56,6 +67,8 @@ export type BlockContext = {
   checkout?: {
     /** The contact, delivery, shipping and payment form with the pay button. Carries a `<!--bump-->` marker where the order bump goes. */
     formHtml: string
+    headerHtml?: string
+    footerHtml?: string
     /** Line items, discount code and totals. */
     summaryHtml: string
     /** The express wallet row; empty without a payment provider. */
@@ -177,7 +190,7 @@ export const BLOCKS: BlockDefinition[] = [
     },
     render: (settings, context, block) => `<header class="site" data-block="${e(block.id)}"><div class="wrap row">
       <a class="brandmark" href="${context.base}/">${context.brand.logoSvg ? `<img src="${e(context.brand.logoSvg)}" alt="">` : ''}<span><span class="name">${e(context.storeName)}</span></span></a>
-      ${settings.showNav ? `<nav class="main">${list(settings.links).map((entry) => { const [label = '', href = '#'] = entry.split('|'); return `<a href="${e(href.startsWith('/') ? context.base + href : href)}">${e(label)}</a>` }).join('')}</nav>` : '<span style="margin-left:auto"></span>'}
+      ${settings.showNav ? `<button type="button" data-nav-toggle aria-controls="navigation-${e(block.id)}" aria-expanded="false" aria-label="Open menu">Menu</button><nav class="main" id="navigation-${e(block.id)}" aria-label="Main">${list(settings.links).map((entry) => { const [label = '', href = '#'] = entry.split('|'); return `<a href="${e(href.startsWith('/') ? context.base + href : href)}">${e(label)}</a>` }).join('')}</nav>` : '<span style="margin-left:auto"></span>'}
       ${settings.cta ? `<div class="tools">${button(settings.cta, settings.ctaHref)}</div>` : ''}</div></header>`,
   },
   {
@@ -323,14 +336,19 @@ export const BLOCKS: BlockDefinition[] = [
     name: 'Multicolumn',
     group: 'Text & media',
     icon: '⫼',
-    description: 'Three or four columns of icon, heading and text. Features, benefits, pain points. An image URL in the icon cell becomes a picture.',
+    description: 'One to six adjustable columns of icon, heading and text. Features, benefits, pain points. An image URL in the icon cell becomes a picture.',
     schema: {
       headline: { type: 'string', label: 'Headline', default: '' },
       columns: { type: 'string', label: 'Columns (icon or image URL|title|text per line)', multiline: true, required: true, default: '✦|Made properly|Named materials, one maker, small runs.\n✦|Repaired for life|Post it back; we fix it.\n✦|Free returns|Thirty days, no questions.' },
-      perRow: { type: 'number', label: 'Per row', integer: true, min: 2, max: 4, default: 3 },
+      perRow: { type: 'number', label: 'Columns per row', integer: true, min: 1, max: 6, default: 3 },
+      columnWidths: { type: 'string', label: 'Column widths (%)', default: '' },
+      tabletPerRow: { type: 'number', label: 'Tablet columns (0 = automatic)', integer: true, min: 0, max: 6, default: 0 },
+      tabletColumnWidths: { type: 'string', label: 'Tablet column widths (%)', default: '' },
+      mobilePerRow: { type: 'number', label: 'Mobile columns', integer: true, min: 1, max: 6, default: 1 },
+      mobileColumnWidths: { type: 'string', label: 'Mobile column widths (%)', default: '' },
       ...COMMON,
     },
-    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="cols" style="--per:${Number(settings.perRow)}">${list(settings.columns).map((entry) => { const [glyph = '', title = '', text = ''] = entry.split('|'); return `<div class="col"><div class="ico">${icon(glyph)}</div><h3>${e(title)}</h3><p>${e(text)}</p></div>` }).join('')}</div>`),
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="cols" style="${columnLayoutStyle(settings)}">${list(settings.columns).map((entry) => { const [glyph = '', title = '', text = ''] = entry.split('|'); return `<div class="col"><div class="ico">${icon(glyph)}</div><h3>${e(title)}</h3><p>${e(text)}</p></div>` }).join('')}</div>`),
   },
   {
     type: 'button',
@@ -386,9 +404,9 @@ export const BLOCKS: BlockDefinition[] = [
           <h2>${e(product.title)}</h2>${product.subtitle ? `<p class="lead">${e(product.subtitle)}</p>` : ''}
           ${bullets.length ? `<ul class="checks">${bullets.join('')}</ul>` : ''}
           ${settings.offerLabel ? `<div class="offer-label">${e(settings.offerLabel)}</div>` : ''}
-          <div class="price-lg">${format(cheapest?.priceCents ?? product.priceCents, context.currency)}</div>
-          <form method="post" action="${context.base}${settings.buyNow ? '/checkout/buy' : '/cart/add'}" class="buyform">
-            ${product.variants.length > 1 ? `<label class="opt"><span class="label">Choose</span><select name="variantId">${product.variants.map((variant) => `<option value="${e(variant.id)}">${e(variant.title)} — ${format(variant.priceCents, context.currency)}</option>`).join('')}</select></label>` : `<input type="hidden" name="variantId" value="${e(cheapest?.id ?? '')}">`}
+          <div class="price-lg" data-variant-price>${format(cheapest?.priceCents ?? product.priceCents, context.currency)}</div>
+          <form method="post" action="${context.base}${settings.buyNow ? '/checkout/buy' : '/cart/add'}" class="buyform" data-currency="${e(context.currency)}" data-minor-digits="${minorDigits(context.currency)}">
+            ${product.variants.length > 1 ? `<label class="opt"><span class="label">Choose</span><select name="variantId">${product.variants.map((variant) => `<option value="${e(variant.id)}" data-price="${variant.priceCents}">${e(variant.title)} — ${format(variant.priceCents, context.currency)}</option>`).join('')}</select></label>` : `<input type="hidden" name="variantId" value="${e(cheapest?.id ?? '')}">`}
             ${bundle ? bundle.html : '<input type="hidden" name="quantity" value="1">'}
             ${shipLine ? `<p class="shipline"><i class="dot" aria-hidden="true"></i>${shipLine}</p>` : ''}
             <button class="btn btn--wide" type="submit">${e(settings.cta || (settings.buyNow ? 'Buy now' : 'Add to cart'))} — <span data-total>${format(cheapest?.priceCents ?? 0, context.currency)}</span></button>
@@ -527,7 +545,10 @@ export const BLOCKS: BlockDefinition[] = [
       const left = product
         ? `<div class="sticky-product">${product.image ? `<img src="${e(product.image)}" alt="" loading="lazy">` : ''}<div><b>${e(product.title)}</b><span class="micro">${settings.note ? e(settings.note) : format(product.priceCents, context.currency)}</span></div></div>`
         : `<div>${settings.note ? `<div class="p">${e(settings.note)}</div>` : ''}</div>`
-      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(settings.href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
+      // The shipped default is an anchor on this page; when the page is a step
+      // in a funnel, the next step is where the button belongs.
+      const href = settings.href === '#offer' && context.funnelNext ? context.funnelNext : (settings.href as string)
+      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
     },
   },
   {
@@ -615,10 +636,12 @@ export const BLOCKS: BlockDefinition[] = [
     schema: {
       layout: { type: 'string', label: 'Layout', enum: ['two-column', 'stacked'], default: 'two-column', help: 'Two-column puts the order summary beside the form, the way Shopify does. Stacked leaves it out so an Order summary block can go anywhere.' },
       summaryHeadline: { type: 'string', label: 'Summary heading', default: 'Your order' },
+      showHeader: { type: 'boolean', label: 'Show brand and cart header', default: true },
+      showPolicies: { type: 'boolean', label: 'Show policy links', default: true },
       showExpress: { type: 'boolean', label: 'Show express wallets first', default: true },
       showBump: { type: 'boolean', label: 'Show the order bump before payment', default: true },
       buttonLabel: { type: 'string', label: 'Pay button', default: 'Complete order' },
-      note: { type: 'string', label: 'Line under the button', default: '🔒 Secure 256-bit encrypted checkout · 30-day money-back guarantee' },
+      note: { type: 'string', label: 'Line under the button', default: '' },
       ...COMMON,
       width: { ...(COMMON.width as object), default: 'wide' } as never,
     },
@@ -628,13 +651,13 @@ export const BLOCKS: BlockDefinition[] = [
       const total = format(checkout.totalCents, context.currency)
       const two = settings.layout === 'two-column'
       const form = checkout.formHtml.replace('<!--bump-->', settings.showBump ? checkout.bumpHtml : '').replace('<!--pay-label-->', e(settings.buttonLabel || 'Pay now'))
-      return wrap(settings, block, `<div class="checkout checkout--blk${two ? '' : ' checkout--stacked'}" data-checkout>
+      return wrap(settings, block, `${settings.showHeader ? checkout.headerHtml||'' : ''}<div class="checkout checkout--blk${two ? '' : ' checkout--stacked'}" data-checkout aria-label="${checkout.sample ? 'Sample order' : 'Checkout'}">
         <div class="co-main">
-          ${checkout.sample ? '<p class="micro co-sample">Sample order — the editor preview. Visitors see their own cart here.</p>' : ''}
           ${checkout.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${e(checkout.error)}</div>` : ''}
           ${two ? `<details class="co-summary-mobile"><summary><span>Show order summary</span><b>${total}</b></summary>${checkout.summaryHtml}</details>` : ''}
           ${settings.showExpress ? checkout.expressHtml : ''}
           ${form}
+          ${settings.showPolicies ? checkout.footerHtml||'' : ''}
           ${settings.note ? `<p class="micro center">${e(settings.note)}</p>` : ''}
         </div>
         ${two ? `<aside class="co-side">${settings.summaryHeadline ? `<h2 class="co-h">${e(settings.summaryHeadline)}</h2>` : ''}${checkout.summaryHtml}</aside>` : ''}</div>`)
@@ -1068,11 +1091,15 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Text & media',
     icon: '▤',
     description: 'One big image with thumbnails under it, the way a product page opens. Click a thumbnail to swap.',
-    schema: { images: { type: 'string', label: 'Image URLs (one per line)', multiline: true, required: true, default: '' }, alt: { type: 'string', label: 'Alt text', default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never },
-    render: (settings, _context, block) => {
-      const images = list(settings.images)
-      if (!images.length) return wrap(settings, block, '<div class="ph">Add image URLs, one per line</div>')
-      return wrap(settings, block, `<div class="gal" data-gallery><img class="gal-main" src="${e(images[0])}" alt="${e(settings.alt)}" loading="eager">${images.length > 1 ? `<div class="gal-thumbs">${images.map((src, index) => `<button type="button" class="${index ? '' : 'on'}" data-src="${e(src)}" aria-label="Image ${index + 1}"><img src="${e(src)}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}</div>`)
+    schema: { productId: {type:'string',label:'Product',default:''}, gallery: {type:'string',label:'Gallery configuration',default:''}, images: { type: 'string', label: 'Image URLs (one per line)', multiline: true, default: '' }, alt: { type: 'string', label: 'Alt text', default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never },
+    render: (settings, context, block) => {
+      let gallery: {mode:string;productId?:string;items:Array<{url:string;alt:string;kind?:string}>;settings?:Record<string,unknown>}
+      try {gallery=JSON.parse(String(settings.gallery||''))}catch{gallery={mode:settings.productId?'product':'custom',productId:String(settings.productId||''),items:list(settings.images).map(url=>({url,alt:String(settings.alt||'')})),settings:{}}}
+      if(gallery.mode==='product'){
+        const product=context.products.find(item=>item.id===gallery.productId)
+        if(product)gallery.items=product.media?.length?product.media:product.image?[{url:product.image,alt:product.title}]:[]
+      }
+      return wrap(settings, block, `<div class="gal" data-gallery data-pb-gallery="${e(JSON.stringify(gallery))}"><div data-pg-track>${gallery.items.map(item=>`<div data-pg-slide><img src="${e(item.url)}" alt="${e(item.alt)}"></div>`).join('')}</div>${gallery.items.length>1?`<div class="gal-thumbs" data-pg-thumbs>${gallery.items.map((item,index)=>`<button type="button" class="${index?'':'on'}" data-src="${e(item.url)}" data-pg-thumb="${index}" aria-label="Show slide ${index+1}"><img src="${e(item.url)}" alt=""></button>`).join('')}</div>`:''}</div>`)
     },
   },
   {
@@ -1130,7 +1157,7 @@ export const BLOCKS: BlockDefinition[] = [
     icon: '{}',
     description: 'CSS and script for this page only.',
     schema: { css: { type: 'string', label: 'CSS', multiline: true, default: '' }, js: { type: 'string', label: 'JavaScript', multiline: true, default: '' } },
-    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${String(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${String(settings.js)}</script>` : ''}`,
+    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${inlineStyle(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${inlineScript(settings.js)}</script>` : ''}`,
   },
 ]
 
@@ -1160,6 +1187,32 @@ export type CustomBlockInput = { type: string; name: string; description?: strin
  *   {{product.title}} {{product.image}} {{product.price}} {{product.handle}} {{product.subtitle}}
  *      the product a `productId` setting names, else the first one
  */
+/**
+ * A script or a style element ends at the first closing tag in its text, not
+ * at the one the template meant. `</script>` inside a block's own script broke
+ * out of it and everything after was parsed as markup — the browser's rule,
+ * not a preference — so a stray closing tag in a snippet someone pasted took
+ * the rest of the page with it.
+ */
+export function inlineScript(js: unknown): string {
+  return String(js ?? '').replace(/<\/script/gi, '<\\/script')
+}
+
+export function inlineStyle(css: unknown): string {
+  return String(css ?? '').replace(/<\/style/gi, '')
+}
+
+/**
+ * The rule is "no <script> in a block template; put it in the js field, which
+ * runs once per page". It was checked against the template's own text, and a
+ * template can carry one in through a raw `{{{field}}}` — the check saw
+ * nothing and the page got the script. Enforcing it on what was rendered
+ * covers both, and covers a tag assembled out of two halves besides.
+ */
+function withoutScripts(html: string): string {
+  return html.replace(/<script\b[\s\S]*?<\/script\s*>/gi, '').replace(/<\/?script\b[^>]*>/gi, '')
+}
+
 export function renderTemplate(template: string, settings: Record<string, unknown>, context: BlockContext): string {
   const product = productFor(context, settings.productId)
   const scope: Record<string, unknown> = {
@@ -1191,7 +1244,7 @@ export function renderTemplate(template: string, settings: Record<string, unknow
         })
         .join(''),
     )
-  return vars(ifs(eaches(template), {}), {})
+  return withoutScripts(vars(ifs(eaches(template), {}), {}))
 }
 
 const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000, js: 20_000 }
@@ -1232,7 +1285,7 @@ export function customDefinition(input: CustomBlockInput): BlockDefinition {
     icon: (input.icon ?? '✚').slice(0, 4) || '✚',
     description: (input.description ?? '').trim() || 'A block this store defined for itself.',
     schema: { ...(usesProduct ? { productId: { type: 'string', label: 'Product', default: '' } } : {}), ...schema, ...COMMON },
-    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${css}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
+    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${inlineStyle(css)}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
   }
 }
 
@@ -1245,12 +1298,23 @@ function resolve(type: string, context?: BlockContext): BlockDefinition | null {
 export function renderBlock(block: BlockInstance, context: BlockContext): string {
   const definition = resolve(block.type, context)
   if (!definition) return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">Unknown block: ${e(block.type)}</p></div></section>`
-  const validated = check(definition.schema, block.settings)
+  // blankIsValue: text the owner deleted stays deleted. coerceField treats ''
+  // as absent everywhere else — which is right for a settings form — and here
+  // it silently reinstated the shipped copy at render, so no stock headline
+  // in the catalog could ever be removed.
+  const validated = check(definition.schema, block.settings, { blankIsValue: true })
   // A setting that fails its own field takes the default; the rest survive.
   // A page with one bad number in one block must not lose the block.
   const settings = validated.ok ? validated.value : { ...defaultsFor(definition), ...pickValid(definition, block.settings) }
   try {
-    return definition.render(settings, context, block)
+    const rendered = definition.render(settings, context, block)
+    const mode = block.settings._font
+    if (mode !== 'body' && mode !== 'display' && mode !== 'custom') return rendered
+    const custom = typeof block.settings._customFont === 'string'
+      ? block.settings._customFont.replace(/[;{}<>]/g, '').trim().slice(0, 160)
+      : ''
+    const family = mode === 'body' ? 'var(--body)' : mode === 'display' ? 'var(--display)' : custom
+    return family ? `<div class="blk-font" style="--block-font:${e(family)};--block-display:${e(family)}">${rendered}</div>` : rendered
   } catch (error) {
     return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">${e(definition.name)} could not render: ${e(error instanceof Error ? error.message : String(error))}</p></div></section>`
   }
@@ -1260,7 +1324,7 @@ function pickValid(definition: BlockDefinition, raw: Record<string, unknown>): R
   const out: Record<string, unknown> = {}
   for (const [key, field] of Object.entries(definition.schema)) {
     if (raw[key] === undefined) continue
-    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] })
+    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] }, { blankIsValue: true })
     if (single.ok && single.value[key] !== undefined) out[key] = single.value[key]
   }
   return out
@@ -1277,7 +1341,7 @@ export function defaultsFor(definition: BlockDefinition): Record<string, unknown
 }
 
 /** The runtime the blocks need: countdowns, lazy video, before/after, sticky bar, share. Small, inline, dependency-free. */
-export const BLOCK_RUNTIME = `(function(){
+export const BLOCK_RUNTIME = `${productGalleryRuntime}\n(function(){
 function pad(n){return String(Math.max(0,n)).padStart(2,'0')}
 document.querySelectorAll('.countdown').forEach(function(el){
   var ends; if(el.dataset.mode==='fixed'&&el.dataset.ends){ends=Date.parse(el.dataset.ends)}
@@ -1302,6 +1366,15 @@ document.querySelectorAll('[data-quiz]').forEach(function(quiz){var steps=quiz.q
   function go(n){steps.forEach(function(s,i){s.hidden=i!==n});if(bar){bar.setAttribute('aria-valuenow',String(n+1));bar.setAttribute('aria-label','Question '+(n+1)+' of '+total);bar.firstElementChild.style.width=Math.round((n+1)/total*100)+'%'}var l=steps[n]&&steps[n].querySelector('legend');l&&l.focus&&(l.tabIndex=-1,l.focus())}
   quiz.querySelectorAll('.qopt').forEach(function(opt){opt.addEventListener('click',function(){var step=opt.closest('.qstep'),n=Number(step.dataset.step);answers.push(opt.dataset.answer);window.__track&&window.__track('quiz.step',{step:n,answer:opt.dataset.answer});
     if(n<total){go(n)}else{steps.forEach(function(s){s.hidden=true});var r=quiz.querySelector('.qresult');r.hidden=false;if(bar)bar.hidden=true;var cta=r.querySelector('[data-quiz-cta]');if(cta&&cta.getAttribute('href')&&cta.getAttribute('href').charAt(0)!=='#'){try{var u=new URL(cta.getAttribute('href'),location.href);u.searchParams.set('quiz',answers.join(','));cta.setAttribute('href',u.pathname+u.search)}catch(e){}}var h=r.querySelector('h2');h&&(h.tabIndex=-1,h.focus());window.__track&&window.__track('quiz.complete',{answers:answers.join(',')})}})});});
-document.querySelectorAll('[data-gallery]').forEach(function(g){var main=g.querySelector('.gal-main'),thumbs=g.querySelectorAll('.gal-thumbs button');thumbs.forEach(function(b){b.addEventListener('click',function(){main.src=b.dataset.src;thumbs.forEach(function(o){o.classList.toggle('on',o===b)})})})});
-document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('[data-total]');function sync(){var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total}form.addEventListener('change',sync);sync()});
+document.querySelectorAll('[data-gallery]').forEach(function(g){if(g.hasAttribute('data-pb-gallery'))return;var main=g.querySelector('.gal-main'),thumbs=g.querySelectorAll('.gal-thumbs button');thumbs.forEach(function(b){b.addEventListener('click',function(){main.src=b.dataset.src;thumbs.forEach(function(o){o.classList.toggle('on',o===b)})})})});
+document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('button [data-total]');function sync(){
+  var select=form.querySelector('select[name=variantId]'),option=select&&select.selectedOptions[0];
+  if(option&&option.dataset.price){var price=Number(option.dataset.price),currency=form.dataset.currency||'USD',digits=Number(form.dataset.minorDigits||2);
+    function money(cents){return new Intl.NumberFormat(undefined,{style:'currency',currency:currency}).format(cents/Math.pow(10,digits))}
+    var base=form.parentElement.querySelector('[data-variant-price]');if(base)base.textContent=money(price);if(total)total.textContent=money(price);
+    form.querySelectorAll('.tier').forEach(function(card){var input=card.querySelector('input[name=quantity]');if(!input)return;var quantity=Number(input.value)||1,full=price*quantity,amount=Math.round(full*(1-Number(input.dataset.discount||0)/100));input.dataset.total=money(amount);
+      var value=card.querySelector('[data-tier-total]'),compare=card.querySelector('[data-tier-compare]'),unit=card.querySelector('[data-tier-unit]');if(value)value.textContent=money(amount);if(compare)compare.textContent=money(full);if(unit)unit.textContent=money(Math.round(amount/quantity))+' each';});
+  }
+  var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total
+}form.addEventListener('change',sync);sync()});
 })();`

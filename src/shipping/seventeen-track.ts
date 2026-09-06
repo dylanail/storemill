@@ -100,7 +100,7 @@ export async function syncOrderTracking(
 
 async function request(path: 'register' | 'gettrackinfo', body: Array<{ number: string }>): Promise<unknown> {
   const token = process.env.AMBORAS_17TRACK_API_KEY
-  if (!token) throw new Error('AMBORAS_17TRACK_API_KEY is not configured')
+  if (!token) throw new Error('STOREMILL_17TRACK_API_KEY is not configured')
   const base = (process.env.AMBORAS_17TRACK_API_BASE ?? DEFAULT_BASE).replace(/\/$/, '')
   const response = await transport(`${base}/${path}`, {
     method: 'POST',

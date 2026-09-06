@@ -1,4 +1,15 @@
+import { CHECKOUT_CSS, CHECKOUT_ICONS, checkoutField, addressFields, checkoutBrandCss, checkoutPalette } from './checkout-ui.ts'
+import { logoFromClone } from '../pages/source-logo.ts'
+import { cartDisplayLines } from '../domain/cart-prices.ts'
+import { mapProductGalleries, productGalleryRuntime } from '../pages/product-gallery-runtime.ts'
+import { pageProductData } from '../pages/product-data.ts'
+import { metaEventsHtml, type MetaEvent } from '../analytics/meta-browser.ts'
+import type { ServerEventInput } from '../analytics/server-events.ts'
+import { previewBar } from './preview-bar.ts'
+import { importedThemeHtml, sourceThemeFromHtml } from '../pages/source-theme.ts'
 import { escapeHtml } from '../lib/http.ts'
+import { readFileSync } from 'node:fs'
+import { funnelSelection } from './funnel-selection.ts'
 import { format, minorDigits } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
 import type { Collection } from '../domain/catalog.ts'
@@ -8,18 +19,21 @@ import type { Totals } from '../domain/types.ts'
 import type { Order } from '../domain/types.ts'
 import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/reviews.ts'
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
-import { convertCents, type Region } from '../domain/regions.ts'
+import { convertCents, defaultRegion, type Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
-import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
+import { getPage, listPages, PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
-import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
+import { funnelForProducts, funnelNextFor, type ResolvedBump, type ResolvedOffer } from '../domain/funnels.ts'
+import { stripeFor } from '../payments/stripe.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
 import { fontLink, themeCss } from './theme.ts'
-import { popupHtml, trackingScript } from './behaviour.ts'
+import { popupHtml, trackingScript, navigationScript } from './behaviour.ts'
+import { importedCommerceHtml, protectImportedForms } from './imported-commerce.ts'
 
 export type StoreView = {
   db: Db
@@ -27,9 +41,12 @@ export type StoreView = {
   env: StoreEnvironment
   base: string
   preview: boolean
+  checkoutProductId?: string
   cart: Cart | null
   totals: Totals | null
   region?: Region | null
+  advertising?: Omit<ServerEventInput,'type'>
+  metaEvents?: MetaEvent[]
   regions?: Region[]
 }
 
@@ -42,6 +59,17 @@ const CHROME: Record<string, Record<string, string>> = {
 }
 const t = (view: StoreView, key: string, fallback: string) => CHROME[(view.region?.locale ?? 'en').split('-')[0] ?? '']?.[key] ?? fallback
 
+function checkoutBrand(view: StoreView) {
+  const brand = Object.keys(view.env.brand).length ? view.env.brand : view.store.brand
+  if (view.store.kind !== 'store' || brand.themeCustomized || !brand.sourceTheme || brand.primary !== brand.sourceTheme.primary) return brand
+  // A source home page may only expose a neutral menu/cart button. The purchased
+  // product's captured buy button is a better checkout accent until the owner customizes it.
+  const productId = view.cart?.items.find(item => !item.giftOf && item.source !== 'order-bump')?.productId
+  const source = listPages(view.db, view.store.id).find(page => page.role === 'pdp' && page.productId === productId && (view.preview || page.status === 'published'))
+  const colors = source ? sourceThemeFromHtml(source.rawHtml) : null
+  return colors?.primary ? {...brand, primary: colors.primary, buttonText: colors.buttonText || brand.buttonText} : brand
+}
+
 function stars(rating: number): string {
   const full = Math.round(rating)
   return `${'★'.repeat(full)}${'☆'.repeat(5 - full)}`
@@ -51,24 +79,26 @@ function stars(rating: number): string {
 
 export function layout(
   view: StoreView,
-  page: { title: string; description: string; body: string; jsonLd?: Array<Record<string, unknown>>; image?: string; canonical?: string; bare?: boolean; head?: string },
+  page: { title: string; description: string; body: string; jsonLd?: Array<Record<string, unknown>>; image?: string; canonical?: string; bare?: boolean; popup?: boolean; head?: string; fonts?: string[]; checkout?: boolean },
 ): string {
   const { store, env } = view
-  const brand = store.brand
+  const brand = Object.keys(env.brand).length ? env.brand : store.brand
+  const storeCheckout = page.checkout && store.kind === 'store'
   const cartCount = view.cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0
   const nav = env.theme.nav.length ? env.theme.nav : [{ label: 'Shop', href: '/collections/all' }]
   return `<!doctype html><html lang="${escapeHtml(view.region?.locale ?? 'en-US')}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-${metaTags({ title: page.title, description: page.description, url: page.canonical ?? view.base, ...(page.image ? { image: page.image } : {}) })}
-${fontLink(brand)}
+${metaTags({ title: page.title, description: page.description, url: absolute(view, page.canonical ?? view.base), ...(page.image ? { image: absolute(view, page.image) } : {}) })}
+${fontLink(brand, page.fonts)}
 <style>${themeCss(brand, env.theme)}${BUNDLE_CSS}${PAGE_CSS}</style>
 ${env.theme.customCss ? `<style data-store-css>${env.theme.customCss.replace(/<\/style/gi, '')}</style>` : ''}
 ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
+${storeCheckout ? `<style>${CHECKOUT_CSS}${checkoutBrandCss(checkoutBrand(view))}</style>` : ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
-</head><body data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
+</head><body class="${storeCheckout ? 'checkout-page' : ''}" data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
 <a class="skip" href="#main">Skip to content</a>
-${view.preview ? '<div class="announce" style="background:#1a1a1a">DRAFT PREVIEW — not what customers see</div>' : ''}
+${view.preview ? previewBar(view.env.kind==='live') : ''}
 ${page.bare ? '' : `${brand.announcement ? `<div class="announce">${escapeHtml(brand.announcement)}</div>` : ''}
 ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview })}
 <header class="site"><div class="wrap row">
@@ -76,7 +106,8 @@ ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview }
     ${brand.logoSvg ? `<img src="${escapeHtml(brand.logoSvg)}" alt="">` : ''}
     <span><span class="name">${escapeHtml(store.name)}</span>${brand.slogan ? `<br><span class="sub">${escapeHtml(brand.slogan)}</span>` : ''}</span>
   </a>
-  <nav class="main" aria-label="Main">${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</nav>
+  <button type="button" data-nav-toggle aria-controls="store-navigation" aria-expanded="false" aria-label="Open menu">Menu</button>
+  <nav class="main" id="store-navigation" aria-label="Main">${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</nav>
   <div class="tools">${(view.regions?.length ?? 0) > 1 ? `<form method="post" action="${view.base}/localize"><select name="regionId" aria-label="Country and currency" onchange="this.form.submit()">${(view.regions ?? []).map((region) => `<option value="${escapeHtml(region.id)}" ${region.id === view.region?.id ? 'selected' : ''}>${escapeHtml(region.countries[0] ?? region.name)} · ${escapeHtml(region.currency)}</option>`).join('')}</select></form>` : ''}<a href="${view.base}/cart" style="text-decoration:none">${t(view, 'cart', 'Cart')} (${cartCount})</a></div>
 </div></header>`}
 <main id="main" tabindex="-1">${page.body}</main>
@@ -93,35 +124,136 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
     <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
 </div></footer>`}
-${page.bare ? '' : popupHtml(view.base, env.theme.popup)}
+${page.bare && !page.popup ? '' : popupHtml(view.base, env.theme.popup)}
 ${view.preview ? '' : trackingScript(view.base)}
 ${env.theme.customJs ? `<script data-store-js>${env.theme.customJs.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
+${metaEventsHtml(view)}
+${navigationScript()}
 </body></html>`
 }
 
 /* ---------------------------------------------------------------- pages */
 
-/** A built page. Block pages bring their own header and footer; the theme supplies tokens and the cart. */
-export function blockPage(view: StoreView, page: Page): string {
-  const context = blockContextFor(view.db, view.store, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined)
+/** A built page. `servedAs` gives split-test variants the public page's SEO identity. */
+export function blockPage(view: StoreView, page: Page, servedAs?: { title: string; description: string; canonical: string }): string {
+  const next = funnelNextFor(view.db, view.store.id, page.id)
+  const brand = Object.keys(view.env.brand).length ? view.env.brand : view.store.brand
+  const context = {
+    ...blockContextFor(view.db, { ...view.store, brand }, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined),
+    ...(next ? { funnelNext: `${view.base}${next}` } : {}),
+  }
   return layout(view, {
-    title: page.seo.title || `${page.title} — ${view.store.name}`,
-    description: page.seo.description || page.title,
-    body: renderPageBody(page, context),
+    title: servedAs?.title || page.seo.title || `${page.title} — ${view.store.name}`,
+    description: servedAs?.description || page.seo.description || page.title,
+    body: renderOwnedPageBody(view, page, context),
     ...(page.seo.image ? { image: page.seo.image } : {}),
-    canonical: `${view.base}/pages/${page.handle}`,
+    canonical: servedAs?.canonical ?? `${view.base}/pages/${page.handle}`,
     bare: true,
+    popup: true,
     head: page.headHtml,
+    checkout: true,
+    fonts: page.blocks.flatMap((block) => block.settings._font === 'custom' && typeof block.settings._customFont === 'string' ? [block.settings._customFont] : []),
   })
 }
 
-/** A cloned or hand-written HTML page is served as-is, with only the draft banner added in preview. */
-export function htmlPage(view: StoreView, page: Page): string {
-  const html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
+/** Sanitize copied sections before rendering; native blocks keep their own scripts and interactions. */
+function renderOwnedPageBody(view: StoreView, page: Page, context: BlockContext): string {
+  let imported = false
+  const blocks = page.blocks.map(block => {
+    if (block.type !== 'custom-html' || typeof block.settings.html !== 'string' || !block.settings.html.includes('data-pb-imported-section')) return block
+    imported = true
+    const source = typeof block.settings.sourceUrl === 'string' ? block.settings.sourceUrl : page.sourceUrl
+    return { ...block, settings: { ...block.settings, html: protectImportedForms(rebaseClonedNavigation(block.settings.html, view, source), view.base) } }
+  })
+  return renderPageBody({ ...page, blocks }, context) + (imported ? importedCommerceHtml(view, page, undefined, 'sections') : '')
+}
+
+/** A cloned or hand-written HTML page keeps its body but owns its public metadata. */
+export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput): string {
+  if(checkout&&page.productId)view={...view,checkoutProductId:page.productId}
+  let html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
+  if(html.includes('data-pb-gallery')){
+    html=mapProductGalleries(html,gallery=>{
+      if(gallery.mode!=='product'||!gallery.productId)return gallery
+      const product=getProduct(view.db,view.store.id,gallery.productId)
+      return product&&(view.preview||(product.status==='published'&&!product.metadata.hidden))?{...gallery,items:pageProductData(product,view.store.currency).media}:gallery
+    })
+    html=html.replace(/<script\b[^>]*data-pg-runtime[^>]*>[\s\S]*?<\/script>/gi,'')
+    const runtime='<script data-pg-runtime>'+productGalleryRuntime.replace(/<\/script/gi,'<\\/script')+'</script>'
+    html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>runtime+'</body>'):html+runtime
+  }
+  html = rebaseClonedNavigation(html, view, page.sourceUrl)
+  if (page.sourceUrl || checkout || page.role === 'cart' || /data-pb-imported-section/.test(html)) {
+    html = protectImportedForms(html, view.base, { previewPaymentFields: view.preview && page.role === 'checkout' && !checkout })
+    const parts = checkout ? checkoutParts(view, checkout) : null
+    const owned = importedCommerceHtml(view, page, parts ? { form: parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', t(view, 'pay', 'Pay now')), summary: parts.summary, express: parts.express, ...(checkout?.error ? { error: checkout.error } : {}) } : undefined) + (parts?.script || '')
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, () => owned + '</body>') : html + owned
+  }
+  const themeBrand=Object.keys(view.env.brand).length?view.env.brand:view.store.brand
+  const themeUpdate=importedThemeHtml(themeBrand)
+  if(themeUpdate){html=html.replace(/<\/head>/i,()=>fontLink(themeBrand)+'</head>');html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>themeUpdate+'</body>'):html+themeUpdate}
+  const canonical = absolute(view, `${view.base}/pages/${page.handle}`)
+  const owned: string[] = []
+  if (page.seo.title) owned.push(`<title>${escapeHtml(page.seo.title)}</title>`)
+  if (page.seo.description) owned.push(`<meta name="description" content="${escapeHtml(page.seo.description.slice(0, 300))}">`)
+  owned.push(`<link rel="canonical" href="${escapeHtml(canonical)}">`)
+  owned.push(`<meta property="og:url" content="${escapeHtml(canonical)}">`)
+  if (page.seo.title) owned.push(`<meta property="og:title" content="${escapeHtml(page.seo.title)}">`)
+  if (page.seo.description) owned.push(`<meta property="og:description" content="${escapeHtml(page.seo.description.slice(0, 300))}">`)
+  if (page.seo.image) owned.push(`<meta property="og:image" content="${escapeHtml(absolute(view, page.seo.image))}">`)
+  if (page.headHtml) owned.push(page.headHtml)
+  if (owned.length) {
+    if (page.seo.title) html = html.replace(/<title>[\s\S]*?<\/title>/i, '')
+    if (page.seo.description) html = html.replace(/<meta[^>]+name=["']description["'][^>]*>/gi, '')
+    html = html
+      .replace(/<link[^>]+rel=["']canonical["'][^>]*>/gi, '')
+      .replace(/<meta[^>]+property=["']og:(url|title|description|image)["'][^>]*>/gi, '')
+    const block = `\n${owned.join('\n')}\n`
+    html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (match) => `${match}${block}`) : block + html
+  }
+  const pluginHead=renderSlot(view.db,view.store.id,'headEnd',{}, {preview:view.preview});
+  if(pluginHead)html=/<\/head>/i.test(html)?html.replace(/<\/head>/i,()=>pluginHead+'</head>'):pluginHead+html;
+  const pluginBody=renderSlot(view.db,view.store.id,'bodyEnd',{}, {preview:view.preview})+metaEventsHtml(view);
+  if(pluginBody)html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>pluginBody+'</body>'):html+pluginBody;
   if (!view.preview) return html
-  const banner = '<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a1a1a;color:#fff;font:500 11px/1 system-ui;letter-spacing:.18em;text-transform:uppercase;text-align:center;padding:.7rem">Draft preview — not what customers see</div>'
+  const banner = previewBar(view.env.kind==='live')
   return html.includes('<body') ? html.replace(/<body[^>]*>/i, (match) => `${match}${banner}`) : banner + html
+}
+
+/**
+ * A clone is stored independently from where it is eventually served. Source
+ * themes commonly use root-relative links, which would otherwise leave
+ * `/preview/:slug` (and `/s/:slug` on localhost) and land in the storemill
+ * control plane. Rebase only navigational attributes: image, font and
+ * stylesheet URLs must continue to use their localized or remote locations.
+ */
+export function rebaseClonedNavigation(html: string, view: Pick<StoreView, 'base' | 'store'>, sourceUrl = ''): string {
+  const sourceOrigins = new Set<string>()
+  for (const candidate of [sourceUrl, view.store.referenceUrl]) {
+    try { if (candidate) sourceOrigins.add(new URL(candidate).origin) } catch { /* an old malformed reference is not navigation */ }
+  }
+  const destination = (raw: string) => {
+    const value = raw.replace(/&amp;/gi, '&').trim()
+    if (!value || /^(?:#|mailto:|tel:|javascript:|data:|blob:)/i.test(value)) return raw
+    if (value === view.base || value.startsWith(`${view.base}/`) || /^\/_(?:uploads|media)\//.test(value)) return raw
+    if (value.startsWith('/') && !value.startsWith('//')) return `${view.base}${value}`
+    try {
+      const url = new URL(value, sourceUrl || view.store.referenceUrl || 'https://invalid.local/')
+      if (!sourceOrigins.has(url.origin)) return raw
+      return `${view.base}${url.pathname}${url.search}${url.hash}`
+    } catch {
+      return raw
+    }
+  }
+  const rewrite = (tag: string, attribute: 'href' | 'action' | 'formaction' | 'data-copy-href') => tag.replace(
+    new RegExp(`(\\s${attribute}\\s*=\\s*)(["'])([^"']*)\\2`, 'i'),
+    (_match, prefix: string, quote: string, value: string) => `${prefix}${quote}${escapeHtml(destination(value))}${quote}`,
+  )
+  return html
+    .replace(/<(?:a|area)\b[^>]*>/gi, (tag) => rewrite(rewrite(rewrite(tag, 'href'), 'action'), 'data-copy-href'))
+    .replace(/<form\b[^>]*>/gi, (tag) => rewrite(tag, 'action'))
+    .replace(/<(?:button|input)\b[^>]*>/gi, (tag) => rewrite(tag, 'formaction'))
 }
 
 /* ----------------------------------------------------------------------- home */
@@ -129,9 +261,10 @@ export function htmlPage(view: StoreView, page: Page): string {
 export function home(view: StoreView, input: { featured: Product[]; collections: Collection[] }): string {
   const { store, env } = view
   const theme = env.theme
+  const brand = Object.keys(env.brand).length ? env.brand : store.brand
   const hero = theme.heroImage ?? input.featured[0]?.heroImage ?? ''
   const headline = theme.heroHeadline ?? store.name.toUpperCase()
-  const sub = theme.heroSub ?? store.brand.slogan ?? ''
+  const sub = theme.heroSub ?? brand.slogan ?? ''
   const sections: Record<string, () => string> = {
     hero: () => `<div class="hero">${hero ? `<img src="${escapeHtml(hero)}" alt="">` : ''}
       <div class="inner"><h1>${escapeHtml(headline)}</h1><p>${escapeHtml(sub)}</p>
@@ -143,10 +276,10 @@ export function home(view: StoreView, input: { featured: Product[]; collections:
            <div class="grid">${input.featured.map((product) => productCard(view, product)).join('')}</div></section>`
         : '',
     story: () =>
-      store.brand.description
+      brand.description
         ? `<section class="wrap" style="max-width:min(760px,92vw)"><div class="eyebrow">Why</div>
-           <h2 style="margin:.6rem 0 1.2rem">${escapeHtml(store.brand.slogan ?? '')}</h2>
-           <p class="prose">${escapeHtml(store.brand.description)}</p></section>`
+           <h2 style="margin:.6rem 0 1.2rem">${escapeHtml(brand.slogan ?? '')}</h2>
+           <p class="prose">${escapeHtml(brand.description)}</p></section>`
         : '',
     'collection-grid': () =>
       input.collections.length
@@ -170,8 +303,8 @@ export function home(view: StoreView, input: { featured: Product[]; collections:
     .map((section) => sections[section]?.() ?? '')
     .join('\n')
   return layout(view, {
-    title: `${store.name} — ${store.brand.slogan ?? 'Shop'}`,
-    description: store.brand.description ?? store.name,
+    title: `${store.name} — ${brand.slogan ?? 'Shop'}`,
+    description: brand.description ?? store.name,
     body,
     ...(hero ? { image: hero } : {}),
     canonical: `${view.base}/`,
@@ -209,7 +342,9 @@ export function productPage(
 ): string {
   const { product, stats, reviews, companions } = input
   const content = product.content
-  const media = [product.heroImage, ...product.media.map((entry) => entry.url)].filter(Boolean)
+  const productMedia=pageProductData(product,view.store.currency).media
+  const videos=productMedia.filter(entry=>entry.kind==='video')
+  const media = [product.heroImage, ...productMedia.filter(entry=>entry.kind!=='video').map((entry) => entry.url)].filter(Boolean)
   const unique = [...new Set(media)]
   const cheapest = product.variants.reduce((best, variant) => (variant.priceCents < best.priceCents ? variant : best), product.variants[0]!)
   const url = `${view.base}/products/${product.handle}`
@@ -237,12 +372,7 @@ export function productPage(
   const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.region?.currency ?? view.store.currency, {
     variantPriceCents: convertCents(cheapest.priceCents, view.region, view.store.currency), locale: view.region?.locale,
   }) : ''
-  const buildOptions = bundle ? '' : `<div class="buildopts">
-    <label class="buildopt" data-selected="true"><input type="radio" name="build" value="stock" checked>
-      <span><strong>Stock build</strong><small>Ships in 14 days &middot; ${baseMoney(cheapest.priceCents, view)}</small></span></label>
-    <label class="buildopt"><input type="radio" name="build" value="custom">
-      <span><strong>Custom stitched</strong><small>Your initials, 21 days &middot; ${baseMoney(Math.round(cheapest.priceCents * 1.13), view)}</small></span></label>
-  </div>`
+  const promises = storePromises(view)
 
   const body = `<div class="wrap pdp">
   <div class="gallery">
@@ -250,6 +380,7 @@ export function productPage(
     ${unique.length > 1 ? `<div class="thumbs">${unique
         .map((src, index) => `<button type="button" aria-current="${index === 0}" aria-label="Show image ${index + 1}" data-src="${escapeHtml(src)}"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"></button>`)
         .join('')}</div>` : ''}
+    ${videos.map(video=>`<video controls playsinline preload="metadata" src="${escapeHtml(video.url)}" aria-label="${escapeHtml(video.alt||product.title)}" style="width:100%;margin-top:12px;border-radius:var(--radius)"${video.poster?` poster="${escapeHtml(video.poster)}"`:''}></video>`).join('')}
   </div>
   <div class="buybox">
     <div class="crumbs"><a href="${view.base}/">Home</a> / <a href="${view.base}/collections/all">Shop</a> / ${escapeHtml(product.title)}</div>
@@ -259,18 +390,20 @@ export function productPage(
     <div class="price-row"><div class="price-lg" id="pdp-price">${baseMoney(cheapest.priceCents, view)}</div>${cheapest.compareAtCents && cheapest.compareAtCents > cheapest.priceCents ? `<s class="compare-at">${baseMoney(cheapest.compareAtCents, view)}</s><span class="off">−${Math.round((1 - cheapest.priceCents / cheapest.compareAtCents) * 100)}%</span>` : ''}</div>
     ${pdpSignals(view, product)}
     ${optionBlocks}
-    ${buildOptions}
     <form method="post" action="${view.base}/cart/add" class="buyform" id="pdp-form">
       <input type="hidden" name="variantId" id="pdp-variant" value="${escapeHtml(cheapest.id)}">
       ${bundleWidget || '<input type="hidden" name="quantity" value="1">'}
       <button class="btn btn--wide" type="submit" id="pdp-cta">${t(view, 'add', 'Add to cart')} — <span data-total>${baseMoney(cheapest.priceCents, view)}</span></button>
       <button class="btn btn--wide btn--ghost" type="submit" formaction="${view.base}/checkout/buy">Buy it now</button>
     </form>
-    <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? 'In stock and built to order. Free returns for 30 days.' : 'Made to order. Ships in 14 days.')}</p>
+    <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? `In stock. Returns within ${promises.returnsDays} days.` : 'Made to order.')}</p>
     ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
-    <div class="trust">${(content.trust?.length ? content.trust : [product.tags[0] ?? 'Made in small runs', 'Repaired in-house', 'Free shipping over 200']).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>
-    ${content.guarantee ? `<div class="guarantee"><span class="badge">30</span><div><strong>Thirty-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
-    <div class="payicons small"><i>VISA</i><i>MC</i><i>AMEX</i><i>Apple Pay</i><i>Google Pay</i><i>Link</i></div>
+    ${(() => {
+      const lines = content.trust?.length ? content.trust : [product.tags[0] ?? '', promises.freeOver, `${promises.returnsDays}-day returns`].filter(Boolean)
+      return lines.length ? `<div class="trust">${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>` : ''
+    })()}
+    ${content.guarantee ? `<div class="guarantee"><span class="badge">${promises.guaranteeDays}</span><div><strong>${promises.guaranteeDays}-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
+    ${promises.payments.length ? `<div class="payicons small">${promises.payments.map((method) => `<i>${escapeHtml(method)}</i>`).join('')}</div>` : ''}
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
     ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
     ${companions.length ? upsellWidget(view, companions) : ''}
@@ -309,6 +442,15 @@ ${qaSection(view, product)}
     if(!match) return;
     document.getElementById('pdp-variant').value = match.id;
     document.getElementById('pdp-price').textContent = money(match.price);
+    document.querySelectorAll('#pdp-form .tier').forEach(function(card){
+      var input = card.querySelector('input[name=quantity]'); if (!input) return;
+      var quantity = Number(input.value) || 1, off = Number(input.dataset.discount || 0);
+      var full = match.price * quantity, total = Math.round(full * (1 - off / 100));
+      input.dataset.total = money(total);
+      var b = card.querySelector('[data-tier-total]'); if (b) b.textContent = money(total);
+      var s = card.querySelector('[data-tier-compare]'); if (s) s.textContent = money(full);
+      var each = card.querySelector('[data-tier-unit]'); if (each) each.textContent = money(Math.round(total / quantity)) + ' each';
+    });
     var tier = document.querySelector('#pdp-form input[name=quantity]:checked');
     var total = tier && tier.dataset.total ? tier.dataset.total : money(match.price);
     document.querySelector('#pdp-cta span').textContent = total;
@@ -334,11 +476,6 @@ ${qaSection(view, product)}
       document.getElementById('pdp-main').src = button.dataset.src;
       document.querySelectorAll('.thumbs button').forEach(function(sibling){ sibling.setAttribute('aria-current','false') });
       button.setAttribute('aria-current','true');
-    });
-  });
-  document.querySelectorAll('.buildopt input').forEach(function(input){
-    input.addEventListener('change', function(){
-      document.querySelectorAll('.buildopt').forEach(function(card){ card.dataset.selected = String(card.contains(input) && input.checked) });
     });
   });
 })();
@@ -389,17 +526,39 @@ function conversionSections(view: StoreView, product: Product, content: Product[
     parts.push(`<section class="wrap conv"><div class="promise">
       ${content.shipping ? `<div><div class="eyebrow">Shipping</div><p>${escapeHtml(content.shipping)}</p></div>` : ''}
       ${content.guarantee ? `<div><div class="eyebrow">Guarantee</div><p>${escapeHtml(content.guarantee)}</p></div>` : ''}
-      <div><div class="eyebrow">Repairs</div><p>Handled in-house for as long as we are here. Post it back; we fix it and send it home.</p></div>
     </div></section>`)
   }
   return parts.join('\n')
 }
 
+/** A path made absolute for canonical and Open Graph tags. */
+export function absolute(view: StoreView, path: string): string {
+  if (!path || /^[a-z]+:/i.test(path) || path.startsWith('//')) return path
+  const home = publicStoreUrl(view.db, view.store)
+  const origin = view.base && home.endsWith(view.base) ? home.slice(0, -view.base.length) : home
+  return `${origin}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
+/** Only show storefront promises backed by the store's actual configuration. */
+function storePromises(view: StoreView): { freeOver: string; returnsDays: number; guaranteeDays: number; payments: string[] } {
+  const legal = legalFor(view.db, view.store)
+  const region = view.region ?? defaultRegion(view.db, view.store.id)
+  const threshold = region?.shipping.find((option) => option.freeAboveCents !== null)?.freeAboveCents ?? null
+  return {
+    freeOver: threshold === null ? '' : `Free shipping over ${money(threshold, view)}`,
+    returnsDays: legal.returnsDays,
+    guaranteeDays: legal.guaranteeDays,
+    payments: stripeFor(view.db, view.store.id) ? ['VISA', 'MC', 'AMEX', 'Apple Pay', 'Google Pay', 'Link'] : [],
+  }
+}
+
 /** The live signals under the price: delivery window, viewers, stock. All from real data; each hides when it has nothing honest to say. */
 function pdpSignals(view: StoreView, product: Product): string {
   const parts: string[] = []
-  const estimate = deliveryEstimate(product.supplier)
-  parts.push(`<div class="edd" data-cutoff="15"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${escapeHtml(estimate.from)} – ${escapeHtml(estimate.to)}</b></div></div>`)
+  if (product.supplier.shippingDaysMin !== undefined && product.supplier.shippingDaysMax !== undefined) {
+    const estimate = deliveryEstimate(product.supplier)
+    parts.push(`<div class="edd" data-cutoff="15"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${escapeHtml(estimate.from)} – ${escapeHtml(estimate.to)}</b></div></div>`)
+  }
   const stock = product.variants.reduce((sum, variant) => sum + Math.max(0, variant.inventory), 0)
   if (stock > 0 && stock <= 15) parts.push(`<div class="scarcity"><div class="meta">Only <b>${stock}</b> left in this batch</div><div class="track"><div class="fill" style="width:${Math.max(6, Math.round((stock / 15) * 100))}%"></div></div></div>`)
   const viewers = view.preview ? 0 : viewersNow(view.db, view.store.id, product.id)
@@ -416,12 +575,12 @@ function qaSection(view: StoreView, product: Product): string {
 
 /* --------------------------------------------------------------- tracking */
 
-export function trackPage(view: StoreView, input: { tracking?: TrackingView | null; error?: string; related?: Product[] }): string {
+export function trackPage(view: StoreView, input: { tracking?: TrackingView | null; error?: string; related?: Product[]; number?: string }): string {
   const { tracking } = input
   const body = `<section class="wrap" style="max-width:min(720px,92vw)">
     <div class="eyebrow">Track your order</div><h2 style="margin:.6rem 0 1rem">Where is it?</h2>
     ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1rem">${escapeHtml(input.error)}</div>` : ''}
-    <form method="get" action="${view.base}/track" class="two" style="margin-bottom:2rem"><div class="field"><label>Order number</label><input name="order" placeholder="1001" required value="${escapeHtml(tracking?.order.displayId ?? '')}"></div><div class="field"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><button class="btn" type="submit" style="grid-column:1/-1">Find my order</button></form>
+    <form method="get" action="${view.base}/track" class="two" style="margin-bottom:2rem"><div class="field"><label>Order number</label><input name="order" placeholder="1001" required value="${escapeHtml(tracking?.order.displayId ?? input.number ?? '')}"></div><div class="field"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><button class="btn" type="submit" style="grid-column:1/-1">Find my order</button></form>
     ${tracking ? `<div class="timeline">${tracking.steps.map((step) => `<div class="step ${step.done ? 'done' : ''}"><i></i><div><strong>${escapeHtml(step.label)}</strong><div class="micro">${step.at ? escapeHtml(step.at.slice(0, 10)) : ''}${step.detail ? ` · ${escapeHtml(step.detail)}` : ''}</div></div></div>`).join('')}</div>
       ${tracking.live ? `<div class="notice" style="margin:1.2rem 0"><div class="row" style="justify-content:space-between;align-items:center"><div><div class="eyebrow">Live carrier status</div><strong>${escapeHtml(tracking.live.subStatus || tracking.live.status || 'Tracking registered')}</strong></div><span class="micro">Synced by 17TRACK${tracking.live.syncedAt ? ` · ${escapeHtml(tracking.live.syncedAt.slice(0, 16).replace('T', ' '))}` : ''}</span></div></div>` : ''}
       ${tracking.tracking ? `<p><a class="btn btn--ghost" href="${escapeHtml(tracking.tracking.url)}" target="_blank" rel="noopener">Track with ${escapeHtml(tracking.tracking.carrier)} ↗</a></p>` : tracking.estimate ? `<p class="micro">Estimated delivery ${escapeHtml(tracking.estimate.from)} – ${escapeHtml(tracking.estimate.to)}. You will get the tracking number the moment it ships.</p>` : ''}
@@ -436,14 +595,23 @@ export function trackPage(view: StoreView, input: { tracking?: TrackingView | nu
 
 export function bumpHtml(view: StoreView, bump: ResolvedBump | null): string {
   if (!bump) return ''
-  return `<label class="bump"><input type="checkbox" name="bumpVariantId" value="${escapeHtml(bump.variantId)}" ${bump.product.metadata.kind === 'shipping-protection' ? 'checked' : ''}>
+  return `<label class="bump"><input type="checkbox" name="bumpVariantId" value="${escapeHtml(bump.variantId)}" ${view.cart?.items.some(item => item.variantId === bump.variantId) ? 'checked' : ''}>
     <span><strong>${escapeHtml(bump.label)} — ${baseMoney(bump.priceCents, view)}</strong><span class="micro" style="display:block">${escapeHtml(bump.text)}</span></span></label>`
 }
 
-export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell'): string {
+export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell', action = `${view.base}/orders/${order.id}/${step==='upsell'?'offer':'downsell'}`): string {
   const basePrice = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
   const price = convertCents(basePrice, view.region, view.store.currency)
   const compareAt = convertCents(offer.priceCents, view.region, view.store.currency)
+  const template=offer.pageId?getPage(view.db,view.store.id,offer.pageId):null
+  if(template?.mode==='html'&&template.rawHtml){
+    let copied=htmlPage(view,{...template,rawHtml:template.rawHtml.replace(/<(?:a|button)\b[^>]*(?:#yes-link|#no-link)[^>]*>/gi,tag=>tag.replace(/>$/, ' data-owned-offer>'))})
+    const variants=offer.product.variants
+    const controls=`<section data-owned-offer style="position:sticky;bottom:0;z-index:2147483000;padding:16px;background:#fff;color:#171717;border-top:1px solid #ddd;font:16px/1.4 system-ui;box-shadow:0 -4px 24px #0002"><form data-owned-offer-form id="owned-offer-form" method="post" action="${escapeHtml(action)}" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><label>Offer <select name="variantId" aria-label="Offer option" style="max-width:100%">${variants.map(variant=>{const total=convertCents(Math.round(variant.priceCents*(1-offer.discountPercent/100)),view.region,view.store.currency);return `<option value="${escapeHtml(variant.id)}" data-price="${escapeHtml(format(total,order.currency))}" ${variant.id===offer.variantId?'selected':''}>${escapeHtml(variant.title)} — ${format(total,order.currency)}</option>`}).join('')}</select></label><button type="submit" name="accept" value="yes">${offer.pending?'Check payment status':'Yes, add to my order'} — <span data-offer-price>${format(price,order.currency)}</span></button><button type="submit" name="accept" value="no" ${offer.pending?'disabled':''}>No thanks, continue</button><span role="status" data-offer-status>${offer.pending?'A payment is awaiting confirmation for this option.':''}</span></form></section>`
+    const script=`<script data-owned-offer>(function(){const form=document.getElementById('owned-offer-form'),select=form.elements.variantId;function choose(id){if([...select.options].some(option=>option.value===id)){select.value=id;form.querySelector('[data-offer-price]').textContent=select.selectedOptions[0].dataset.price;}}select.addEventListener('change',()=>choose(select.value));document.addEventListener('click',event=>{const node=event.target.closest('a,button,[data-copy-variant-id]');if(!node||form.contains(node))return;if(${Boolean(offer.pending)}){event.preventDefault();return;}const href=node.getAttribute('href')||node.dataset.yesLink||node.dataset.noLink||'';if(node.dataset.copyVariantId)choose(node.dataset.copyVariantId);if(!/^#(?:yes-link|no-link)/.test(href))return;event.preventDefault();event.stopImmediatePropagation();const yes=href.startsWith('#yes-link');form.requestSubmit(form.querySelector('[value="'+(yes?'yes':'no')+'"]'));},true);form.addEventListener('submit',()=>{form.querySelector('[data-offer-status]').textContent='Updating your order…';});if(new URLSearchParams(location.search).get('offer')==='pending')form.querySelector('[data-offer-status]').textContent='Payment is awaiting confirmation. Retry the same option to check the same payment.';if(new URLSearchParams(location.search).get('offer')==='failed')form.querySelector('[data-offer-status]').textContent='The previous offer was not added because its payment did not complete.';})();</script>`
+    copied=/<\/body>/i.test(copied)?copied.replace(/<\/body>/i,()=>controls+script+'</body>'):copied+controls+script
+    return copied
+  }
   const body = `<section class="wrap upsell-page">
     <div class="eyebrow">Order #${order.displayId} confirmed — ${step === 'downsell' ? 'one last thing' : 'one more thing'}</div>
     <h1 style="font-size:clamp(1.8rem,4vw,2.8rem);margin:.6rem 0 1.2rem">${escapeHtml(offer.headline)}</h1>
@@ -451,8 +619,8 @@ export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, s
       <div><p class="lead" style="margin:0 0 .6rem">${escapeHtml(offer.text)}</p>
         <div class="price-lg">${format(price, order.currency, view.region?.locale)} ${offer.discountPercent ? `<s class="micro">${format(compareAt, order.currency, view.region?.locale)}</s>` : ''}</div>
         <p class="micro">Ships with your order. ${order.paymentProvider === 'stripe' ? 'Charged to the card you just used — no form.' : 'Added to your order in one click.'}</p>
-        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency, view.region?.locale)}</button></form>
-        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
+        <form method="post" action="${escapeHtml(action)}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency, view.region?.locale)}</button></form>
+        <form method="post" action="${escapeHtml(action)}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
       </div></div></section>`
   return layout(view, { title: `One more thing — ${view.store.name}`, description: 'Your order', body, bare: true })
 }
@@ -516,8 +684,8 @@ export function cartPage(view: StoreView, totals: Totals): string {
   const gap = totals.freeShippingGapCents
   const body = `<section class="wrap"><div class="section-head"><h2>${t(view, 'cart', 'Your cart')}</h2><span class="eyebrow">${items.length} lines</span></div>
   ${items.length
-      ? `<div style="display:grid;gap:3rem;grid-template-columns:1.4fr .8fr;align-items:start">
-    <table class="lines">${items
+      ? `<div class="cart-layout">
+    <table class="lines cart-lines">${items
       .map(
         (item) => `<tr><td style="width:80px"><img src="${escapeHtml(item.image)}" alt=""></td>
         <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}${item.source ? ` &middot; added from ${escapeHtml(item.source)}` : ''}</div></td>
@@ -576,13 +744,13 @@ export type CheckoutInput = {
  * a demo order so the flow can be walked end to end.
  */
 /** The pieces of the checkout, built once from the cart, so the built-in page and a checkout laid out from blocks render the same form. */
-export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string } {
+export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string; shippingHtml: string } {
   const { totals, region } = input
   const cart = view.cart
   const draft = cart?.checkout ?? {}
   const items = cart?.items ?? []
   const shipping = (region?.shipping ?? []).map((option) => {
-    const free = totals.appliedPromotions.some((promotion) => promotion.amountCents === 0 && /shipping/i.test(promotion.title)) && option.position === 0
+    const free = totals.appliedPromotions.some((promotion) => promotion.kind === 'free_shipping') && option.position === 0
     const clears = option.freeAboveCents !== null && totals.subtotalCents - totals.discountCents >= option.freeAboveCents
     const amount = free || clears ? 0 : option.amountCents
     return { id: option.id, name: option.name, amountCents: amount, listCents: option.amountCents, selected: option.id === totals.shippingOptionId }
@@ -595,64 +763,59 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const firstProduct = items[0] ? getProduct(view.db, view.store.id, items[0].productId) : null
   const arrival = firstProduct ? deliveryEstimate(firstProduct.supplier) : null
   const proof = listReviews(view.db, view.store.id, { status: 'approved', limit: 3 }).filter((review) => !items.length || items.some((item) => item.productId === review.productId)).slice(0, 3)
+  const pricedLines = cart ? cartDisplayLines(view.db, view.store.id, cart, totals) : []
+  const code = totals.appliedPromotions.find(p => p.code && p.code === cart?.discountCode)?.code || ''
   const summary = `<div class="summary-body">
-    <table class="lines">${items.map((item) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
-      <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
-      <td style="text-align:right">${item.unitCents ? baseMoney(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
-    <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
-    ${totalsBlock(view, totals)}</div>`
-  const bump = input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''
-  const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''
-  const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
-      <section class="co-block"><h2>${t(view, 'contact', 'Contact')}</h2>
-        <div class="field"><input name="email" type="email" required autocomplete="email" placeholder="Email" value="${escapeHtml(draft.email ?? '')}" aria-label="Email"></div>
-        <label class="micro check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
-      <section class="co-block"><h2>${t(view, 'delivery', 'Delivery')}</h2>
-        <div class="field"><select name="country" autocomplete="country" aria-label="Country">${(region?.countries.length ? region.countries : ['US']).map((country) => `<option value="${escapeHtml(country)}" ${draft.address?.country === country ? 'selected' : ''}>${escapeHtml(countryName(country))}</option>`).join('')}</select></div>
-        <div class="two"><div class="field"><input name="firstName" required autocomplete="given-name" placeholder="First name" value="${escapeHtml((draft.name ?? '').split(' ')[0] ?? '')}" aria-label="First name"></div>
-          <div class="field"><input name="lastName" required autocomplete="family-name" placeholder="Last name" value="${escapeHtml((draft.name ?? '').split(' ').slice(1).join(' '))}" aria-label="Last name"></div></div>
-        <div class="field"><input name="line1" required autocomplete="address-line1" placeholder="Address" value="${escapeHtml(draft.address?.line1 ?? '')}" aria-label="Address"></div>
-        <div class="two"><div class="field"><input name="city" required autocomplete="address-level2" placeholder="City" value="${escapeHtml(draft.address?.city ?? '')}" aria-label="City"></div>
-          <div class="field"><input name="postal" required autocomplete="postal-code" placeholder="Postal code" value="${escapeHtml(draft.address?.postal ?? '')}" aria-label="Postal code"></div></div>
-        <div class="field"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for delivery updates)" value="${escapeHtml(draft.phone ?? '')}" aria-label="Phone"></div></section>
-      <section class="co-block"><h2>Shipping method</h2>${arrival ? `<p class="micro" style="margin-top:-.4rem">🚚 Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}</p>` : ''}
-        <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : option.listCents ? `<s class="micro">${money(option.listCents, view)}</s> Free` : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
-      <!--bump-->
-      <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
-        ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
-          <p class="micro">No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.</p></div>`}
-        <label class="micro check" style="margin-top:.8rem"><input type="checkbox" name="billingSame" value="true" checked> Billing address same as shipping</label></section>
-      <button class="btn btn--wide pay" type="submit" id="pay"><span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
-    </form>`
-  const script = `<script>
-(function(){
-  var base = ${JSON.stringify(view.base)};
-  var fmt = ${JSON.stringify({ currency: totals.currency, minor: minorDigits(totals.currency) })};
-  function money(c){ var value=c/Math.pow(10,fmt.minor);try { return new Intl.NumberFormat(${JSON.stringify(view.region?.locale ?? 'en-US')},{style:'currency',currency:fmt.currency}).format(value) } catch(e){ return value.toFixed(fmt.minor) } }
-  function refresh(t){
-    document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
-    document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
-    if (window.__elements) window.__elements.update({ amount: t.totalCents });
+    <table class="lines" aria-label="Order items"><tbody>${items.map((item, index) => `<tr><td><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b aria-label="Quantity ${item.quantity}">${item.quantity}</b></span></td>
+      <td><div>${escapeHtml(item.title)}</div>${/^(default( title)?|standard)$/i.test(item.variantTitle) ? '' : `<div class="micro">${escapeHtml(item.variantTitle)}</div>`}</td>
+      <td>${(pricedLines[index]?.compareAtLineCents || 0) > (pricedLines[index]?.lineCents || 0) ? `<s class="micro">${money(pricedLines[index]!.compareAtLineCents, view)}</s>` : ''}${item.unitCents ? money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</tbody></table>
+    <form method="post" action="${view.base}/checkout/code" class="code" novalidate><div class="field co-field"><input name="code" placeholder=" " aria-label="Discount code"><label>Discount code</label></div><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
+    <p class="co-error" data-code-error role="status"></p>
+    ${code ? `<div class="co-code-chip">${escapeHtml(code)}<button type="button" data-remove-code aria-label="Remove discount ${escapeHtml(code)}">×</button></div>` : ''}
+    ${totalsBlock(view, totals).replace(/(<div class="grand"><span>[^<]*<\/span><span)/, '$1 data-currency="'+escapeHtml(totals.currency)+'"')}</div>`
+  const bump = `<section class="co-block" data-owned-bump-slot>${input.bump?bumpHtml(view,input.bump):''}</section>`
+  const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : view.preview ? `<div class="express"><div class="eyebrow">Express checkout <span class="co-preview-label">Preview</span></div><div class="co-wallet-preview" aria-label="Express payment previews"><button type="button" disabled class="co-wallet-apple">Apple Pay</button><button type="button" disabled class="co-wallet-google"><b>G</b> Pay</button><button type="button" disabled class="co-wallet-link">link <span>›</span></button></div><p class="co-wallet-help">Available wallets appear when payments are connected.</p><div class="or"><span>or</span></div></div>` : ''
+  const countries = [...new Set((view.regions || [region]).flatMap(r=>r?.countries||[]))]
+  const sameBilling = draft.billingSame !== false
+  const addressMarkup = (billing = false) => {
+    const fields = addressFields(billing ? draft.billingAddress : {...draft.address,name:draft.name}, countries, billing)
+    if (view.store.kind !== 'store') return fields
+    const mode = billing ? 'billing' : 'shipping'
+    return `<div data-checkout-address="${mode}"><div data-address-element hidden></div><div data-address-fallback>${fields}</div>${input.stripe ? '<button type="button" class="co-address-switch" data-address-manual hidden>Enter address manually</button><p class="co-address-help" data-address-help hidden role="status"></p>' : ''}</div>`
   }
-  var bumps = document.querySelectorAll('.bump input');
-  bumps.forEach(function(bump){ bump.addEventListener('change', function(){
-    bumps.forEach(function(other){ other.checked = bump.checked });
-    fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: bump.value, on: bump.checked }) })
-      .then(function(r){ return r.json() }).then(refresh);
-  })});
-  document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
-    fetch(base + '/checkout/shipping', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ shippingOptionId: radio.value }) })
-      .then(function(r){ return r.json() }).then(refresh);
-  })});
-})();
-</script>
+  const cardPreview = `<div class="co-card-preview" aria-label="Payment form preview">${checkoutField('preview-card','Card number','',{disabled:true})}<div class="two">${checkoutField('preview-expiry','MM / YY','',{disabled:true,ariaLabel:'Expiration date (MM / YY)'})}${checkoutField('preview-cvc','Security code','',{disabled:true})}</div>${checkoutField('preview-card-name','Name on card','',{disabled:true})}</div>`
+  const shippingHtml = `${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : 'FREE'}</b></label>`).join('') : '<p class="micro">Shipping is not available for this destination.</p>'}`
+  const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate data-preview="${view.preview}">
+      ${funnelSelection(view)}
+      <div class="co-error" id="checkout-error" role="alert"></div>
+      <section class="co-block"><h2>${t(view, 'contact', 'Contact')}</h2>
+        ${checkoutField('email','Email',draft.email||'',{type:'email',required:true,autocomplete:'email'})}
+        <label class="check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
+      <section class="co-block"><h2>${t(view, 'delivery', 'Delivery')}</h2>
+        ${addressMarkup()}
+        ${checkoutField('phone','Phone (optional)',draft.phone||'',{type:'tel',autocomplete:'shipping tel'})}
+      </section>
+      <section class="co-block"><h3>Shipping method</h3>
+        <div class="methods" id="methods">${shippingHtml}</div></section>
+      <!--bump-->
+      <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro pay-description">${input.stripe ? 'Payments are processed securely by Stripe.' : view.preview ? 'Secure payment options for your checkout.' : 'Review your order before confirming.'}</p>
+        ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="co-error" role="alert"></div>' : `<div class="pay-demo"><div class="row"><strong>${CHECKOUT_ICONS.lock} Credit card</strong><span class="cards" aria-label="Visa, Mastercard, American Express"><i>VISA</i><i class="mc">MC</i><i>AMEX</i></span></div>
+          ${view.preview ? cardPreview : ''}<p class="co-preview-note" ${view.preview?'':'style="padding-top:14px"'}>${view.preview ? 'Preview only. No payment is collected or order placed.' : 'Card payments are currently unavailable. This order will be submitted without a charge.'}</p></div>`}
+        <label class="check" style="margin-top:16px"><input type="checkbox" name="billingSame" value="true" ${sameBilling?'checked':''}> Use shipping address as billing address</label>
+        <fieldset class="co-billing" ${sameBilling?'hidden disabled':''}><legend class="micro">Billing address</legend>${addressMarkup(true)}</fieldset>
+      </section>
+      <button class="btn btn--wide pay" type="submit" id="pay" ${view.preview || view.store.kind === 'funnel' && !items.length ? 'disabled' : ''}>${view.store.kind === 'store' ? CHECKOUT_ICONS.lock : ''}<span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
+    </form>`
+  const script = `<script>window.__CHECKOUT=${JSON.stringify({base:view.base,currency:totals.currency,locale:view.region?.locale||'en-US',preview:view.preview}).replace(/</g,'\\u003c')};
+${readFileSync(new URL('./checkout.js', import.meta.url),'utf8')}</script>
+${view.store.kind === 'funnel' ? `<script>window.__FUNNEL_CHECKOUT=${JSON.stringify({ base: view.base, preview: view.preview, hasSelection: items.length > 0, currency: totals.currency, minor: minorDigits(totals.currency) }).replace(/</g, '\\u003c')};\n${readFileSync(new URL('./funnel-checkout.js', import.meta.url), 'utf8')}</script>` : ''}
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
   const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
   const proofHtml = `<div class="co-proof">
       <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
       ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
     </div>`
-  return { summary, form, express, bump, script, note, proof: proofHtml }
+  return { summary, form, express, bump, script, note, proof: proofHtml, shippingHtml }
 }
 
 /**
@@ -667,21 +830,19 @@ ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
 export function checkoutPage(view: StoreView, input: CheckoutInput): string {
   const { totals } = input
   const parts = checkoutParts(view, input)
-  const body = `<div class="checkout">
+  const body = `${checkoutHeader(view)}<div class="checkout">
   <div class="co-main">
-    <a class="co-logo" href="${view.base}/">${escapeHtml(view.store.name)}</a>
     ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${escapeHtml(input.error)}</div>` : ''}
     <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${parts.summary}</details>
     ${parts.express}
     ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', t(view, 'pay', 'Pay now'))}
-    <p class="micro center">${parts.note}</p>
-    ${parts.proof}
+    ${checkoutFooter(view)}
   </div>
   <aside class="co-side">${parts.summary}</aside>
 </div>
 ${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}
 ${parts.script}`
-  return layout(view, { title: `Checkout — ${view.store.name}`, description: 'Checkout', body, bare: true })
+  return layout(view, { title: `Checkout — ${view.store.name}`, description: 'Checkout', body, bare: true, checkout: true })
 }
 
 /**
@@ -691,11 +852,17 @@ ${parts.script}`
  * scripts that keep the totals live ride along once, after the blocks.
  */
 export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutInput, opts: { sample?: boolean } = {}): string {
+  if(page.productId)view={...view,checkoutProductId:page.productId}
+  // Existing merchant headers/footers retain their chosen placement.
+  page={...page,blocks:page.blocks.map(block=>block.type==='checkout-form'?{...block,settings:{...block.settings,showHeader:block.settings.showHeader??(view.store.kind==='store'&&!page.blocks.some(b=>b.type==='header')),showPolicies:block.settings.showPolicies??(view.store.kind==='store'&&!page.blocks.some(b=>b.type==='footer'))}}:block)}
   const parts = checkoutParts(view, input)
+  const brand = Object.keys(view.env.brand).length ? view.env.brand : view.store.brand
   const context: BlockContext = {
-    ...blockContextFor(view.db, view.store, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined),
+    ...blockContextFor(view.db, { ...view.store, brand }, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined),
     checkout: {
       formHtml: parts.form,
+      headerHtml: view.store.kind === 'store' ? checkoutHeader(view) : '',
+      footerHtml: view.store.kind === 'store' ? checkoutFooter(view) : '',
       summaryHtml: parts.summary,
       expressHtml: parts.express,
       bumpHtml: parts.bump,
@@ -708,38 +875,97 @@ export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutIn
   return layout(view, {
     title: page.seo.title || `Checkout — ${view.store.name}`,
     description: page.seo.description || 'Checkout',
-    body: `${renderPageBody(page, context)}${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}${parts.script}`,
+    body: `${renderOwnedPageBody(view, page, context)}${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}${parts.script}`,
     bare: true,
     head: page.headHtml,
+    checkout: true,
+    fonts: page.blocks.flatMap((block) => block.settings._font === 'custom' && typeof block.settings._customFont === 'string' ? [block.settings._customFont] : []),
   })
 }
 
+function checkoutHeader(view:StoreView):string {
+  const brand=checkoutBrand(view)
+  let logo=brand.logoSvg
+  // Older imports predate logo extraction. Read their owned header without changing saved pages or branding.
+  if(logo===undefined&&view.store.kind==='store') {
+    const pages=listPages(view.db,view.store.id).filter(p=>(view.preview||p.status==='published')&&p.mode==='html'&&p.role!=='checkout')
+    pages.sort((a,b)=>Number(b.isHome)-Number(a.isHome))
+    for(const page of pages.slice(0,4)){logo=logoFromClone(page.rawHtml);if(logo)break}
+  }
+  return `<header class="co-header"><div class="co-header-in"><a class="co-logo" href="${view.base}/">${logo?`<img src="${escapeHtml(logo)}" alt="${escapeHtml(view.store.name)}">`:escapeHtml(view.store.name)}</a><div class="co-header-actions">${view.store.kind==='store'?`<span class="co-header-secure">${CHECKOUT_ICONS.lock} Secure checkout</span>`:''}<a class="co-cart-link" href="${view.base}/cart" aria-label="Return to cart">${CHECKOUT_ICONS.bag}</a></div></div></header>`
+}
+function checkoutFooter(view:StoreView):string {
+  const pages=listPages(view.db,view.store.id).filter(p=>view.preview||p.status==='published')
+  const policies=[['Refund policy',/refund|return/i],['Shipping policy',/shipping/i],['Privacy policy',/privacy/i],['Terms of service',/terms/i]] as const
+  const links=policies.map(([title,pattern])=>{const page=pages.find(p=>pattern.test(p.title+' '+p.handle));const fallback=title==='Privacy policy'?'privacy':title==='Terms of service'?'terms':'';return page||fallback?`<a href="${view.base}/pages/${escapeHtml(page?.handle||fallback)}" target="_blank" rel="noopener">${title}</a>`:''}).join('')
+  return `<p class="co-secure">${CHECKOUT_ICONS.lock} <span data-checkout-security>Secure checkout</span></p><footer class="co-footer">${links}</footer>`
+}
+
 function stripeScript(view: StoreView, publishableKey: string, totals: Totals): string {
+  const region=view.region||defaultRegion(view.db,view.store.id)
+  const brand=checkoutBrand(view)
+  const palette=checkoutPalette(brand)
   return `<script src="https://js.stripe.com/v3/"></script>
 <script>
+${view.store.kind==='store'?readFileSync(new URL('./checkout-address.js',import.meta.url),'utf8'):''}
 (function(){
   var base = ${JSON.stringify(view.base)};
+  if (typeof Stripe !== 'function') { var box=document.getElementById('payment-error'); if(box)box.textContent='Secure payment could not load. Check your connection and reload.'; document.getElementById('pay').disabled=true; return; }
   var stripe = Stripe(${JSON.stringify(publishableKey)});
-  var elements = stripe.elements({ mode: 'payment', amount: ${totals.totalCents}, currency: ${JSON.stringify(totals.currency.toLowerCase())}, setupFutureUsage: 'off_session',
-    appearance: { theme: 'stripe', variables: { colorPrimary: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#1a1a1a', borderRadius: '6px', fontFamily: 'inherit' } } });
+  var elements,express;
+  function initialize(amount){
+  if(amount<=0)return;
+  if(elements){elements.update({amount:amount});return;}
+  elements = stripe.elements({ mode: 'payment', amount: amount, currency: ${JSON.stringify(totals.currency.toLowerCase())}, setupFutureUsage: 'off_session', syncAddressCheckbox: 'none',
+    appearance: { theme: 'stripe', variables: { colorPrimary: ${JSON.stringify(palette.link)}, colorText: '#1a1a1a', colorBackground: '#ffffff', colorDanger: '#c5280c', borderRadius: '6px', fontFamily: 'Arial, Helvetica, sans-serif', fontSizeBase: '16px', spacingUnit: '4px' } } });
   window.__elements = elements;
-  var payment = elements.create('payment', { layout: 'accordion' }); payment.mount('#payment-element');
-  var express = elements.create('expressCheckout', { buttonHeight: 48 }); express.mount('#express-element');
+  var payment = elements.create('payment', { layout: 'accordion', fields:{billingDetails:{address:'never',name:'never',email:'never',phone:'never'}} }); payment.mount('#payment-element');
+  ${view.store.kind==='store'?'window.__checkoutAddress = mountCheckoutAddresses(elements, form);':''}
+  if(document.getElementById('express-element')){
+  express = elements.create('expressCheckout', { buttonHeight: 48, emailRequired:true, billingAddressRequired:true, shippingAddressRequired:true, allowedShippingCountries:${JSON.stringify(region?.countries||['US'])}, shippingRates:shippingRates() }); express.mount('#express-element');
   express.on('ready', function(ev){ if (!ev.availablePaymentMethods) document.querySelector('.express').style.display = 'none' });
+  express.on('click',function(event){event.resolve({shippingRates:shippingRates()})});
+  express.on('shippingaddresschange',function(event){if(!${JSON.stringify(region?.countries||['US'])}.includes(event.address.country)){event.reject();return;}event.resolve({shippingRates:shippingRates()});});
+  express.on('shippingratechange',async function(event){
+    try{var response=await fetch(base+'/checkout/shipping',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({shippingOptionId:event.shippingRate.id})});var data=await response.json();if(!response.ok||data.error)throw new Error(data.error);elements.update({amount:data.totalCents});document.querySelectorAll('#methods input').forEach(function(radio){radio.checked=radio.value===event.shippingRate.id;radio.dataset.confirmed=String(radio.checked)});document.querySelectorAll('.summary-body').forEach(function(el){el.outerHTML=data.summaryHtml});document.querySelectorAll('[data-pay-total],.co-summary-mobile summary b').forEach(function(el){el.textContent=new Intl.NumberFormat(undefined,{style:'currency',currency:data.currency}).format(data.totalCents/Math.pow(10,${minorDigits(totals.currency)}))});event.resolve();}catch(error){event.reject();errorBox.textContent=error.message||'Could not update shipping.';}
+  });
+  express.on('confirm', function(event){
+    var shipping=event.shippingAddress,billing=event.billingDetails||{},address=shipping&&shipping.address;
+    if(!address){errorBox.textContent='Choose a delivery address in your wallet.';event.paymentFailed({reason:'fail'});return;}
+    var name=(shipping.name||billing.name||'').split(' ');
+    var details=Object.assign(draft(),{email:billing.email||'',firstName:name.shift()||'',lastName:name.join(' '),line1:address.line1||'',line2:address.line2||'',city:address.city||'',state:address.state||'',postal:address.postal_code||'',country:address.country,phone:billing.phone||'',billingSame:'false',billingFirstName:(billing.name||'').split(' ')[0],billingLastName:(billing.name||'').split(' ').slice(1).join(' '),billingLine1:billing.address?.line1||address.line1,billingLine2:billing.address?.line2||'',billingCity:billing.address?.city||address.city,billingState:billing.address?.state||address.state,billingPostal:billing.address?.postal_code||address.postal_code,billingCountry:billing.address?.country||address.country});
+    pay(details,billing,event);
+  });
+  }
+  }
   var form = document.getElementById('checkout-form'), button = document.getElementById('pay'), errorBox = document.getElementById('payment-error');
+  function shippingRates(){return Array.from(document.querySelectorAll('#methods input')).sort(function(a,b){return Number(b.checked)-Number(a.checked)}).map(function(radio){return {id:radio.value,amount:Number(radio.dataset.amount),displayName:radio.closest('label').querySelector('span').textContent}})}
   function draft(){ var d = new FormData(form); var o = {}; d.forEach(function(v,k){ o[k] = v }); return o }
-  async function pay(confirmWith){
-    button.disabled = true; errorBox.textContent = '';
-    var prepared = await fetch(base + '/checkout/prepare', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(draft()) }).then(function(r){ return r.json() });
-    if (!prepared.ok) { errorBox.textContent = prepared.error || 'Check your details'; button.disabled = false; return }
-    var submitted = await elements.submit(); if (submitted.error) { errorBox.textContent = submitted.error.message; button.disabled = false; return }
-    var intent = await fetch(base + '/checkout/intent', { method:'POST' }).then(function(r){ return r.json() });
-    if (!intent.clientSecret) { errorBox.textContent = intent.error || 'Could not start the payment'; button.disabled = false; return }
-    var result = await stripe.confirmPayment({ elements: elements, clientSecret: intent.clientSecret, confirmParams: { return_url: location.origin + base + '/checkout/complete' } });
-    if (result.error) { errorBox.textContent = result.error.message; button.disabled = false }
+  var paying = false;
+  async function pay(walletDraft,walletBilling,walletEvent){
+    if (paying) return;
+    if (!elements || form.dataset.funnelSelectionReady==='false') { errorBox.textContent='Choose a package before continuing to payment.'; return; }
+    paying = true; button.disabled = true; errorBox.textContent = '';
+    form.dataset.paymentInProgress='true';
+    var resumeAddress=walletDraft&&window.__checkoutAddress?window.__checkoutAddress.useWallet(walletDraft):null;
+    try {
+      if(!walletDraft&&window.__checkoutAddress&&!await window.__checkoutAddress.validate()) throw new Error('Complete your delivery and billing address.');
+      var prepared = await fetch(base + '/checkout/prepare', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(walletDraft||draft()) }).then(function(r){ return r.json() });
+      if (!prepared.ok) throw new Error(prepared.error || 'Check your details');
+      var submitted = await elements.submit(); if (submitted.error) throw new Error(submitted.error.message);
+      var intent = await fetch(base + '/checkout/intent', { method:'POST' }).then(function(r){ return r.json() });
+      if (!intent.clientSecret) throw new Error(intent.error || 'Could not start the payment');
+      var data=walletDraft||draft(),same=data.billingSame==='true',prefix=same?'':'billing';
+      function value(key){return data[prefix?prefix+key.charAt(0).toUpperCase()+key.slice(1):key]||'';}
+      var billing=walletBilling||{name:[value('firstName'),value('lastName')].filter(Boolean).join(' '),email:data.email,phone:data.phone,address:{line1:value('line1'),line2:value('line2'),city:value('city'),state:value('state'),postal_code:value('postal'),country:value('country')}};
+      var result = await stripe.confirmPayment({ elements: elements, clientSecret: intent.clientSecret, confirmParams: { return_url: location.origin + base + '/checkout/complete', payment_method_data:{billing_details:billing} } });
+      if (result.error) throw new Error(result.error.message);
+    } catch (error) { errorBox.textContent = error.message || 'Payment could not start. Check your connection and try again.'; if(walletEvent)walletEvent.paymentFailed({reason:'fail'}); }
+    finally { if(resumeAddress)resumeAddress(); paying = false; delete form.dataset.paymentInProgress; button.disabled = form.dataset.funnelSelectionReady==='false'||!!window.__checkoutBusy?.(); }
   }
   form.addEventListener('submit', function(ev){ ev.preventDefault(); if (!form.reportValidity()) return; pay() });
-  express.on('confirm', function(){ pay(true) });
+  window.addEventListener('owned:checkout-selection',function(event){initialize(event.detail.totalCents)});
+  initialize(${totals.totalCents});
 })();
 </script>`
 }
@@ -784,10 +1010,20 @@ export function orderPage(view: StoreView, order: Order, related: Product[] = []
       ${order.discountCents ? `<div><span>Discount${order.discountCode ? ` (${escapeHtml(order.discountCode)})` : ''}</span><span>-${format(order.discountCents, order.currency)}</span></div>` : ''}
       <div><span>Shipping</span><span>${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</span></div>
       <div class="grand"><span>Total</span><span>${format(order.totalCents, order.currency)}</span></div></div>
-    <p style="margin-top:2rem" class="row"><a class="btn btn--ghost" href="${view.base}/track?order=${order.displayId}">Track this order</a> <a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
+    <p style="margin-top:2rem" class="row"><a class="btn btn--ghost" href="${view.base}/track?order=${escapeHtml(order.id)}">Track this order</a> <a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
     ${related.length ? `<div class="section-head" style="margin-top:3rem"><h2>Goes with your order</h2></div><div class="grid">${related.map((product) => productCard(view, product)).join('')}</div>` : ''}
-    ${renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents, currency: order.currency }, { preview: view.preview })}
+    ${order.paymentStatus==='captured'?renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents, currency: order.currency }, { preview: view.preview }):''}
   </section>`
+  const funnel=funnelForProducts(view.db,view.store.id,order.items.map(item=>item.productId))
+  const templateId=funnel?.steps.find(step=>step.role==='thankyou')?.pageId
+  const template=templateId?getPage(view.db,view.store.id,templateId):null
+  if(template?.mode==='html'&&template.rawHtml){
+    const summary=`<section data-owned-confirmation>${body}</section><style data-owned-confirmation> [data-owned-confirmation]{padding:24px;max-width:100%;box-sizing:border-box;background:#fff;color:#222;font:16px/1.5 system-ui}[data-owned-confirmation] table{width:100%;border-collapse:collapse}[data-owned-confirmation] img{width:64px;max-width:100%}[data-owned-confirmation] td{padding:10px;overflow-wrap:anywhere}[data-owned-confirmation] .totals>div{display:flex;justify-content:space-between;gap:16px}[data-owned-confirmation] a{display:inline-block;padding:12px}[data-owned-confirmation] .wrap{width:100%;margin:auto}</style>`
+    let copied=htmlPage(view,template)
+    const mount=`<script data-owned-confirmation>(function(){const owned=document.querySelector('[data-owned-confirmation]');const old=[...document.querySelectorAll('.order-summary,.order-summary__sections,[data-order-summary],.order-confirmation-details')].filter(node=>!owned.contains(node));if(old.length){old[0].replaceWith(owned);old.slice(1).forEach(node=>node.remove());}document.querySelectorAll('[data-order-number]').forEach(node=>node.textContent=${JSON.stringify(String(order.displayId))});})();</script>`
+    copied=/<body[^>]*>/i.test(copied)?copied.replace(/<body[^>]*>/i,tag=>tag+summary):summary+copied
+    return /<\/body>/i.test(copied)?copied.replace(/<\/body>/i,()=>mount+'</body>'):copied+mount
+  }
   return layout(view, { title: `Order #${order.displayId}`, description: 'Order confirmation', body })
 }
 
@@ -800,4 +1036,20 @@ export function simplePage(view: StoreView, title: string, html: string): string
   })
 }
 
+export function notFoundPage(view: StoreView): string {
+  return layout(view, {
+    title: `Page not found — ${view.store.name}`,
+    description: 'The page could not be found.',
+    canonical: `${view.base}/404`,
+    body: `<section class="wrap" style="max-width:min(760px,92vw);padding-block:clamp(4rem,12vw,9rem);text-align:center"><div class="eyebrow">404</div>
+      <h1 style="margin:.7rem 0 1rem">That page is not here.</h1><p class="prose" style="margin-inline:auto">The link may be old, or the page may have moved.</p>
+      <p style="margin-top:1.6rem"><a class="btn btn--ghost" href="${view.base}/">Return to ${escapeHtml(view.store.name)}</a></p></section>`,
+  })
+}
+
 export { statsFor }
+
+/** Imported and generated search forms share the same published store catalog. */
+export function searchPage(view: StoreView, query: string, products: Product[]): string {
+  return layout(view, { title: `Search — ${view.store.name}`, description: 'Search this store', body: `<section class="wrap"><h1>Search</h1><form method="get" action="${view.base}/search" role="search" style="display:flex;gap:12px;margin:24px 0"><input type="search" name="q" value="${escapeHtml(query)}" placeholder="Search products" aria-label="Search products" style="min-width:0;width:100%"><button class="btn" type="submit">Search</button></form>${query ? `<p>${products.length ? `${products.length} results` : 'No products found'} for “${escapeHtml(query)}”</p><div class="grid">${products.map(product => productCard(view, product)).join('')}</div>` : '<p>Enter a product name to get started.</p>'}</section>` })
+}

@@ -30,19 +30,21 @@ export function writeProductContent(
     body: benefitBody(trigger, material, brief, product.title),
   }))
 
+  // Spec rows are read as facts about the product. "Made in <a city picked by
+  // hashing the prompt>", a fourteen-day build time and in-house repairs for
+  // life were the demo store's, asserted on every product of every store —
+  // and on the same page as a different city in the shipping line. What is
+  // left is what the platform actually knows: the options the merchant set.
   const specs: ProductContent['specs'] = [
     { label: 'Material', value: capitalize(material) },
-    { label: 'Made in', value: brief.place },
-    { label: 'Build time', value: 'Fourteen days, built to order' },
+    ...(brief.place ? [{ label: 'Made in', value: brief.place }] : []),
     ...(product.options ?? []).map((option) => ({ label: option.title, value: option.values.map((value) => value.value).join(' · ') })),
-    { label: 'Repairs', value: 'In-house, for as long as we are here' },
-    { label: 'Returns', value: 'Free for thirty days' },
   ]
 
   const faq = [
     ...research.objections.slice(0, isHero ? 4 : 3).map((entry) => ({ q: entry.objection, a: entry.answer })),
-    { q: 'When will it ship?', a: 'Stock builds leave the workshop within fourteen days. You see the date before you pay, and you get tracking the moment it moves.' },
-    { q: 'What if it is not right?', a: 'Send it back within thirty days for a full refund or an exchange. We cover the return label.' },
+    { q: 'When will it ship?', a: 'You see the delivery estimate before you pay, and the tracking number the moment it moves.' },
+    { q: 'What if it is not right?', a: 'Send it back within thirty days for a full refund or an exchange.' },
   ]
 
   return {
@@ -51,7 +53,7 @@ export function writeProductContent(
     specs,
     faq,
     guarantee: `Thirty days, no questions. If the ${product.title.replace(/^The /, '').toLowerCase()} is not what you hoped, send it back and we refund the lot.`,
-    shipping: `Built to order in ${brief.place}. Ships in fourteen days; free over 200; tracked the whole way.`,
+    shipping: `${brief.place ? `Made in ${brief.place}. ` : ''}The ship date is shown before you pay, and tracked the whole way.`,
     audience: research.audience[0] ? `Made for ${research.audience[0].name.toLowerCase().replace(/^the /, '')}: ${research.audience[0].wants.toLowerCase()}` : '',
     trust: research.proofPoints.slice(0, 3),
   }

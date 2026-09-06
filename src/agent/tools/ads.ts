@@ -7,6 +7,7 @@ import { deleteAvatar, listAvatars, saveAvatar, suggestAvatars, type Avatar } fr
 import { readBrief } from '../copy.ts'
 import { generate, imageModels, PRESETS, type ImageProvider, type PresetId } from '../images.ts'
 import { modelFor } from '../models.ts'
+import { publicStoreUrl } from '../../lib/urls.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id) as unknown as string[]
@@ -14,9 +15,7 @@ const FORMAT_IDS = AD_FORMATS.map((format) => format.id)
 const PLATFORM_IDS = PLATFORMS.map((platform) => platform.id)
 
 function publicUrlFor(storeSlug: string): string {
-  const root = process.env.AMBORAS_STOREFRONT_HOST
-  if (root) return `https://${storeSlug}.${root}`
-  return `${process.env.AMBORAS_PUBLIC_ORIGIN ?? 'http://localhost:3000'}/s/${storeSlug}`
+  return publicStoreUrl(null, { slug: storeSlug })
 }
 
 /** The photo a re-shoot should start from: an upload on the product, else the store's. */
@@ -185,7 +184,7 @@ export const adTools: Tool[] = defineTools([
   {
     name: 'apply_competitor_angle',
     area: 'products',
-    description: 'Fold a competitor record into the research on file: a competitor row, its hooks as triggers, its promises as proof to match, an avatar from its audience.',
+    description: "Fold a competitor record into the research on file: a competitor row, an avatar from its audience, and what they promise and how they say it recorded as notes about them. Their claims never become this store's proof points or triggers — that would put a promise the merchant never made on the merchant's own page.",
     schema: { id: { type: 'string', required: true } },
     handler(args, ctx) {
       const research = applyCompetitor(ctx.db, ctx.storeId, args.id as string)

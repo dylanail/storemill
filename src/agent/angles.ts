@@ -174,7 +174,7 @@ export const realFetcher: Fetcher = async (url) => {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'Mozilla/5.0 (compatible; AmborasResearch/1.0)', accept: 'text/html' } })
+    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'Mozilla/5.0 (compatible; storemillResearch/1.0)', accept: 'text/html' } })
     return { ok: response.ok, status: response.status, text: (await response.text()).slice(0, 600_000) }
   } catch (error) {
     return { ok: false, status: 0, text: error instanceof Error ? error.message : String(error) }
@@ -338,29 +338,41 @@ export function directionFrom(angle: CompetitorAngle): string {
 }
 
 /**
- * Folds the competitor into the research on file: a competitor row, its hooks
- * as triggers, its guarantee and badges as proof points to match, and an
- * avatar from its audience. A new research record is written so the old one
- * stays in the history. The merchant edits the result like any research.
+ * Folds the competitor into the research on file: a competitor row, an avatar
+ * from its audience, and what it promises recorded as notes about them. A new
+ * research record is written so the old one stays in the history. The merchant
+ * edits the result like any research.
+ *
+ * What it deliberately does not do is put their words into the store's own.
+ * Proof points are printed on pages as trust lines and pull-quotes, and
+ * triggers are what the copy writers turn into sentences — so folding a
+ * competitor's guarantee in as "Match or beat: 60-night trial" and their ad
+ * hooks in as triggers put a promise the merchant had never made, in a
+ * competitor's wording, on the merchant's product page. Their claims belong on
+ * the competitor's row, where the comparison table and the writers read them
+ * as theirs.
  */
 export function applyCompetitor(db: Db, storeId: string, recordId: string): Research {
   const record = getCompetitor(db, storeId, recordId)
   if (!record) throw new Error('No such competitor record')
   const current = latestResearch(db, storeId)
   if (!current) throw new Error('Run customer research first; the competitor is folded into it')
+  const promises = [record.offer.guarantee, record.offer.shipping, ...record.proof.badges].filter(Boolean)
   const competitor = {
     name: record.brand || hostnameOf(record.url) || 'Competitor',
     angle: `${ANGLE_WORDS[record.angle]}${record.headline ? ` — "${record.headline.slice(0, 80)}"` : ''}`,
     priceBand: [record.offer.price, record.offer.comparePrice].filter(Boolean).join('–') || 'unknown',
     weakness: record.take || 'Not stated yet — write what they get wrong.',
   }
-  const proof = [record.offer.guarantee, record.offer.shipping, ...record.proof.badges].filter(Boolean).map((line) => `Match or beat: ${line}`)
+  const notes = [
+    `Competitor ${competitor.name} (${record.url || 'pasted'}): ${record.angle} angle, ${competitor.priceBand}`,
+    ...(promises.length ? [`${competitor.name} promises: ${promises.join('; ')}. Decide what this store offers before any of it goes on a page.`] : []),
+    ...(record.hooks.length ? [`${competitor.name}'s hooks, as theirs, not to reuse: ${record.hooks.slice(0, 3).map((hook) => `"${hook}"`).join(' ')}`] : []),
+  ]
   const next: Research = {
     ...current,
     competitors: [...current.competitors.filter((entry) => entry.name !== competitor.name), competitor],
-    triggers: [...new Set([...current.triggers, ...record.hooks.slice(0, 3)])],
-    proofPoints: [...new Set([...current.proofPoints, ...proof])].slice(0, 12),
-    sourceNotes: [...current.sourceNotes, `Competitor ${competitor.name} (${record.url || 'pasted'}): ${record.angle} angle, ${competitor.priceBand}`],
+    sourceNotes: [...current.sourceNotes, ...notes],
   }
   const { id: _id, source: _s, brief, createdAt: _c, ...body } = { ...next, id: current.id, source: current.source, brief: current.brief, createdAt: current.createdAt }
   db.insert('store_research', { id: id('res'), store_id: storeId, source: current.source, brief, body, created_at: now() })

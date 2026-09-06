@@ -32,13 +32,27 @@ export function validate<T = Record<string, unknown>>(schema: Schema, input: unk
   return value as T
 }
 
-export function check(schema: Schema, input: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; issues: string[] } {
+/**
+ * `blankIsValue` keeps an empty string as an empty string instead of treating
+ * it as "not supplied" and substituting the field's default.
+ *
+ * Tool arguments and settings forms want the default — a field left alone
+ * posts as '' and should keep what it had. A block's settings are the
+ * opposite: the owner deleting the shipped headline out of the panel meant
+ * exactly that, and reinstating it at render made 116 of the catalog's string
+ * settings impossible to clear.
+ */
+export function check(
+  schema: Schema,
+  input: unknown,
+  opts: { blankIsValue?: boolean } = {},
+): { ok: true; value: Record<string, unknown> } | { ok: false; issues: string[] } {
   const issues: string[] = []
-  const value = coerceObject(schema, input, '', issues)
+  const value = coerceObject(schema, input, '', issues, opts.blankIsValue ?? false)
   return issues.length ? { ok: false, issues } : { ok: true, value }
 }
 
-function coerceObject(schema: Schema, input: unknown, path: string, issues: string[]): Record<string, unknown> {
+function coerceObject(schema: Schema, input: unknown, path: string, issues: string[], blankIsValue = false): Record<string, unknown> {
   const source = (input && typeof input === 'object' && !Array.isArray(input) ? input : {}) as Record<string, unknown>
   if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input))) {
     issues.push(`${path || 'input'} must be an object`)
@@ -47,13 +61,14 @@ function coerceObject(schema: Schema, input: unknown, path: string, issues: stri
   for (const [key, field] of Object.entries(schema)) {
     const at = path ? `${path}.${key}` : key
     const raw = source[key]
-    const coerced = coerceField(field, raw, at, issues)
+    const coerced = coerceField(field, raw, at, issues, blankIsValue)
     if (coerced !== undefined) out[key] = coerced
   }
   return out
 }
 
-function coerceField(field: Field, raw: unknown, at: string, issues: string[]): unknown {
+function coerceField(field: Field, raw: unknown, at: string, issues: string[], blankIsValue = false): unknown {
+  if (blankIsValue && raw === '' && field.type === 'string') return ''
   if (raw === undefined || raw === null || raw === '') {
     if ('default' in field && field.default !== undefined) return field.default
     if (field.required) issues.push(`${at} is required`)
@@ -91,7 +106,7 @@ function coerceField(field: Field, raw: unknown, at: string, issues: string[]): 
       return list.map((entry, index) => coerceField(field.of as Field, entry, `${at}[${index}]`, issues))
     }
     case 'object':
-      return field.fields ? coerceObject(field.fields, raw, at, issues) : raw
+      return field.fields ? coerceObject(field.fields, raw, at, issues, blankIsValue) : raw
     default:
       return raw
   }

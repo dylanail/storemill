@@ -98,18 +98,34 @@ export function pickPdpVersion(db: Db, storeId: string, product: Product, sessio
   return live[0] ?? null
 }
 
-export type VersionStats = { pageId: string; title: string; format: string; weight: number; status: string; views: number; carts: number; purchases: number; revenueCents: number; conversion: number }
+export type VersionStats = { pageId: string; title: string; format: string; weight: number; status: string; views: number; carts: number; purchases: number; revenueCents: number; conversion: number; revenuePerSessionCents: number }
 
 /** Per-version numbers from the event stream: a view carries the page it was; a cart add and a purchase are attributed to the version the session saw. */
 export function versionStats(db: Db, storeId: string, productId: string): VersionStats[] {
   const pages = versionsFor(db, storeId, productId).filter((page) => page.role === 'pdp')
   return pages.map((page) => {
-    const sessions = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ?", storeId, page.id).map((row) => row.session_id)
-    if (!sessions.length) return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0 }
-    const placeholders = sessions.map(() => '?').join(', ')
-    const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${placeholders})`, storeId, ...sessions)?.c ?? 0
-    const purchases = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${placeholders})`, storeId, ...sessions)
-    return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: sessions.length, carts, purchases: purchases?.c ?? 0, revenueCents: purchases?.total ?? 0, conversion: sessions.length ? (purchases?.c ?? 0) / sessions.length : 0 }
+    const seen = db.all<{ session_id: string; at: string }>(
+      "SELECT session_id, MIN(created_at) at FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ? GROUP BY session_id",
+      storeId,
+      page.id,
+    )
+    const empty = { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0, revenuePerSessionCents: 0 }
+    if (!seen.length) return empty
+    const after = seen.map(() => '(session_id = ? AND created_at >= ?)').join(' OR ')
+    const params = seen.flatMap((row) => [row.session_id, row.at])
+    const carts = db.one<{ c: number }>(
+      `SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND product_id = ? AND (${after})`,
+      storeId,
+      productId,
+      ...params,
+    )?.c ?? 0
+    const purchases = db.one<{ c: number; total: number | null }>(
+      `SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND (${after})`,
+      storeId,
+      ...params,
+    )
+    const revenue = purchases?.total ?? 0
+    return { ...empty, views: seen.length, carts, purchases: purchases?.c ?? 0, revenueCents: revenue, conversion: seen.length ? (purchases?.c ?? 0) / seen.length : 0, revenuePerSessionCents: seen.length ? Math.round(revenue / seen.length) : 0 }
   })
 }
 

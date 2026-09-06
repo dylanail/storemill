@@ -36,7 +36,7 @@ test('Meta CAPI and TikTok web events leave through the durable outbox', async (
   const calls: Array<{ url: string; headers: unknown; body: string }> = []
   const result = await dispatchServerEvents(db, async (url, init) => {
     calls.push({ url, headers: init.headers, body: String(init.body) })
-    return { ok: true, status: 200, text: async () => 'ok' }
+    return { ok: true, status: 200, text: async () => JSON.stringify({events_received:1}) }
   })
   assert.deepEqual(result, { sent: 2, failed: 0 })
   assert.match(calls[0]!.body, /Purchase|CompletePayment/)

@@ -14,7 +14,33 @@ import type { TrackingEvent, TrackingSnapshot } from '../shipping/seventeen-trac
 
 /* ------------------------------------------------------------- profit */
 
-export type Margin = { priceCents: number; costCents: number; shippingCents: number; feesCents: number; profitCents: number; marginPercent: number }
+export type Margin = {
+  priceCents: number
+  costCents: number
+  shippingCents: number
+  feesCents: number
+  profitCents: number
+  marginPercent: number
+  /** 1 ÷ gross margin, rounded up: below this a sale loses money. Null when there is no margin to divide into. */
+  breakevenRoas: number | null
+  /** Breakeven + 1: the line the course scales above and holds below. */
+  targetRoas: number | null
+}
+
+/**
+ * The two lines every scaling decision is made against.
+ *
+ * Breakeven ROAS is 1 ÷ gross margin rounded up (67% → 1.5, 55% → 1.82) and
+ * target is breakeven + 1. Everything needed for them was already on file —
+ * price, supplier cost, supplier shipping, card fees — and stopping at "42%
+ * margin" left the operator to do this arithmetic in their head every time
+ * they looked at a campaign.
+ */
+export function roasLines(marginPercent: number): { breakevenRoas: number | null; targetRoas: number | null } {
+  if (marginPercent <= 0) return { breakevenRoas: null, targetRoas: null }
+  const breakeven = Math.ceil((100 / marginPercent) * 100) / 100
+  return { breakevenRoas: breakeven, targetRoas: Math.round((breakeven + 1) * 100) / 100 }
+}
 
 /** Card fees at 2.9% + 30c; the platform fee is not charged in personal mode. */
 export function marginFor(priceCents: number, supplier: Supplier): Margin {
@@ -22,16 +48,30 @@ export function marginFor(priceCents: number, supplier: Supplier): Margin {
   const shipping = supplier.shippingCents ?? 0
   const fees = Math.round(priceCents * 0.029) + 30
   const profit = priceCents - cost - shipping - fees
-  return { priceCents, costCents: cost, shippingCents: shipping, feesCents: fees, profitCents: profit, marginPercent: priceCents ? Math.round((profit / priceCents) * 100) : 0 }
+  const marginPercent = priceCents ? Math.round((profit / priceCents) * 100) : 0
+  return { priceCents, costCents: cost, shippingCents: shipping, feesCents: fees, profitCents: profit, marginPercent, ...roasLines(marginPercent) }
 }
 
-export function recordAdSpend(db: Db, storeId: string, input: { day: string; platform: string; amountCents: number; note?: string }) {
-  db.insert('ad_spend', { id: id('ads'), store_id: storeId, day: input.day.slice(0, 10), platform: input.platform, amount_cents: input.amountCents, note: input.note ?? '', created_at: now() })
+export function recordAdSpend(db: Db, storeId: string, input: { day: string; platform: string; amountCents: number; clicks?: number; note?: string }) {
+  db.insert('ad_spend', {
+    id: id('ads'),
+    store_id: storeId,
+    day: input.day.slice(0, 10),
+    platform: input.platform,
+    amount_cents: input.amountCents,
+    clicks: Math.max(0, Math.round(input.clicks ?? 0)),
+    note: input.note ?? '',
+    created_at: now(),
+  })
 }
 
 export function listAdSpend(db: Db, storeId: string, days = 30) {
   const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
-  return db.all<{ id: string; day: string; platform: string; amount_cents: number; note: string }>('SELECT id, day, platform, amount_cents, note FROM ad_spend WHERE store_id = ? AND day >= ? ORDER BY day DESC', storeId, from)
+  return db.all<{ id: string; day: string; platform: string; amount_cents: number; clicks: number; note: string }>(
+    'SELECT id, day, platform, amount_cents, clicks, note FROM ad_spend WHERE store_id = ? AND day >= ? ORDER BY day DESC',
+    storeId,
+    from,
+  )
 }
 
 export type ProfitReport = {
@@ -45,6 +85,20 @@ export type ProfitReport = {
   profitCents: number
   orders: number
   roas: number | null
+  /** Clicks bought over the window, and what each one cost. Null when no clicks were logged. */
+  clicks: number
+  cpcCents: number | null
+  /** Blended gross margin over the window, and the two lines that follow from it. */
+  marginPercent: number
+  breakevenRoas: number | null
+  targetRoas: number | null
+  /**
+   * What the course does with those lines: above target, scale; between the
+   * lines, hold; below breakeven, scale down. Null when there is no spend to
+   * judge, and never trusted on fewer than three days of it.
+   */
+  verdict: 'scale' | 'hold' | 'cut' | null
+  spendDays: number
   perDay: Array<{ day: string; revenue: number; spend: number; profit: number }>
 }
 
@@ -83,14 +137,39 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
     byDay.set(day, entry)
   }
   let adSpend = 0
+  let clicks = 0
+  // Cost per click divides only the spend that has clicks recorded against it.
+  // Blending in the rows logged without clicks would inflate it silently, and
+  // the number decides whether a page is worth its traffic.
+  let clickedSpend = 0
+  const spendDays = new Set<string>()
   for (const row of listAdSpend(db, storeId, days)) {
     adSpend += row.amount_cents
+    if (row.clicks > 0) {
+      clicks += row.clicks
+      clickedSpend += row.amount_cents
+    }
+    if (row.amount_cents > 0) spendDays.add(row.day)
     const entry = byDay.get(row.day) ?? { revenue: 0, spend: 0, profit: 0 }
     entry.spend += row.amount_cents
     entry.profit -= row.amount_cents
     byDay.set(row.day, entry)
   }
   const profit = revenue - refunds - cogs - supplierShipping - fees - adSpend
+  // Gross margin is what is left of revenue before a penny of ad spend: the
+  // denominator of the breakeven line, so ad spend must stay out of it.
+  const grossMargin = revenue - refunds - cogs - supplierShipping - fees
+  const marginPercent = revenue ? Math.round((grossMargin / revenue) * 100) : 0
+  const lines = roasLines(marginPercent)
+  const roas = adSpend ? Math.round((revenue / adSpend) * 100) / 100 : null
+  const verdict =
+    roas === null || lines.breakevenRoas === null || lines.targetRoas === null
+      ? null
+      : roas >= lines.targetRoas
+        ? ('scale' as const)
+        : roas >= lines.breakevenRoas
+          ? ('hold' as const)
+          : ('cut' as const)
   return {
     days,
     revenueCents: revenue,
@@ -101,7 +180,13 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
     adSpendCents: adSpend,
     profitCents: profit,
     orders: orders.length,
-    roas: adSpend ? Math.round((revenue / adSpend) * 100) / 100 : null,
+    roas,
+    clicks,
+    cpcCents: clicks ? Math.round(clickedSpend / clicks) : null,
+    marginPercent,
+    ...lines,
+    verdict,
+    spendDays: spendDays.size,
     perDay: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, entry]) => ({ day, ...entry })),
   }
 }
@@ -313,7 +398,7 @@ export function importReviews(db: Db, storeId: string, csv: string, opts: { prod
 
 /* ------------------------------------------------------- product import */
 
-export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; sku?: string }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string }
+export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
 
 /**
  * Import a product from a URL.
@@ -329,26 +414,30 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
   if (shopifyMatch) {
     try {
       const jsonUrl = `${source.origin}/products/${shopifyMatch[1]}.json`
-      const response = await fetchImpl(jsonUrl, { headers: { accept: 'application/json', 'user-agent': 'AmborasImport/1.0' } })
+      const response = await fetchImpl(jsonUrl, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
       if (response.ok) {
         const payload = (await response.json()) as { product?: ShopifyProduct }
         if (payload.product) return fromShopify(payload.product, url)
       }
     } catch { /* fall through to the generic path */ }
   }
-  const response = await fetchImpl(url, { headers: { 'user-agent': 'AmborasImport/1.0', accept: 'text/html' } })
+  const response = await fetchImpl(url, { headers: { 'user-agent': 'storemillImport/1.0', accept: 'text/html' } })
   if (!response.ok) throw new Error(`The page answered ${response.status}`)
   return fromHtml(await response.text(), url)
 }
 
-type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ title: string; price: string; sku?: string }> }
+type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
 
 function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
-  const variants = (product.variants ?? []).map((variant) => ({ title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.sku ? { sku: variant.sku } : {}) }))
+  const imagesById = new Map((product.images ?? []).flatMap((image) => image.id === undefined ? [] : [[image.id, image.src] as const]))
+  const variants = (product.variants ?? []).map((variant) => {
+    const image = variant.featured_image?.src || (variant.image_id === undefined || variant.image_id === null ? '' : imagesById.get(variant.image_id)) || ''
+    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.compare_at_price && Number(variant.compare_at_price)>Number(variant.price)?{compareAtCents:Math.round(Number(variant.compare_at_price)*100)}:{}), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
+  })
   return {
     title: product.title,
     description: stripHtml(product.body_html ?? ''),
-    images: (product.images ?? []).map((image) => image.src).slice(0, 8),
+    images: (product.images ?? []).map((image) => image.src).slice(0, 24),
     priceCents: variants[0]?.priceCents ?? null,
     currency: 'USD',
     variants,
@@ -364,7 +453,7 @@ function fromHtml(html: string, url: string): ImportedProduct {
   const description = decode(meta('og:description') || meta('description'))
   const priceRaw = meta('product:price:amount') || meta('og:price:amount') || /"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)/.exec(html)?.[1] || ''
   const currency = meta('product:price:currency') || meta('og:price:currency') || /"priceCurrency"\s*:\s*"([A-Z]{3})"/.exec(html)?.[1] || 'USD'
-  const images = [...new Set([meta('og:image'), ...[...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi)].map((match) => match[1] as string)].filter(Boolean).map((src) => { try { return new URL(src, url).toString() } catch { return '' } }).filter(Boolean))].slice(0, 8)
+  const images = [...new Set([meta('og:image'), ...[...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:avif|gif|jpe?g|png|webp)[^"']*)["']/gi)].map((match) => match[1] as string)].filter(Boolean).map((src) => { try { return new URL(src, url).toString() } catch { return '' } }).filter(Boolean))].slice(0, 24)
   const priceCents = priceRaw ? Math.round(parseFloat(priceRaw) * 100) : null
   return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
 }
@@ -377,13 +466,28 @@ function decode(input: string): string {
   return input.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').trim()
 }
 
-/** Creates the product from an import, with a default markup when the supplier price is the only price known. */
-export function createFromImport(db: Db, storeId: string, imported: ImportedProduct, opts: { markup?: number; asSupplier?: boolean; status?: 'draft' | 'published' } = {}): Product {
-  const markup = opts.markup ?? 2.5
+/**
+ * Creates the product from an import, with a default markup when the supplier
+ * price is the only price known.
+ *
+ * The markup is on the landed cost — the supplier's price plus their shipping
+ * — not on the item alone. docs/knowledge/product-research.md asks for "at
+ * least 3x landed cost (COGS + shipping)", and multiplying the item only put
+ * $7 of freight through at cost: a $12 item at 2.5x came in at $29.99 against
+ * a $19 landed cost, a 1.6x that no ad account can carry.
+ */
+export function createFromImport(
+  db: Db,
+  storeId: string,
+  imported: ImportedProduct,
+  opts: { markup?: number; asSupplier?: boolean; status?: 'draft' | 'published'; supplierShippingCents?: number } = {},
+): Product {
+  const markup = opts.markup ?? 3
   const supplierCost = opts.asSupplier ? (imported.priceCents ?? 0) : 0
-  const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round((cents * markup) / 100) * 100 - 1) : cents)
-  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.sku ? { sku: variant.sku } : {}), inventory: 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
-  return createProduct(db, storeId, {
+  const supplierShipping = Math.max(0, Math.round(opts.supplierShippingCents ?? 0))
+  const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round(((cents + supplierShipping) * markup) / 100) * 100 - 1) : cents)
+  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.compareAtCents!==undefined&&!opts.asSupplier?{compareAtCents:variant.compareAtCents}:{}), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: variant.inventory ?? 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
+  const product = createProduct(db, storeId, {
     title: imported.title,
     description: imported.description,
     status: opts.status ?? 'draft',
@@ -391,9 +495,16 @@ export function createFromImport(db: Db, storeId: string, imported: ImportedProd
     media: imported.images.map((url) => ({ url, alt: imported.title })),
     options: imported.options.map((option) => ({ title: option.title, values: option.values.map((value) => ({ value })) })),
     tags: ['imported'],
-    supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
+    metadata: imported.metadata ?? {},
+    supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, shippingCents: supplierShipping, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
     variants,
   })
+  const mapping = Object.fromEntries(product.variants.flatMap((variant, index) => [...(imported.variants[index]?.sourceId ? [[`sourceVariant:${variant.id}`, imported.variants[index]!.sourceId!]] : []), ...(imported.variants[index]?.sourceAliases ? [[`sourceVariantAliases:${variant.id}`, JSON.stringify(imported.variants[index]!.sourceAliases)]] : [])]))
+  if (Object.keys(mapping).length) {
+    db.update('products', product.id, { metadata: { ...product.metadata, ...mapping } })
+    return { ...product, metadata: { ...product.metadata, ...mapping } }
+  }
+  return product
 }
 
 export { json }

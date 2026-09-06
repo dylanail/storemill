@@ -1,3 +1,5 @@
+import { brandHead, brandIcon, brandLogo, brandStyles } from '../brand/index.ts'
+import { readFileSync } from 'node:fs'
 import { escapeHtml } from '../lib/http.ts'
 import type { Store } from '../control/stores.ts'
 import type { Todo } from '../control/todos.ts'
@@ -6,7 +8,7 @@ import { SUGGESTIONS } from '../agent/chat.ts'
 import type { Artifact } from '../agent/registry.ts'
 import type { AssistantRequest } from '../agent/queue.ts'
 
-export type IconName = 'home' | 'assets' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'image' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
+export type IconName = 'home' | 'assets' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'image' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'insights' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
 export type NavItem = { key: string; href: string; label: string; icon: IconName; area?: string }
 
 export function uiIcon(name: IconName, size = 18): string {
@@ -27,6 +29,7 @@ export function uiIcon(name: IconName, size = 18): string {
     discount: '<path d="M20 13 13 20a2 2 0 0 1-2.8 0L4 13.8V4h9.8L20 10.2a2 2 0 0 1 0 2.8Z"/><circle cx="9" cy="9" r="1"/>',
     ads: '<path d="M3 11v2h4l9 5V6L7 11H3Z"/><path d="M7 13v6h4"/><path d="M20 9v6"/>',
     analytics: '<path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/>',
+    insights: '<path d="M3 3v18h18"/><path d="m6 15 5-5 4 3 6-8M16 5h5v5"/>',
     experiment: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M8 15h8"/>',
     profit: '<circle cx="12" cy="12" r="9"/><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8M12 6v12"/>',
     build: '<path d="m14.7 6.3 3-3a2.1 2.1 0 0 1 3 3l-3 3M13 8l3 3-8.5 8.5a2.1 2.1 0 0 1-3-3L13 8Z"/><path d="m4 4 4 4"/>',
@@ -43,46 +46,61 @@ export function uiIcon(name: IconName, size = 18): string {
 
 export const NAV: NavItem[] = [
   { key: 'dashboard', href: '/admin', label: 'Home', icon: 'home' },
-  { key: 'stores', href: '/admin/stores', label: 'All assets', icon: 'assets' },
-  { key: 'ai', href: '/admin/ai', label: 'Assistant', icon: 'sparkles' },
   { key: 'orders', href: '/admin/orders', label: 'Orders', icon: 'orders', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', icon: 'products', area: 'products' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', icon: 'customers', area: 'customers' },
+  { key: 'marketing', href: '/admin/marketing', label: 'Marketing', icon: 'marketing', area: 'emails' },
+  { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
+  { key: 'analytics', href: '/admin/analytics', label: 'Analytics', icon: 'insights', area: 'analytics' },
 ]
 
-function groupsFor(kind: Store['kind']): Array<{ label: string; icon: IconName; children: NavItem[] }> {
-  const first = kind === 'funnel'
-    ? { label: 'Funnel', icon: 'funnel' as const, children: [
-        { key: 'funnels', href: '/admin/funnels', label: 'Funnel flow', icon: 'funnel' as const, area: 'store' },
-        { key: 'pages', href: '/admin/pages', label: 'Funnel pages', icon: 'pages' as const, area: 'store' },
-        { key: 'bundles', href: '/admin/bundles', label: 'Offers & bundles', icon: 'bundle' as const, area: 'promotions' },
-        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
-      ] }
-    : { label: 'Online store', icon: 'store' as const, children: [
-        { key: 'store', href: '/admin/store', label: 'Theme & navigation', icon: 'store' as const, area: 'store' },
-        { key: 'pages', href: '/admin/pages', label: 'Store pages', icon: 'pages' as const, area: 'store' },
-        { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections' as const, area: 'organization' },
-        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
-        { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle' as const, area: 'promotions' },
-      ] }
-  return [first,
-  { label: 'Marketing', icon: 'marketing', children: [
-    { key: 'marketing', href: '/admin/marketing', label: 'Campaigns & flows', icon: 'marketing', area: 'emails' },
-    { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
-    { key: 'ads', href: '/admin/ads', label: 'Ads', icon: 'ads', area: 'ads' },
-  ] },
-  { label: 'Insights', icon: 'analytics', children: [
-    { key: 'analytics', href: '/admin/analytics', label: 'Analytics & attribution', icon: 'analytics', area: 'analytics' },
-    { key: 'cro', href: '/admin/cro', label: 'Experiments', icon: 'experiment', area: 'analytics' },
-    { key: 'profit', href: '/admin/profit', label: 'Profit', icon: 'profit', area: 'analytics' },
-  ] },
-  { label: 'Create', icon: 'build', children: [
-    { key: 'build', href: '/admin/build', label: kind === 'funnel' ? 'Build funnel' : 'Build store', icon: 'build', area: 'store' },
-    { key: 'research', href: '/admin/research', label: 'Research & avatars', icon: 'research', area: 'products' },
-    { key: 'market', href: '/admin/market', label: 'Market strategy', icon: 'analytics', area: 'products' },
-    { key: 'creative', href: '/admin/creative', label: 'Creative', icon: 'creative', area: 'products' },
-  ] },
-  ]
+type NavGroup = { key: string; label: string; icon: IconName; parent?: NavItem; children: NavItem[] }
+function navigation(kind: Store['kind'], active: string): string {
+  const groups: Record<string, NavItem[]> = {
+    products: [
+      { key: 'reviews', href: '/admin/reviews', label: 'Reviews', icon: 'customers', area: 'products' },
+      { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections', area: 'organization' },
+      { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle', area: 'promotions' },
+    ],
+    marketing: [{ key: 'ads', href: '/admin/ads', label: 'Ad campaigns', icon: 'ads', area: 'ads' }],
+    analytics: [
+      { key: 'cro', href: '/admin/cro', label: 'A/B tests', icon: 'experiment', area: 'analytics' },
+      { key: 'profit', href: '/admin/profit', label: 'Profit reports', icon: 'profit', area: 'analytics' },
+    ],
+  }
+  const core=NAV.map(item=>groups[item.key]?navGroup({...item,parent:item,children:groups[item.key]!},active):navLink(item,active)).join('')
+  const content=navGroup({key:'content',label:'Content',icon:'pages',children:[
+    {key:'media',href:'/admin/media',label:'Media & logos',icon:'image',area:'store'},
+    {key:'templates',href:'/admin/templates',label:'Page templates',icon:'pages',area:'store'},
+  ]},active)
+  const channel=navGroup({key:'channel-'+kind,label:kind==='funnel'?'Funnel':'Online store',icon:kind==='funnel'?'funnel':'store',children:[
+    kind==='funnel'?{key:'funnels',href:'/admin/funnels',label:'Funnel flow',icon:'funnel',area:'store'}:{key:'store',href:'/admin/store',label:'Theme & navigation',icon:'store',area:'store'},
+    {key:'pages',href:'/admin/pages',label:kind==='funnel'?'Funnel pages':'Store pages',icon:'pages',area:'store'},
+    {key:'speed',href:'/admin/speed',label:'Performance',icon:'analytics',area:'store'},
+    {key:'domains',href:'/admin/domains',label:'Domains',icon:'store',area:'store'},
+  ]},active)
+  const tools=navGroup({key:'ai-studio',label:'AI studio',icon:'creative',children:[
+    {key:'build',href:'/admin/build',label:kind==='funnel'?'Funnel builder':'Store builder',icon:'build',area:'store'},
+    {key:'research',href:'/admin/research',label:'Customer research',icon:'research',area:'products'},
+    {key:'market',href:'/admin/market',label:'Market strategy',icon:'analytics',area:'products'},
+    {key:'creative',href:'/admin/creative',label:'Ad creative',icon:'creative',area:'products'},
+  ]},active)
+  return `<div class="nav-section" aria-label="Manage your business">${core}${content}</div><div class="nav-section"><p class="nav-caption">Sales channels</p>${channel}${kind==='store'?navLink({key:'funnels',href:'/admin/funnels',label:'Funnels',icon:'funnel',area:'store'},active):''}</div><div class="nav-section"><p class="nav-caption">Tools</p>${navLink({key:'ai',href:'/admin/ai',label:'Assistant',icon:'sparkles'},active)}${tools}${navLink({key:'plugins',href:'/admin/plugins',label:'Integrations',icon:'assets'},active)}</div>`
+}
+function navGroup(group:NavGroup,active:string):string {
+  const selected=group.parent?.key===active||group.children.some(item=>item.key===active)
+  const control=`nav-children-${group.key}`
+  return `<div class="nav-group ${selected?'has-current':''}" data-nav-group="${group.key}" data-active="${selected}">
+    <div class="nav-group-row">${group.parent?`${navLink(group.parent,active)}<button class="nav-expand" type="button" aria-label="${selected?'Collapse':'Expand'} ${escapeHtml(group.label)}" aria-controls="${control}" aria-expanded="${selected}" data-group-label="${escapeHtml(group.label)}">${uiIcon('chevron',12)}</button>`:`<button class="nav-heading" type="button" aria-controls="${control}" aria-expanded="${selected}" data-group-label="${escapeHtml(group.label)}">${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron',12)}</button>`}</div>
+    <div class="nav-children" id="${control}" ${selected?'':'hidden'}>${group.children.map(item=>navLink(item,active,true)).join('')}</div></div>`
+}
+function storeSwitcher(input:ShellInput):string {
+  const store=input.store
+  return `<details class="switcher" id="store-switcher"><summary aria-label="Switch store or funnel"><span class="switcher-mark">${uiIcon(store.kind==='funnel'?'funnel':'store',17)}</span><span class="switcher-current">${escapeHtml(store.name)}</span>${uiIcon('chevron',12)}</summary>
+    <div class="switcher-popover"><label class="switcher-search">${uiIcon('research',16)}<input type="search" placeholder="Search stores and funnels" aria-label="Search stores and funnels" autocomplete="off"></label>
+      <div class="switcher-options">${(['store','funnel'] as const).map(kind=>{const stores=input.stores.filter(item=>item.kind===kind);return stores.length?`<div class="switcher-category" data-store-category><p>${kind==='store'?'Stores':'Funnels'} <span>${stores.length}</span></p>${stores.map(item=>`<a class="switcher-option" href="/admin/switch?storeId=${encodeURIComponent(item.id)}" data-store-name="${escapeHtml(item.name.toLowerCase())}" ${item.id===store.id?'aria-current="true"':''}><span class="switcher-mark">${uiIcon(kind==='funnel'?'funnel':'store',16)}</span><span>${escapeHtml(item.name)}</span>${item.id===store.id?'<span class="switcher-check" aria-label="Current store">✓</span>':''}</a>`).join('')}</div>`:''}).join('')}<p class="switcher-empty" hidden>No matching stores or funnels.</p></div>
+      <div class="switcher-actions"><a href="/admin/stores">${uiIcon('assets',16)} Stores &amp; funnels</a><a href="/admin/stores?new=1#new"><span aria-hidden="true">＋</span> Create store or funnel</a></div>
+    </div></details>`
 }
 
 export type ShellInput = {
@@ -101,91 +119,40 @@ export type ShellInput = {
   modelLabel?: string
 }
 
-/**
- * The admin shell.
- *
- * Three columns, exactly as the product is drawn: a 44px icon rail, the page,
- * and a 300px assistant panel that persists across every page. The panel is
- * part of the frame rather than a page component because the conversation has
- * to survive navigation — one thread across the whole admin, with the current
- * page passed along as context on every message.
- */
+/** Shared admin navigation, selected-store context and persistent assistant launcher. */
 export function shell(input: ShellInput): string {
   const brand = input.store.brand
+  const storefrontUrl = input.store.status === 'live' ? input.storeUrl : `/preview/${input.store.slug}`
+  const storefrontAction = input.store.status === 'live' ? `View ${input.store.kind}` : `Preview ${input.store.kind}`
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(input.title)} — ${escapeHtml(input.store.name)} on Amboras</title>
+<title>${escapeHtml(input.title)} — ${escapeHtml(input.store.name)} on storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-<style>${css(brand.primary ?? '#7a4a2b')}</style>
+${brandHead}<style>${brandStyles}${css(brand.primary ?? '#7a4a2b')}${readFileSync(new URL('./navigation.css',import.meta.url),'utf8')}</style>
 </head><body>
 <div class="top">
-  <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation">${uiIcon('menu')}</button>
-  <div class="logo"><span class="logo-mark">${uiIcon('store', 17)}</span><strong>Amboras</strong></div>
-  <form method="get" action="/admin/switch" class="switcher">
-    <select name="storeId" onchange="this.form.submit()" aria-label="Asset">
-      ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)} · ${store.kind}</option>`).join('')}
-    </select>
-  </form>
-  <a class="chip" href="/admin/stores">All assets (${input.stores.length})</a>
-  <a class="chip" href="/admin/stores#new">+ New asset</a>
+  <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="admin-navigation">${uiIcon('menu')}</button>
+  <a class="logo storemill-home" href="/admin" aria-label="storemill home">${brandLogo(true)}<span class="storemill-mobile-mark">${brandIcon(true)}</span></a>
+  ${storeSwitcher(input)}
   <div class="spacer"></div>
-  <a class="chip" href="${escapeHtml(input.storeUrl)}" target="_blank" rel="noopener">View ${input.store.kind} ↗</a>
+  <a class="chip" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${escapeHtml(storefrontAction)} ↗</a>
   <form method="post" action="/admin/publish">
     <button class="publish" type="submit" ${input.publish.ready ? '' : 'disabled'} title="${escapeHtml(input.publish.reason)}">${escapeHtml(input.publish.label)}</button>
   </form>
 </div>
 <div class="frame">
-  <nav class="rail" aria-label="Sections">
-    <div class="nav-main">${NAV.map((item) => navLink(item, input.active)).join('')}</div>
-    ${groupsFor(input.store.kind).map((group, index) => {
-      const active = group.children.some((item) => item.key === input.active)
-      return `<details class="nav-tree ${active ? 'active' : ''}" ${active || index < 2 ? 'open' : ''}><summary>${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron', 14)}</summary><div>${group.children.map((item) => navLink(item, input.active, true)).join('')}</div></details>`
-    }).join('')}
-    <div class="rail-foot"><a href="/admin/settings" class="${input.active === 'settings' ? 'on' : ''}">${uiIcon('settings')}<b>Settings</b></a><span class="avatar">${escapeHtml(input.userName.slice(0, 1).toUpperCase())}</span></div>
+  <nav class="rail" id="admin-navigation" aria-label="Sections">
+    <div class="rail-scroll">${navigation(input.store.kind,input.active)}</div>
+    <div class="rail-foot">${navLink({key:'stores',href:'/admin/stores',label:'Stores & funnels',icon:'assets'},input.active)}${navLink({key:'settings',href:'/admin/settings',label:'Settings',icon:'settings'},input.active)}</div>
   </nav>
+  <button class="nav-backdrop" type="button" aria-hidden="true" aria-label="Close navigation" tabindex="-1" hidden></button>
   <main class="page">${input.body}</main>
-  <aside class="panel">
-    <header>
-      <div class="panel-title">${uiIcon('sparkles', 16)} Amboras Business Assistant <span class="beta">Beta</span></div>
-      <p class="muted">Typed and voice requests run in order.${input.modelLabel ? ` ${escapeHtml(input.modelLabel)}.` : ''}</p>
-    </header>
-    <div class="thread" id="thread">
-      ${input.messages.length
-        ? input.messages.map(bubble).join('')
-        : `<div class="empty"><p class="muted">Ask for something. It will do it and tell you what changed.</p></div>`}
-    </div>
-    ${input.messages.length ? '' : `<div class="suggestions">${SUGGESTIONS.map((suggestion) => `<button type="button" onclick="askThis(${escapeHtml(JSON.stringify(suggestion.prompt))})">${uiIcon('sparkles', 14)} ${escapeHtml(suggestion.label)}</button>`).join('')}</div>`}
-    ${input.queue.some((request) => request.status === 'queued' || request.status === 'running') ? `<div class="assistant-queue"><div class="eyebrow">Request queue</div>${input.queue.filter((request) => request.status === 'queued' || request.status === 'running').reverse().map((request) => `<div class="queue-item"><span><b>${escapeHtml(request.status)}</b><small>${escapeHtml(request.text)}</small></span>${request.status === 'queued' ? `<form method="post" action="/admin/assistant/queue/${escapeHtml(request.id)}/cancel"><button type="submit" aria-label="Cancel request">×</button></form>` : '<i class="queue-spin"></i>'}</div>`).join('')}</div>` : ''}
-    <form class="composer" method="post" action="/admin/ask" id="composer">
-      <input type="hidden" name="page" value="${escapeHtml(input.active)}">
-      <textarea name="text" id="ask" rows="2" placeholder="Ask a question, or tell it what to change…" required></textarea>
-      <div class="composer-row">
-        <span class="confirm">Edits land on the draft; publish when it looks right.</span>
-        <button class="voice" id="voice" type="button" aria-label="Dictate request">${uiIcon('mic', 16)}</button>
-        <button class="send" type="submit" aria-label="Send">${uiIcon('send', 15)}</button>
-      </div>
-    </form>
-    <div class="next">
-      <div class="eyebrow">Next steps</div>
-      ${input.todos.map((todo) => `<a class="todo ${todo.status}" href="/admin${todo.href}"><i></i><span>${escapeHtml(todo.label)}</span></a>`).join('')}
-    </div>
-  </aside>
+
 </div>
 <script>
 function askThis(prompt){ var box = document.getElementById('ask'); box.value = prompt; box.focus(); }
 (function(){
-  var navToggle=document.getElementById('nav-toggle');navToggle&&navToggle.addEventListener('click',function(){document.body.classList.toggle('nav-open')});
-  var thread = document.getElementById('thread'); if (thread) thread.scrollTop = thread.scrollHeight;
-  var form = document.getElementById('composer');
-  form && form.addEventListener('submit', function(){
-    var button = form.querySelector('.send'); button.disabled = true; button.textContent = '…';
-  });
-  document.getElementById('ask') && document.getElementById('ask').addEventListener('keydown', function(event){
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') form.requestSubmit();
-  });
-  var voice=document.getElementById('voice');var Speech=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(voice){if(!Speech){voice.disabled=true;voice.title='Voice input is not supported in this browser'}else{voice.addEventListener('click',function(){var recognition=new Speech();recognition.lang=document.documentElement.lang||'en-US';recognition.interimResults=false;voice.classList.add('listening');recognition.onresult=function(event){var box=document.getElementById('ask');box.value=(box.value+' '+event.results[0][0].transcript).trim();box.focus()};recognition.onend=function(){voice.classList.remove('listening')};recognition.onerror=recognition.onend;recognition.start()})}}
   // Activity dots: the rail lights up the area a tool is touching, live.
   try {
     var stream = new EventSource('/admin/activity');
@@ -201,16 +168,19 @@ function askThis(prompt){ var box = document.getElementById('ask'); box.value = 
   } catch (error) { /* activity dots are decoration; never break the admin */ }
 })();
 </script>
+<script>${readFileSync(new URL('./navigation.js', import.meta.url), 'utf8')}</script>
+<script>${readFileSync(new URL('./usability.js', import.meta.url), 'utf8')}</script>
+${assistantWidget(input)}
 </body></html>`
 }
 
 function navLink(item: NavItem, active: string, child = false): string {
-  return `<a href="${item.href}" class="${item.key === active ? 'on' : ''}${child ? ' child' : ''}" title="${escapeHtml(item.label)}" data-area="${item.area ?? ''}">${uiIcon(item.icon)}<b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`
+  return `<a href="${item.href}" class="${item.key === active ? 'on' : ''}${child ? ' child' : ''}" ${item.key===active?'aria-current="page"':''} title="${escapeHtml(item.label)}" data-area="${item.area ?? ''}">${child?'':uiIcon(item.icon)}<b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`
 }
 
-function bubble(message: ChatMessage): string {
+export function bubble(message: ChatMessage): string {
   return `<div class="msg ${message.role}">
-    <div class="who">${message.role === 'user' ? 'You' : 'Assistant'}${message.page ? ` · ${escapeHtml(message.page)}` : ''}</div>
+    <div class="who">${message.role === 'user' ? 'You' : 'Assistant'}${message.page ? ` · ${escapeHtml(message.page.split('|')[0] || 'Current page')}` : ''}</div>
     <div class="text">${escapeHtml(message.content).replace(/\n/g, '<br>')}</div>
     ${message.artifacts.map(renderArtifact).join('')}
   </div>`
@@ -240,6 +210,7 @@ function css(accent: string): string {
   return `
 :root{--paper:#f6f6f4;--card:#fff;--ink:#1f2520;--muted:#6d746e;--line:#e0e3df;--accent:${accent};--ok:#2c6ecb;--warn:#a76b12;--bad:#b3261e;--rail:188px;--panel:320px}
 *{box-sizing:border-box}
+#clone-asset-form [hidden]{display:none!important}
 body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.55 'Inter',ui-sans-serif,system-ui,sans-serif}
 a{color:inherit}
 h1,h2,h3{margin:0;font-weight:500}
@@ -320,6 +291,11 @@ h1,h2,h3{margin:0;font-weight:500}
 .card > h2{font-size:1rem;margin-bottom:.15rem}
 .grid2{display:grid;gap:1rem;grid-template-columns:1.6fr 1fr;align-items:start}
 .grid3{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+.card,.grid2>*{min-width:0}
+.data-scroll{max-width:100%;overflow-x:auto;border-radius:inherit;overscroll-behavior-x:contain}
+.data-scroll-hint{font-size:11px;color:var(--muted);margin:0;padding:.5rem .6rem;border-top:1px solid var(--line)}
+.data-scroll:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.field,input,select,textarea{min-width:0;max-width:100%}
 table.data{width:100%;border-collapse:collapse;font-size:13px}
 table.data th{text-align:left;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
 table.data td{padding:.6rem;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -369,19 +345,36 @@ input[type=checkbox],input[type=radio]{width:auto;padding:0}
    compatible with older page components while the frame is fully replaced. */
 :root{--paper:#f1f1f1;--card:#fff;--ink:#202223;--muted:#6d7175;--line:#dfe3e8;--accent:#2c6ecb;--ok:#2c6ecb;--rail:240px;--panel:330px}
 body{font-size:13px}.icon{display:block;flex:0 0 auto}.serif,.head h1{font-family:'Inter',ui-sans-serif,system-ui,sans-serif;font-weight:600;letter-spacing:-.025em}.head h1{font-size:1.55rem}
-.top{height:56px;background:#303030;border-bottom-color:#464646;padding:0 1rem;gap:.55rem;box-shadow:0 1px 4px #0003}.top .logo{display:flex;align-items:center;gap:.5rem;min-width:150px}.logo-mark{width:28px;height:28px;border-radius:7px;background:#5b8fd9;color:#fff;display:grid;place-items:center}.switcher select,.chip{background:#3d3d3d;border-color:#555;border-radius:7px}.switcher select:hover,.chip:hover{background:#494949}.publish{border-radius:7px}.nav-toggle{display:none;border:0;background:transparent;color:#fff;padding:.4rem}
+.top{height:56px;background:#303030;border-bottom-color:#464646;padding:0 1rem;gap:.55rem;box-shadow:0 1px 4px #0003}.top .logo{display:flex;align-items:center;gap:.5rem;min-width:128px}.logo-mark{width:28px;height:28px;border-radius:7px;background:#5b8fd9;color:#fff;display:grid;place-items:center}.switcher select,.chip{background:#3d3d3d;border-color:#555;border-radius:7px}.switcher select:hover,.chip:hover{background:#494949}.publish{border-radius:7px}.nav-toggle{display:none;border:0;background:transparent;color:#fff;padding:.4rem}
 .frame{grid-template-columns:var(--rail) minmax(0,1fr);min-height:calc(100vh - 56px)}
 .rail{top:56px;height:calc(100vh - 56px);background:#f6f6f7;border-right:1px solid #d9d9dc;padding:.7rem .65rem;gap:.25rem;box-shadow:none}
 .nav-main{display:grid;gap:.12rem;border-bottom:1px solid #e2e2e4;padding-bottom:.5rem;margin-bottom:.15rem}.rail a{min-height:34px;border-radius:7px;padding:.4rem .55rem;gap:.7rem;color:#44474a}.rail a .icon{width:17px;height:17px;color:#5c5f62}.rail a b{font-size:12.5px;font-weight:500}.rail a:hover{background:#e9e9eb}.rail a.on{background:#e5eefb;color:#163b6d;box-shadow:inset 3px 0 #2c6ecb;font-weight:600}.rail a.on .icon{color:#2c6ecb}
 .nav-tree{margin:.05rem 0}.nav-tree summary{list-style:none;display:flex;align-items:center;gap:.7rem;min-height:34px;padding:.4rem .55rem;border-radius:7px;cursor:pointer;color:#44474a}.nav-tree summary::-webkit-details-marker{display:none}.nav-tree summary:hover{background:#e9e9eb}.nav-tree summary b{font-size:12.5px;font-weight:550;flex:1}.nav-tree summary .icon{width:17px;height:17px}.nav-tree summary .icon:last-child{width:13px;height:13px;transition:transform .15s;color:#8c9196}.nav-tree[open] summary .icon:last-child{transform:rotate(90deg)}.nav-tree.active>summary{color:#202223;font-weight:600}.nav-tree>div{border-left:1px solid #cfd2d4;margin:.1rem 0 .25rem 1.05rem;padding-left:.5rem}.rail a.child{min-height:31px;padding-left:.55rem}.rail a.child .icon{width:15px;height:15px}
-.rail-foot{display:flex;align-items:center;gap:.35rem;border-top:1px solid #e2e2e4;padding:.55rem 0 0;margin-top:auto}.rail-foot a{flex:1}.rail-foot .avatar{margin-right:.4rem}.page{max-width:1260px;padding:1.65rem 2rem 4rem}.panel{display:none;top:56px;height:calc(100vh - 56px)}
+.rail-foot{display:flex;align-items:center;gap:.35rem;border-top:1px solid #e2e2e4;padding:.55rem 0 0;margin-top:auto}.rail-foot a{flex:1}.rail-foot a.avatar{flex:0 0 26px;margin-right:.4rem}.page{max-width:1260px;padding:1.65rem 2rem 4rem}.panel{display:none;top:56px;height:calc(100vh - 56px)}
 .card,.metric-card{border-color:#e1e3e5;border-radius:12px;box-shadow:0 1px 3px #0000000a}.btn{border-color:#c9cccf;border-radius:7px;box-shadow:0 1px 0 #0000000d}.btn.primary{background:#2c6ecb;border-color:#2c6ecb}.btn.primary:hover{background:#1f5199}.pulse-card{background:linear-gradient(145deg,#173c70,#285f9f)}
 .voice,.send{display:grid;place-items:center;border:0;border-radius:8px;width:34px;height:32px;cursor:pointer}.voice{background:#eef0f1;color:#4f5559}.voice.listening{color:#fff;background:#b3261e;animation:pulse 1s infinite}.voice:disabled{opacity:.35;cursor:not-allowed}.send{margin-left:0;background:#202223;color:#fff}.send:disabled{opacity:.5}
 .assistant-queue{border-top:1px solid var(--line);padding:.65rem .8rem;max-height:150px;overflow:auto}.queue-item{display:flex;align-items:center;gap:.45rem;justify-content:space-between;padding:.4rem 0;border-top:1px solid #eef0f1}.queue-item:first-of-type{margin-top:.35rem}.queue-item span{min-width:0}.queue-item b{font-size:10px;text-transform:uppercase;color:var(--ok)}.queue-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);max-width:230px}.queue-item button{border:0;background:none;color:var(--muted);cursor:pointer}.queue-spin{width:12px;height:12px;border:2px solid #d9ddda;border-top-color:var(--ok);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-.asset-tabs{display:flex;gap:.35rem;margin-bottom:.9rem}.asset-tabs button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:.42rem .75rem;font:500 12px/1 'Inter';cursor:pointer}.asset-tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:1rem}.asset-card{display:flex;flex-direction:column;min-width:0;background:#fff;border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:0 1px 3px #0000000a}.asset-card[hidden]{display:none}.asset-cover{height:150px;position:relative;display:grid;place-items:center;overflow:hidden;background:linear-gradient(145deg,#e7edf6,#f5f7fa);color:#3f6490}.asset-cover img{width:100%;height:100%;object-fit:cover;transition:transform .2s}.asset-cover:hover img{transform:scale(1.015)}.asset-cover>span{width:58px;height:58px;display:grid;place-items:center;border-radius:16px;background:#fff9;box-shadow:0 8px 24px #2c6ecb15}.asset-cover em{position:absolute;left:.65rem;bottom:.6rem;background:#202223dd;color:#fff;border-radius:999px;padding:.23rem .55rem;font:600 9px/1 'Inter';text-transform:uppercase;letter-spacing:.12em}.asset-body{display:flex;flex-direction:column;gap:.7rem;padding:.9rem}.asset-body h2{font-size:14px;font-weight:600}.asset-body p{color:var(--muted);font-size:11px;line-height:1.35;margin:.15rem 0 0;min-height:2.7em}.asset-facts{display:flex;gap:.8rem;color:var(--muted);font-size:11px}.asset-metrics{display:grid;grid-template-columns:1fr 1fr;border:1px solid #e6e8e6;border-radius:9px;overflow:hidden}.asset-metrics>div{padding:.55rem .65rem}.asset-metrics>div+div{border-left:1px solid #e6e8e6}.asset-metrics small,.asset-metrics em{display:block;color:var(--muted);font:10px/1.3 'Inter';font-style:normal}.asset-metrics strong{display:block;font-size:14px;margin:.12rem 0;font-variant-numeric:tabular-nums}.asset-create{grid-template-columns:1.3fr 1fr}.media-upload{display:grid;grid-template-columns:1fr minmax(220px,320px) auto;align-items:center;gap:1rem}.media-upload p{font-size:11.5px;margin:.15rem 0 0}.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:.8rem}.media-card{margin:0;background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;min-width:0}.media-card>a{display:block;height:180px;background:linear-gradient(45deg,#f1f2f1 25%,#fafafa 25%,#fafafa 50%,#f1f2f1 50%,#f1f2f1 75%,#fafafa 75%);background-size:20px 20px}.media-card img{width:100%;height:100%;object-fit:contain;display:block}.media-card figcaption{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.65rem}.media-card figcaption>div{min-width:0}.media-card strong,.media-card span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.media-card strong{font-size:11.5px}.media-card span{font-size:10px;color:var(--muted);margin-top:.1rem}.media-card .btn{padding:.4rem .5rem;flex:0 0 auto}.funnel-path{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;align-items:center;gap:.45rem;background:#fff;border:1px solid var(--line);border-radius:12px;padding:.8rem;margin-bottom:1rem}.funnel-path>div{border:1px solid #e4e7e4;border-radius:9px;padding:.65rem;min-width:0}.funnel-path span{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#eaf2ff;color:#1f5eaa;font-size:10px;font-weight:700;margin-bottom:.4rem}.funnel-path b,.funnel-path small{display:block}.funnel-path b{font-size:11.5px}.funnel-path small{font-size:9.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.funnel-path>i{font-style:normal;color:#8c9196}
+.asset-tabs{display:flex;gap:.35rem;margin-bottom:.9rem}.asset-tabs button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:.42rem .75rem;font:500 12px/1 'Inter';cursor:pointer}.asset-tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:1rem}.asset-card{display:flex;flex-direction:column;min-width:0;background:#fff;border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:0 1px 3px #0000000a}.asset-card[hidden]{display:none}.asset-cover{height:180px;position:relative;display:grid;place-items:center;overflow:hidden;background:linear-gradient(145deg,#e7edf6,#f5f7fa);color:#3f6490}.asset-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f7f8fa;transition:transform .2s}.asset-cover img[hidden]{display:none}.asset-cover:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}.asset-cover>span{width:58px;height:58px;display:grid;place-items:center;border-radius:16px;background:#fff9;box-shadow:0 8px 24px #2c6ecb15}.asset-cover em{position:absolute;left:.65rem;bottom:.6rem;background:#202223dd;color:#fff;border-radius:999px;padding:.23rem .55rem;font:600 9px/1 'Inter';text-transform:uppercase;letter-spacing:.12em}.asset-body{display:flex;flex-direction:column;gap:.7rem;padding:.9rem}.asset-body h2{font-size:14px;font-weight:600}.asset-body p{color:var(--muted);font-size:11px;line-height:1.35;margin:.15rem 0 0;min-height:2.7em}.asset-facts{display:flex;gap:.8rem;color:var(--muted);font-size:11px}.asset-metrics{display:grid;grid-template-columns:1fr 1fr;border:1px solid #e6e8e6;border-radius:9px;overflow:hidden}.asset-metrics>div{padding:.55rem .65rem}.asset-metrics>div+div{border-left:1px solid #e6e8e6}.asset-metrics small,.asset-metrics em{display:block;color:var(--muted);font:10px/1.3 'Inter';font-style:normal}.asset-metrics strong{display:block;font-size:14px;margin:.12rem 0;font-variant-numeric:tabular-nums}.asset-create{grid-template-columns:1.3fr 1fr}.media-upload{display:grid;grid-template-columns:1fr minmax(220px,320px) auto;align-items:center;gap:1rem}.media-upload p{font-size:11.5px;margin:.15rem 0 0}.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:.8rem}.media-card{margin:0;background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;min-width:0}.media-card>a{display:block;height:180px;background:linear-gradient(45deg,#f1f2f1 25%,#fafafa 25%,#fafafa 50%,#f1f2f1 50%,#f1f2f1 75%,#fafafa 75%);background-size:20px 20px}.media-card img{width:100%;height:100%;object-fit:contain;display:block}.media-card figcaption{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.65rem}.media-card figcaption>div{min-width:0}.media-card strong,.media-card span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.media-card strong{font-size:11.5px}.media-card span{font-size:10px;color:var(--muted);margin-top:.1rem}.media-card .btn{padding:.4rem .5rem;flex:0 0 auto}.funnel-path{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;align-items:center;gap:.45rem;background:#fff;border:1px solid var(--line);border-radius:12px;padding:.8rem;margin-bottom:1rem}.funnel-path>div{border:1px solid #e4e7e4;border-radius:9px;padding:.65rem;min-width:0}.funnel-path span{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#eaf2ff;color:#1f5eaa;font-size:10px;font-weight:700;margin-bottom:.4rem}.funnel-path b,.funnel-path small{display:block}.funnel-path b{font-size:11.5px}.funnel-path small{font-size:9.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.funnel-path>i{font-style:normal;color:#8c9196}
 .create-panel>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none}.create-panel>summary::-webkit-details-marker{display:none}.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;margin-bottom:1rem}.flow-card{margin:0}.flow-card>summary{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:.7rem;cursor:pointer;list-style:none}.flow-card>summary::-webkit-details-marker{display:none}.flow-card summary small{display:block;color:var(--muted);font-size:11px}.flow-icon{width:32px;height:32px;border-radius:9px;background:#eaf2ff;color:#1f5eaa;display:grid;place-items:center;font-size:10px;font-weight:700}.section-title{display:flex;justify-content:space-between;align-items:flex-end;margin:.2rem 0 .7rem}.section-title h2{font-size:1rem}.section-title p{font-size:11.5px;margin:.15rem 0 0}.check{display:flex;align-items:center;gap:.35rem;font-size:12px;color:var(--muted)}
-@media (min-width:1560px){.frame{grid-template-columns:var(--rail) minmax(0,1fr) var(--panel)}.panel{display:flex}.page{padding-left:2.2rem;padding-right:2.2rem}}
+@media (min-width:1560px){.frame{grid-template-columns:var(--rail) minmax(0,1fr)}.panel{display:none}.page{padding-left:2.2rem;padding-right:2.2rem}}
 @media (min-width:901px) and (max-width:1559px){:root{--rail:240px}.frame{grid-template-columns:var(--rail) minmax(0,1fr)}}
 @media (max-width:900px){:root{--rail:240px}.nav-toggle{display:grid;place-items:center}.frame{display:block}.rail{position:fixed;z-index:60;left:-260px;top:56px;width:240px;transition:left .2s;box-shadow:10px 0 28px #0002}.nav-open .rail{left:0}.rail a{justify-content:flex-start}.rail a b{display:block}.page{padding:1rem}.flow-grid{grid-template-columns:1fr}.top .logo{min-width:0}.top .chip{display:none}.asset-create{grid-template-columns:1fr}.media-upload{grid-template-columns:1fr}.funnel-path{display:flex;overflow-x:auto;align-items:stretch}.funnel-path>div{min-width:145px}}
 `
+}
+
+export function assistantWidget(input: {store:Pick<Store,'id'|'name'>;active:string;title:string;messages:ChatMessage[];queue:AssistantRequest[]}): string {
+  const config=JSON.stringify({storeId:input.store.id,storeName:input.store.name,page:input.active,title:input.title,busy:input.queue.some(request=>request.status==='running'||request.status==='queued')}).replace(/</g,'\\u003c')
+  return `<style>${brandStyles}${readFileSync(new URL('./assistant-widget.css',import.meta.url),'utf8')}</style>
+  <button class="assistant-launcher" id="assistant-launcher" type="button" aria-label="Open business assistant" aria-controls="business-assistant" aria-expanded="false">${brandIcon(true)}<span class="assistant-badge" hidden></span></button>
+  <section class="assistant-widget" id="business-assistant" role="dialog" aria-label="Business assistant" hidden>
+    <header class="assistant-heading"><div><strong>${brandIcon()} Business assistant</strong><span>Here to help with your business</span></div><button type="button" id="assistant-close" aria-label="Minimize business assistant">${uiIcon('chevron')}</button></header>
+    <div class="assistant-context">${uiIcon(input.active==='editor'?'pages':'store',15)}<span>${escapeHtml(input.store.name)} · ${escapeHtml(input.title)}</span></div>
+    <div class="thread" id="thread" aria-live="polite">${assistantMessages(input.messages)}</div>
+    <div id="assistant-request-status" role="status"></div>
+    <form class="composer" method="post" action="/admin/ask" id="composer"><input type="hidden" name="storeId" value="${escapeHtml(input.store.id)}"><input type="hidden" name="page" value="${escapeHtml(input.active)}"><textarea name="text" id="ask" rows="3" placeholder="Ask a question, or tell me what to change…" aria-label="Message business assistant" required></textarea><div class="composer-row"><span>Uses this asset and page as context</span><button class="voice" id="voice" type="button" aria-label="Dictate request">${uiIcon('mic',17)}</button><button class="send" type="submit" aria-label="Send">${uiIcon('send',17)}</button></div></form>
+    <a class="assistant-history" href="/admin/ai">Conversation history ↗</a>
+  </section><script>window.__ASSISTANT=${config};${readFileSync(new URL('./assistant-widget.js',import.meta.url),'utf8')}</script>`
+}
+export function assistantMessages(messages:ChatMessage[]): string {
+  return messages.length?messages.map(bubble).join(''):'<div class="assistant-welcome"><h2>What would you like to change?</h2><p>I can help with pages, products, design, orders, and the rest of your business.</p></div>'
 }

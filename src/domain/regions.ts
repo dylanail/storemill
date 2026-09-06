@@ -109,11 +109,15 @@ export function regionForCountry(db: Db, storeId: string, country: string): Regi
   return listRegions(db, storeId).find((region) => region.countries.map((entry) => entry.toUpperCase()).includes(normalized)) ?? defaultRegion(db, storeId)
 }
 
-export function convertCents(cents: number, region: Region | null | undefined, sourceCurrency = 'USD'): number {
-  if (!region) return cents
+export function minorUnitRate(region: Pick<Region, 'currency' | 'exchangeRate'> | null | undefined, sourceCurrency = 'USD'): number {
+  if (!region) return 1
   const sourceScale = 10 ** minorDigits(sourceCurrency)
   const targetScale = 10 ** minorDigits(region.currency)
-  return Math.round((cents / sourceScale) * region.exchangeRate * targetScale)
+  return region.exchangeRate * targetScale / sourceScale
+}
+
+export function convertCents(cents: number, region: Region | null | undefined, sourceCurrency = 'USD'): number {
+  return Math.round(cents * minorUnitRate(region, sourceCurrency))
 }
 
 /** Reverse a charged regional amount into the store's base minor unit. */
@@ -142,6 +146,64 @@ export function addShippingOption(
   return rowToOption(db.one('SELECT * FROM shipping_options WHERE id = ?', optionId) as Row)
 }
 
+/** Removes a region and its rates. The last one stays: a checkout with no region has no currency and no rate. */
+export function deleteRegion(db: Db, storeId: string, regionId: string) {
+  const regions = listRegions(db, storeId)
+  const region = regions.find((entry) => entry.id === regionId)
+  if (!region) throw new Error('No such region')
+  if (regions.length === 1) throw new Error('A store needs one region: it is where the checkout gets its currency and its rates.')
+  db.tx(() => {
+    db.run('DELETE FROM shipping_options WHERE region_id = ?', regionId)
+    db.run('DELETE FROM regions WHERE id = ? AND store_id = ?', regionId, storeId)
+    if (region.isDefault) {
+      const next = regions.find((entry) => entry.id !== regionId)
+      if (next) db.run('UPDATE regions SET is_default = 1 WHERE id = ?', next.id)
+    }
+  })
+}
+
+export function updateShippingOption(
+  db: Db,
+  optionId: string,
+  patch: { name?: string; amountCents?: number; freeAboveCents?: number | null; position?: number },
+): ShippingOption {
+  const values: Row = {}
+  if (patch.name !== undefined) values.name = patch.name
+  if (patch.amountCents !== undefined) values.amount_cents = patch.amountCents
+  if (patch.freeAboveCents !== undefined) values.free_above_cents = patch.freeAboveCents
+  if (patch.position !== undefined) values.position = patch.position
+  if (Object.keys(values).length) db.update('shipping_options', optionId, values)
+  return rowToOption(db.one('SELECT * FROM shipping_options WHERE id = ?', optionId) as Row)
+}
+
+/**
+ * A rate by name: the same name changes the rate that is there rather than
+ * adding a second one beside it. "Standard shipping" set twice used to leave
+ * two standard rates, and the cart quoted whichever came first.
+ */
+export function setShippingOption(
+  db: Db,
+  regionId: string,
+  input: { name: string; amountCents: number; freeAboveCents?: number | null },
+): ShippingOption {
+  const existing = db.one<{ id: string }>('SELECT id FROM shipping_options WHERE region_id = ? AND lower(name) = lower(?)', regionId, input.name)
+  if (existing) return updateShippingOption(db, existing.id, { name: input.name, amountCents: input.amountCents, freeAboveCents: input.freeAboveCents ?? null })
+  return addShippingOption(db, regionId, input)
+}
+
+/** Removes a rate. The last one in a region stays; without it the cart has nothing to quote. */
+export function deleteShippingOption(db: Db, storeId: string, optionId: string) {
+  const region = listRegions(db, storeId).find((entry) => entry.shipping.some((option) => option.id === optionId))
+  if (!region) throw new Error('No such shipping rate')
+  if (region.shipping.length === 1) throw new Error(`${region.name} needs one rate: the cart has nothing to quote without it.`)
+  db.run('DELETE FROM shipping_options WHERE id = ?', optionId)
+  // Positions stay contiguous — the first rate is the standard one a free
+  // shipping promotion applies to, and a gap would make that arbitrary.
+  region.shipping
+    .filter((option) => option.id !== optionId)
+    .forEach((option, index) => db.update('shipping_options', option.id, { position: index }))
+}
+
 /** Per-region free-shipping thresholds: the cheapest option that clears wins. */
 export function rateFor(region: Region | null, subtotalCents: number, freeShipping: boolean, optionId?: string): { name: string; amountCents: number; gapCents: number | null; optionId: string } {
   if (!region || !region.shipping.length) {
@@ -150,10 +212,10 @@ export function rateFor(region: Region | null, subtotalCents: number, freeShippi
   const option = (optionId ? region.shipping.find((entry) => entry.id === optionId) : undefined) ?? (region.shipping[0] as ShippingOption)
   // Free shipping earned by a promotion applies to the standard rate; a
   // customer who picks express still pays the difference.
-  if (freeShipping && option.position === 0) return { name: `${option.name} (free)`, amountCents: 0, gapCents: null, optionId: option.id }
+  if (freeShipping && option.position === 0) return { name: `${option.name} (free)`, amountCents: 0, gapCents: 0, optionId: option.id }
   const threshold = option.freeAboveCents
   if (threshold !== null && subtotalCents >= threshold) {
-    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: null, optionId: option.id }
+    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: 0, optionId: option.id }
   }
   return {
     name: option.name,

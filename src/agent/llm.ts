@@ -1,10 +1,11 @@
+import { platformContext } from './context.ts'
 import { listProducts } from '../domain/catalog.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { getStore } from '../control/stores.ts'
 import type { Db } from '../lib/db.ts'
 import { logger } from '../lib/log.ts'
 import { getTool, toolDefinitions } from './registry.ts'
-import { modelFor, planWithTools, type ModelChoice, type Turn } from './models.ts'
+import { complete, modelFor, planWithTools, type ModelChoice, type Turn } from './models.ts'
 import type { PlannedStep } from './runtime.ts'
 
 const log = logger('planner')
@@ -52,9 +53,10 @@ function systemPrompt(context: PlanContext): string {
   const products = listProducts(context.db, context.storeId, { limit: 20 })
   const promotions = listPromotions(context.db, context.storeId)
   return [
-    `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on Amboras, for its owner. You act by calling tools; you do not describe what the owner should click.`,
+    `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on storemill, for its owner. You act by calling tools; you do not describe what the owner should click.`,
+    platformContext(context.db,context.storeId,context.page),
     store?.brand.voice ? `Store voice: ${store.brand.voice}` : '',
-    context.page ? `The owner is on the ${context.page} page; prefer tools relevant to it.` : '',
+    context.page ? `The current area is ${context.page.split('|')[0]}; use its asset/page IDs from the captured context.` : '',
     `Currency is ${store?.currency ?? 'USD'} and every amount you pass is in minor units (cents).`,
     products.length ? `Products: ${products.map((product) => `${product.title} (${product.id})`).join(', ')}` : 'The catalog is empty.',
     promotions.length ? `Promotions: ${promotions.map((promotion) => `${promotion.title}${promotion.code ? ` [${promotion.code}]` : ''}`).join(', ')}` : '',
@@ -330,6 +332,51 @@ export async function plan(prompt: string, context: PlanContext): Promise<Plan> 
 }
 
 /** The reply the merchant reads once the run finishes. */
+/**
+ * The second turn.
+ *
+ * The planner makes one call: its tool calls become the run's steps and its
+ * words become the reply, written before any tool has run. So the system
+ * prompt's promise — "a question gets an answer in words, from the tools that
+ * read the store" — was one a single-turn loop could not keep: asked what to
+ * do next, the assistant answered from the store summary in its own system
+ * prompt and never saw what `get_kpis` or `build_status` actually returned.
+ *
+ * This is that missing turn. It goes back to the model with what the tools
+ * returned and asks for the answer. Returns null when there is no model, or
+ * when the model cannot be reached — the caller falls back to stitching the
+ * tools' own summaries together, which is what always happened before.
+ */
+export async function answer(
+  context: PlanContext,
+  input: { prompt: string; preamble: string; results: Array<{ tool?: string; summary: string; data?: unknown }>; failures: string[] },
+): Promise<string | null> {
+  const choice = modelFor(context.db, context.storeId, 'planner')
+  if (!choice || !input.results.length) return null
+  const findings = input.results.slice(0, 12).map((result) => {
+    const data = result.data === undefined ? '' : JSON.stringify(result.data).slice(0, 1500)
+    return `- ${result.tool ?? 'tool'}: ${result.summary}${data ? `\n  data: ${data}` : ''}`
+  })
+  try {
+    const text = await complete(choice, {
+      task: 'planner',
+      system: `${systemPrompt(context)}\n\nYou have already run the tools. Answer the owner in plain words, using what came back. State numbers exactly as the tools gave them and never invent one they did not. If something failed, say so in a sentence. Do not name the tools, do not describe what you are about to do, and do not offer a list of things you could do instead — this is the answer.`,
+      prompt: [
+        `The owner asked: ${input.prompt}`,
+        input.preamble.trim() ? `You said you would: ${input.preamble.trim()}` : '',
+        `What the tools returned:\n${findings.join('\n')}`,
+        input.failures.length ? `What failed:\n${input.failures.map((failure) => `- ${failure}`).join('\n')}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    })
+    return text.trim() || null
+  } catch (error) {
+    log.warn(`${choice.model} could not write the answer: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
 export function compose(preamble: string, summaries: string[], failures: string[]): string {
   const parts = [preamble.trim()]
   if (summaries.length) parts.push(summaries.join(' '))

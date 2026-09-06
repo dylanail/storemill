@@ -94,7 +94,11 @@ export function readBrief(prompt: string): Brief {
   const text = prompt.toLowerCase()
   const category = CATEGORIES.find(([, words]) => words.some((word) => text.includes(word)))?.[0] ?? 'goods'
   const mood = MOOD_WORDS.find(([, words]) => words.some((word) => text.includes(word)))?.[0] ?? PALETTES[seedOf(prompt) % PALETTES.length]?.mood ?? 'heritage'
-  const place = PLACES.find((candidate) => text.includes(candidate.toLowerCase())) ?? PLACES[seedOf(prompt + 'place') % PLACES.length] as string
+  // Only a place the owner actually named. Hashing the prompt into a list of
+  // cities invented a place of manufacture, and it was printed as a spec row,
+  // in the announcement bar, in the shipping copy and in the proof points —
+  // the one claim this platform says twice that it never makes.
+  const place = PLACES.find((candidate) => text.includes(candidate.toLowerCase())) ?? ''
   const audience = /\b(men|women|kids|children|dogs|cats|athletes|runners|climbers)\b/.exec(text)?.[1] ?? 'people who care about the details'
   return { prompt, category, mood, place, material: MATERIALS[category] ?? 'materials chosen one at a time', audience }
 }
@@ -123,7 +127,7 @@ export function brandName(brief: Brief): string {
 
 export function slogan(brief: Brief, name: string): string {
   const options = [
-    `${capitalize(brief.material)}, made in ${brief.place}.`,
+    brief.place ? `${capitalize(brief.material)}, made in ${brief.place}.` : `${capitalize(brief.material)}.`,
     `Built for ${brief.audience}.`,
     `${capitalize(brief.category)} that outlives the trend.`,
     `One thing, done properly.`,
@@ -133,7 +137,7 @@ export function slogan(brief: Brief, name: string): string {
 
 export function brandDescription(brief: Brief, name: string): string {
   return (
-    `${name} makes ${brief.category} from ${brief.material}, in small runs, in ${brief.place}. ` +
+    `${name} makes ${brief.category} from ${brief.material}, in small runs${brief.place ? `, in ${brief.place}` : ''}. ` +
     `Everything is built to be repaired rather than replaced, priced so the maker is paid properly, ` +
     `and sold direct so nothing has to be padded to survive a wholesale margin.`
   )
@@ -144,7 +148,7 @@ export function brandVoice(brief: Brief): string {
 }
 
 export function announcement(brief: Brief): string {
-  return `MADE IN ${brief.place.toUpperCase()} · 14-DAY BUILD TIME · FREE SHIPPING OVER $200`
+  return brief.place ? `MADE IN ${brief.place.toUpperCase()} · FREE SHIPPING OVER $200` : 'FREE SHIPPING OVER $200'
 }
 
 /* --------------------------------------------------------------- the products */
@@ -257,7 +261,7 @@ function subtitleFor(brief: Brief, noun: string): string {
 function productCopy(brief: Brief, brandLabel: string, noun: string): string {
   const parts = [
     `The ${noun} is the piece ${brandLabel} started with, and the one everything else has to sit alongside.`,
-    `It is made from ${brief.material} in a workshop in ${brief.place}, in runs small enough that the person who assembled yours could tell you which batch it came from.`,
+    `It is made from ${brief.material}${brief.place ? ` in a workshop in ${brief.place}` : ''}, in runs small enough that the person who assembled yours could tell you which batch it came from.`,
     `Nothing here is decorative. The stitching is doubled where the load actually goes, the edges are burnished rather than painted so they will not crack, and the hardware is oversized by a size because the failure point on cheap ${brief.category} is never the material, it is the fitting.`,
     `Expect it to look better in a year than it does in the photographs. ${capitalize(brief.material)} takes on the shape of the person using it, and the finish deepens where your hands sit.`,
     `It is not the cheapest option and it is not trying to be. If you replace your ${brief.category} every season because you like the change, buy something else and enjoy it. If you would rather buy once, repair twice, and stop thinking about it, this is the one.`,
@@ -268,7 +272,7 @@ function productCopy(brief: Brief, brandLabel: string, noun: string): string {
 
 export function collectionPlan(brief: Brief): Array<{ title: string; description: string }> {
   return [
-    { title: 'New arrivals', description: `The most recent work out of the ${brief.place} workshop.` },
+    { title: 'New arrivals', description: brief.place ? `The most recent work out of the ${brief.place} workshop.` : 'The most recent work.' },
     { title: 'The essentials', description: `If you are buying one thing from us, buy from here.` },
   ]
 }

@@ -1,3 +1,4 @@
+import './lib/env.ts'
 import { getDb } from './lib/db.ts'
 import { logger } from './lib/log.ts'
 import './agent/tools/index.ts'

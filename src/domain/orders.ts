@@ -37,6 +37,7 @@ export function rowToOrder(row: Row): Order {
     downsell: json(row.downsell, {}),
     supplierOrder: json(row.supplier_order, {}),
     deliveredAt: (row.delivered_at as string | null) ?? null,
+    notes: (row.notes as string) ?? '',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -85,6 +86,7 @@ export function completeCart(
 ): Order {
   const cart = getCart(db, storeId, cartId)
   if (!cart) throw new CheckoutError('No cart')
+  if (cart.checkout.preview) throw new CheckoutError('Preview checkout: no payment or order is created. Publish the store to accept orders.')
   if (cart.orderId) return getOrder(db, storeId, cart.orderId) as Order
   if (!cart.items.length) throw new CheckoutError('Your cart is empty')
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.email)) throw new CheckoutError('Enter a valid email address')
@@ -179,7 +181,12 @@ export function recordUpsell(
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
   const baseExtra = outcome.accepted ? (outcome.baseAmountCents ?? extra) : 0
   db.tx(() => {
-    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    // completeCart refuses a checkout when the stock is not there; the
+    // post-purchase offer threw the same answer away and charged the saved
+    // card anyway, leaving negative inventory and a line nobody could ship.
+    if (outcome.accepted && outcome.line && !reserveInventory(db, outcome.line.variantId, outcome.line.quantity)) {
+      throw new CheckoutError('That is out of stock.')
+    }
     db.update('orders', order.id, {
       items,
       subtotal_cents: order.subtotalCents + extra,
@@ -198,7 +205,9 @@ export function recordDownsell(db: Db, storeId: string, orderId: string, outcome
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
   const baseExtra = outcome.accepted ? (outcome.baseAmountCents ?? extra) : 0
   db.tx(() => {
-    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    if (outcome.accepted && outcome.line && !reserveInventory(db, outcome.line.variantId, outcome.line.quantity)) {
+      throw new CheckoutError('That is out of stock.')
+    }
     db.update('orders', order.id, {
       items: outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items,
       subtotal_cents: order.subtotalCents + extra,
@@ -268,6 +277,10 @@ export function cancelOrder(db: Db, storeId: string, orderId: string): Order {
 export function returnOrder(db: Db, storeId: string, orderId: string, reason = ''): Order {
   const order = getOrder(db, storeId, orderId)
   if (!order) throw new Error('No order')
+  // Idempotent, the way cancelOrder is. Without this a second call put every
+  // line back into inventory again and only then hit "Nothing left to refund",
+  // so the stock was already wrong by the time anything complained.
+  if (order.fulfillmentStatus === 'returned') return order
   db.tx(() => {
     for (const item of order.items) releaseInventory(db, item.variantId, item.quantity)
     db.update('orders', order.id, { fulfillment_status: 'returned', updated_at: now() })

@@ -1,0 +1,44 @@
+name: Production checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:all
+      - run: npm audit --omit=dev --audit-level=high
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t storemill-ci .
+      - name: Start production container and verify health
+        shell: bash
+        run: |
+          docker run -d --name storemill-smoke -p 127.0.0.1:4100:4100 -e STOREMILL_SECRET="$(openssl rand -hex 32)" storemill-ci
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4100/healthz; then
+              curl --fail --silent http://127.0.0.1:4100/login > /dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs storemill-smoke
+          exit 1
+      - name: Clean up
+        if: always()
+        run: docker rm -f storemill-smoke || true

@@ -1,3 +1,4 @@
+import { healthFixes, suggestedFix } from '../storefront/health-fixes.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { format } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
@@ -15,6 +16,7 @@ import { legalFor } from '../storefront/legal.ts'
 import { DEFAULT_POPUP } from '../storefront/behaviour.ts'
 import { behaviour, type Range } from '../analytics/events.ts'
 import { funnelGroups, funnelStats } from '../domain/funnels.ts'
+import { profitReport } from '../domain/ops.ts'
 import { calendarMonth } from '../agent/knowledge.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
@@ -74,6 +76,8 @@ export function pagePlanCard(ctx: Ctx): string {
   if (!plan.shape) return `<div class="card" id="pages"><h2>Page plan</h2><p class="muted" style="font-size:12.5px">Choose the shape and the pages it needs are listed here, each with a status and a template.</p></div>`
   const product = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 1 })[0]
   const make = (entry: (typeof plan.pages)[number]) => {
+    // A draft is written; what it needs is publishing, not another copy.
+    if (entry.status === 'draft') return `<a class="btn primary" href="/admin${e(entry.href)}" style="font-size:11px">Publish it</a>`
     if (entry.status === 'done') return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.builtIn && !entry.template ? 'Open' : 'Edit'}</a>`
     if (entry.template && !entry.builtIn) return `<form method="post" action="/admin/pages/new"><input type="hidden" name="template" value="${entry.template}"><input type="hidden" name="productId" value="${e(product?.id ?? '')}"><button class="btn primary" type="submit" style="font-size:11px">Create from template</button></form>`
     return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.status === 'missing' ? 'Set it up' : 'Open'}</a>`
@@ -81,7 +85,7 @@ export function pagePlanCard(ctx: Ctx): string {
   return `<div class="card" id="pages" style="padding:0"><div style="padding:1rem 1.1rem"><h2 style="margin:0">Page plan</h2><p class="muted" style="font-size:12px;margin:.3rem 0 0">${plan.shape === 'store' ? 'A Shopify-style store' : 'A funnel'}${plan.doors.length ? ` with ${plan.doors.map((door) => DOORS.find((entry) => entry.id === door)?.name.toLowerCase() ?? door).join(' and ')} in front` : ''}. Statuses come from what exists.</p></div>
     <table class="data"><tbody>${plan.pages.map((entry) => `<tr>
       <td><strong>${e(entry.label)}</strong>${entry.optional ? ' <span class="muted" style="font-size:11px">optional</span>' : ''}<div class="muted" style="font-size:11.5px">${e(entry.detail)}</div></td>
-      <td style="width:12rem"><span class="tag ${entry.status === 'done' ? 'ok' : entry.status === 'missing' ? (entry.optional ? '' : 'warn') : ''}">${entry.status}</span> <span class="muted" style="font-size:11.5px">${e(entry.why)}</span></td>
+      <td style="width:12rem"><span class="tag ${entry.status === 'done' ? 'ok' : entry.status === 'draft' ? 'warn' : entry.status === 'missing' ? (entry.optional ? '' : 'warn') : ''}">${entry.status}</span> <span class="muted" style="font-size:11.5px">${e(entry.why)}</span></td>
       <td style="width:9rem;text-align:right">${make(entry)}</td></tr>`).join('')}</tbody></table></div>`
 }
 
@@ -93,8 +97,8 @@ export function answersCard(state: BuildState): string {
     <form method="post" action="/admin/build/answers">
     ${QUESTIONS.map((question) => {
       const answer = state.answers[question.key]
-      return `<div class="field"><label>${e(question.label)}</label>
-        <div class="row"><input name="${question.key}" value="${e(answer?.value ?? '')}" placeholder="${e(question.help)}" style="flex:1" ${answer?.unknown ? '' : ''}>
+      return `<div class="field"><label for="buyer-${question.key}">${e(question.label)}</label>
+        <div class="row"><input id="buyer-${question.key}" name="${question.key}" value="${e(answer?.value ?? '')}" placeholder="${e(question.help)}" style="flex:1" ${answer?.unknown ? '' : ''}>
         <label class="row" style="font-size:12px;gap:.3rem;white-space:nowrap"><input type="checkbox" name="${question.key}_unknown" value="true" ${answer?.unknown ? 'checked' : ''}> I don't know</label></div>
         ${answer?.unknown && answer.assumed ? `<span class="muted" style="font-size:11.5px">Assumed by research: ${e(answer.assumed)} — type it in to confirm.</span>` : ''}</div>`
     }).join('')}
@@ -113,11 +117,11 @@ export function marketPage(ctx: Ctx): string {
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Market</h1><p class="muted" style="margin:.25rem 0 0">Planning, saved under this store: where the market sits, the product as the buyer sees it, the core avatar and its sub-avatars, and the ad plan that comes out of them.</p></div>
     <span class="tag">${e(month.month)}: ${e(month.theme)} — ${e(month.leadDesires.join(', '))}</span></div>
   ${analysisCard(ctx, research !== null, analysis)}
-  <div class="grid2"><div>${avatarTreeCard(ctx)}${adPlanCard(plan)}</div><div>${overviewCard(ctx, overviews)}${loopCard(loops)}</div></div>`
+  <div class="grid2"><div>${avatarTreeCard(ctx)}${adPlanCard(ctx, plan)}</div><div>${overviewCard(ctx, overviews)}${loopCard(loops)}</div></div>`
 }
 
 function analysisCard(ctx: Ctx, hasResearch: boolean, doc: ReturnType<typeof latestDoc<MarketAnalysis>>): string {
-  const form = `<form method="post" action="/admin/market/analysis" class="row" style="margin-top:.6rem"><input name="notes" placeholder="Anything to add: a competitor, a mechanism you know about, a rule" style="flex:1"><button class="btn primary" type="submit" ${hasResearch ? '' : 'disabled title="Run research first"'}>${doc ? 'Write it again' : 'Write the analysis'}</button></form>`
+  const form = `<form method="post" action="/admin/market/analysis" class="row" style="margin-top:.6rem"><input aria-label="Market analysis notes" name="notes" placeholder="Anything to add: a competitor, a mechanism you know about, a rule" style="flex:1"><button class="btn primary" type="submit" ${hasResearch ? '' : 'disabled title="Run research first"'}>${doc ? 'Write it again' : 'Write the analysis'}</button></form>`
   if (!doc) return `<div class="card"><h2>Market analysis</h2><p class="muted" style="font-size:12.5px">Awareness, sophistication, the desires ranked, the searches to run, the mechanism, the new information, the underserved avatar, and whether there is a way to stand out at all.${hasResearch ? '' : ' Run customer research first; the analysis reads it.'}</p>${form}</div>`
   const a = doc.body
   const stand = a.standOut.found ? `<div class="notice" style="border-left-color:var(--ok)"><strong>A way to stand out: ${e(a.standOut.via)}.</strong> ${e(a.standOut.recommendation)}</div>` : `<div class="notice" style="border-left-color:var(--bad)"><strong>No way to stand out yet.</strong> ${e(a.standOut.recommendation)}</div>`
@@ -158,7 +162,7 @@ function avatarTreeCard(ctx: Ctx): string {
 function overviewCard(ctx: Ctx, docs: Array<ReturnType<typeof latestDoc<ProductOverview>> & object>): string {
   return `<div class="card"><h2>Product overview</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What it is, what it does, why that matters, what the buyer wants, the mechanisms, and the hidden ones. Everything a model writes here is assumed until you confirm it.</p>
-    <form method="post" action="/admin/market/overview" class="row"><select name="productId" style="flex:1">${productOptions(ctx)}</select><button class="btn primary" type="submit">Write it</button></form>
+    <form method="post" action="/admin/market/overview" class="row"><select aria-label="Product for overview" name="productId" style="flex:1">${productOptions(ctx)}</select><button class="btn primary" type="submit">Write it</button></form>
     ${docs.map((doc) => { if (!doc) return ''; const o = doc.body; return `<details style="border-top:1px solid var(--line);margin-top:.6rem"><summary style="cursor:pointer;padding:.5rem 0;font-size:13px"><strong>${e(o.name)}</strong> <span class="muted">· ${e(o.price)}${o.compareAt ? ` (was ${e(o.compareAt)})` : ''} · ${doc.source === 'rules' ? 'rules' : e(doc.model)}${o.assumed ? ' · assumed' : ''}</span></summary>
       <div style="font-size:12.5px"><div class="eyebrow">In plain words</div><p>${e(o.sixthGrade || o.howItWorks)}</p>
       <div class="eyebrow">Features → benefits → desires</div><table class="data"><tbody>${o.benefits.map((entry, index) => `<tr><td>${e(entry.feature)}</td><td class="muted">${e(entry.benefit)}</td><td>${e(o.desires[index]?.desire ?? '')}</td></tr>`).join('')}</tbody></table>
@@ -167,7 +171,7 @@ function overviewCard(ctx: Ctx, docs: Array<ReturnType<typeof latestDoc<ProductO
       <form method="post" action="/admin/market/docs/${e(doc.id)}/delete" style="margin-top:.4rem"><button class="btn" type="submit" style="font-size:11px">Delete</button></form></div></details>` }).join('')}</div>`
 }
 
-function adPlanCard(doc: ReturnType<typeof latestDoc<AdPlan>>): string {
+function adPlanCard(ctx: Ctx, doc: ReturnType<typeof latestDoc<AdPlan>>): string {
   const statuses = ['idea', 'working', 'learning', 'done'] as const
   return `<div class="card" id="plan"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Ad plan</h2><form method="post" action="/admin/market/plan"><button class="btn primary" type="submit">${doc ? 'Add the next tests' : 'Write the plan'}</button></form></div>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Concept → angle → variations → format → method. Statics first as marksman tests across sub-avatars; a sniper video on what wins. A row is done only when its learnings are written down.${doc ? ` ${doc.source === 'rules' ? 'Rules plan.' : `Written by ${e(doc.model)}.`}` : ''}</p>
@@ -181,12 +185,17 @@ function adPlanCard(doc: ReturnType<typeof latestDoc<AdPlan>>): string {
         <div class="row"><div class="field" style="flex:0 0 9rem"><label>Status</label><select name="status">${statuses.map((status) => `<option ${status === row.status ? 'selected' : ''}>${status}</option>`).join('')}</select></div>
           <div class="field" style="flex:1"><label>Result (spend share, KPI, winner or loser)</label><input name="result" value="${e(row.result)}"></div></div>
         <div class="field"><label>Learnings — the row is not done without them</label><textarea name="learnings" rows="2">${e(row.learnings)}</textarea></div>
-        <button class="btn" type="submit">Save row</button></form></details>`).join('') : '<p class="muted" style="font-size:12.5px">No plan yet. Turn on at least one avatar first.</p>'}</div>`
+        <button class="btn" type="submit">Save row</button></form>
+      <form method="post" action="/admin/market/plan/${index}/ads" class="row" style="gap:.4rem;align-items:flex-end;padding-bottom:.6rem">
+        <div class="field" style="flex:1;margin:0"><label>Draft this row as ads</label><select name="productId">${productOptions(ctx)}</select></div>
+        <div class="field" style="width:8rem;margin:0"><label>Platform</label><select name="platform"><option value="meta">Meta</option><option value="tiktok">TikTok</option><option value="google">Google</option><option value="youtube">YouTube</option></select></div>
+        <button class="btn primary" type="submit">Write them</button></form>
+      <p class="muted" style="font-size:11px;margin:0 0 .6rem">Its angle, its variations and its format go to the ad writer as they are — the row stops being a note you retype.</p></details>`).join('') : '<p class="muted" style="font-size:12.5px">No plan yet. Turn on at least one avatar first.</p>'}</div>`
 }
 
 function loopCard(loops: Array<ReturnType<typeof latestDoc<Loop>> & object>): string {
   return `<div class="card" id="loops"><h2>Feedback loops</h2>
-    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What keeps failing, what keeps working, the hypotheses ranked by confidence, the actions. Kept here so the planner and the writers can read them.</p>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What keeps failing, what keeps working, the hypotheses ranked by confidence, the actions. The ad planner and the ad writer are handed the three most recent, so what this account has learned reaches what it writes next.</p>
     <form method="post" action="/admin/market/loop">
       <div class="field"><label>What keeps failing</label><input name="failing" placeholder="Statics get spend but no purchases"></div>
       <div class="field"><label>What keeps working</label><input name="working" placeholder="The comparison angle carries the account"></div>
@@ -211,19 +220,19 @@ export function creativePage(ctx: Ctx): string {
   const item = (entry: (typeof queue)[number]) => {
     const body = entry.body as Record<string, unknown>
     let detail = ''
-    if (entry.kind === 'photo-brief') { const brief = body as unknown as PhotoBrief; detail = `<p style="margin:.2rem 0"><strong>${e(brief.what)}</strong></p><p class="muted" style="margin:.2rem 0">Why: ${e(brief.why)}</p><p class="muted" style="margin:.2rem 0">How: ${e(brief.how)}</p><p class="muted" style="margin:.2rem 0;font-size:11.5px">When you upload it, put <code>photo:${e(brief.id)}</code> in the alt text so the checklist sees it.</p>` }
+    if (entry.kind === 'photo-brief') { const brief = body as unknown as PhotoBrief; detail = `<p style="margin:.2rem 0"><strong>${e(brief.what)}</strong></p><p class="muted" style="margin:.2rem 0">Why: ${e(brief.why)}</p><p class="muted" style="margin:.2rem 0">How: ${e(brief.how)}</p><p class="muted" style="margin:.2rem 0;font-size:11.5px">Upload it on the product and pick "${e(brief.name)}" under the image — that is what the checklist below counts.</p>` }
     else if (entry.kind === 'ugc-concept') { const concept = body as unknown as UgcConcept; detail = `<p style="margin:.2rem 0"><span class="muted">Who:</span> ${e(concept.who)} · <span class="muted">Format:</span> ${e(concept.format)} · <span class="muted">Angle:</span> ${e(concept.angle)}</p><p style="margin:.2rem 0"><span class="muted">Scene:</span> ${e(concept.scene)}</p><p style="margin:.2rem 0"><span class="muted">Says:</span> "${e(concept.says)}"</p><ol style="padding-left:1.1rem;margin:.2rem 0">${concept.shots.map((shot) => `<li>${e(shot)}</li>`).join('')}</ol><p class="muted" style="margin:.2rem 0;font-size:11.5px">Disclosure: ${e(concept.disclosure)}. This is a brief for a real person to film; it never appears as a review.</p>` }
     else if (entry.kind === 'gif') { const gif = body as unknown as GifRecord; detail = `<div class="row"><img src="${e(gif.url)}" alt="" style="width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><span class="muted" style="font-size:12px">${gif.width}×${gif.height}, ${gif.frames} frames from ${gif.sources.length} images. Approving adds it to the product's media.</span></div>` }
     return `<details style="border-top:1px solid var(--line)"><summary style="cursor:pointer;padding:.5rem 0;font-size:13px"><span class="tag ${entry.status === 'approved' ? 'ok' : entry.status === 'rejected' ? 'bad' : 'warn'}">${entry.status}</span> <span class="tag">${e(entry.kind)}</span> <strong>${e(entry.title)}</strong>${entry.note ? ` <span class="muted">· ${e(entry.note)}</span>` : ''}</summary>
       <div style="font-size:12.5px;padding:.3rem 0 .6rem">${detail}
-      <form method="post" action="/admin/creative/${e(entry.id)}/status" class="row" style="margin-top:.4rem"><input name="note" placeholder="Note" style="flex:1"><button class="btn" name="status" value="approved" type="submit">Approve</button><button class="btn" name="status" value="rejected" type="submit">Reject</button><button class="btn" name="status" value="delete" type="submit" onclick="return confirm('Delete this item?')">Delete</button></form></div></details>`
+      <form method="post" action="/admin/creative/${e(entry.id)}/status" class="row" style="margin-top:.4rem"><input aria-label="Creative review note" name="note" placeholder="Note" style="flex:1"><button class="btn" name="status" value="approved" type="submit">Approve</button><button class="btn" name="status" value="rejected" type="submit">Reject</button><button class="btn" name="status" value="delete" type="submit" onclick="return confirm('Delete this item?')">Delete</button></form></div></details>`
   }
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Creative</h1><p class="muted" style="margin:.25rem 0 0">Photo briefs to shoot, creator-content concepts to vet, GIFs to approve. Nothing here reaches a page, a review or an ad until you approve it.</p></div>
     <span class="tag ${pending.length ? 'warn' : 'ok'}">${pending.length} waiting</span></div>
   <div class="grid2"><div>
     <div class="card" id="queue"><h2>The queue</h2>${queue.length ? queue.map(item).join('') : '<p class="muted" style="font-size:12.5px">Nothing queued. Use the forms on the right.</p>'}</div>
     <div class="card" id="photos"><h2>Product photos against the briefs</h2>
-      <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">${PHOTO_BRIEFS.map((brief) => e(brief.name)).join(' · ')}. Mark a photo with <code>photo:&lt;id&gt;</code> in its alt text.</p>
+      <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">${PHOTO_BRIEFS.map((brief) => e(brief.name)).join(' · ')}. Label an image with the shot it is, under Media on the product.</p>
       <table class="data"><thead><tr><th>Product</th><th>Have</th><th>Missing</th><th></th></tr></thead><tbody>${coverage.map(({ product, have, missing }) => `<tr><td>${e(product.title)}</td><td>${have.map((brief) => `<span class="tag ok">${e(brief.id)}</span>`).join(' ') || '—'}</td><td>${missing.map((brief) => `<span class="tag">${e(brief.id)}</span>`).join(' ') || '<span class="tag ok">complete</span>'}</td>
         <td style="text-align:right"><form method="post" action="/admin/creative/briefs"><input type="hidden" name="productId" value="${e(product.id)}"><button class="btn" type="submit" style="font-size:11px" ${missing.length ? '' : 'disabled'}>Queue the briefs</button></form></td></tr>`).join('') || '<tr><td colspan="4" class="muted">No products yet.</td></tr>'}</tbody></table></div>
   </div><div>
@@ -267,25 +276,49 @@ export function legalCard(ctx: Ctx): string {
 }
 
 export function healthCard(ctx: Ctx, run: boolean): string {
-  if (!run) return `<div class="card" id="health"><h2>Accessibility and speed</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Renders the home page, the product pages and every published page as a visitor gets them and checks landmarks, alt text, labels, headings, focus, contrast, weight, scripts, fonts and lazy loading.</p><a class="btn primary" href="/admin/store?health=1#health">Run the report</a></div>`
-  const report = auditStore(ctx.db, ctx.store)
-  return `<div class="card" id="health"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Accessibility and speed</h2><span class="tag ${report.score >= 90 ? 'ok' : report.score >= 70 ? 'warn' : 'bad'}">score ${report.score}</span></div>
-    ${report.pages.map((page) => `<details style="border-top:1px solid var(--line);margin-top:.5rem" ${page.issues.length ? 'open' : ''}><summary style="cursor:pointer;padding:.4rem 0;font-size:13px"><span class="tag ${page.score >= 90 ? 'ok' : page.score >= 70 ? 'warn' : 'bad'}">${page.score}</span> <strong>${e(page.title)}</strong> <span class="muted">${e(page.path)} · ${Math.round(page.gzipBytes / 1024)}KB on the wire (${Math.round(page.bytes / 1024)}KB raw) · ${page.metrics.images} images, ${page.metrics.lazyImages} lazy · ${page.metrics.externalScripts} external scripts · ${page.metrics.h1s} h1</span></summary>
-      ${page.issues.length ? `<ul style="margin:.3rem 0 .6rem;padding-left:1.1rem;font-size:12.5px">${page.issues.map((issue) => `<li><span class="tag ${issue.severity === 'error' ? 'bad' : 'warn'}">${issue.check}</span> ${e(issue.detail)}</li>`).join('')}</ul>` : '<p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Nothing to fix.</p>'}</details>`).join('')}
-    <a class="btn" href="/admin/store?health=1#health" style="margin-top:.6rem">Run again</a></div>`
+  if(!run)return `<div class="card" id="health"><h2>Store speed & accessibility</h2><p class="muted">Check the saved pages, see a suggested repair for each finding, and apply a verified AI fix.</p><a class="btn primary" href="/admin/speed">Open Store Speed</a></div>`
+  const report=auditStore(ctx.db,ctx.store,{environment:'draft'}),jobs=healthFixes(ctx.db,ctx.store.id)
+  return `<div id="health"><div class="card"><div class="row" style="justify-content:space-between"><div><h2>Store Speed</h2><p class="muted">${report.pages.length} page URLs checked · all saved pages and up to 3 products · draft theme</p></div><span class="tag ${report.score>=90?'ok':report.score>=70?'warn':'bad'}">Health score ${report.score}</span><a class="btn" href="/admin/speed">Run again</a></div><p class="muted">This is a source audit, not a measured load time or Core Web Vitals score. Compressed sizes estimate HTML only; images, fonts and network timings are not included.</p><p class="muted">AI checks its repair before applying it. Saved page changes affect published pages; theme repairs stay in draft until you publish. Every applied fix can be undone.</p></div>
+  <div id="health-notice" role="status" aria-live="polite"></div>
+  ${report.pages.map(page=>`<details class="card" ${page.issues.length?'open':''}><summary><strong>${e(page.title)}</strong> <span class="muted">${e(page.path)} · ${(page.gzipBytes/1024).toFixed(1)} KB gzip HTML · ${page.issues.length} finding${page.issues.length===1?'':'s'}</span></summary>${page.issues.length?page.issues.map(issue=>{const job=jobs.find(job=>job.path===page.path&&job.check_name===issue.check&&job.status==='running');return `<article style="border-top:1px solid var(--line);padding:14px 0"><span class="tag ${issue.severity==='error'?'bad':'warn'}">${e(issue.check)}</span><p>${e(issue.detail)}</p><p><strong>Suggested fix:</strong> ${e(suggestedFix(issue))}</p><button type="button" class="btn primary" data-health-fix data-path="${e(page.path)}" data-check="${e(issue.check)}" ${job?'disabled':''}>${job?'AI is fixing…':'Fix with AI'}</button></article>`}).join(''):'<p class="muted">No issues found by these checks.</p>'}</details>`).join('')}
+  ${jobs.length?`<div class="card"><h2>Recent fixes</h2>${jobs.map(job=>`<article style="border-top:1px solid var(--line);padding:12px 0" ${job.status==='running'?`data-health-job="${e(job.id)}"`:''}><strong>${e(job.check_name)} · ${e(job.path)}</strong> <span class="tag">${e(job.status)}</span><p>${e(job.message)}</p>${job.status==='completed'?`<button class="btn" data-health-undo="${e(job.id)}">Undo fix</button>`:''}</article>`).join('')}</div>`:''}</div>
+  <script>(function(){
+    var notice=document.getElementById('health-notice'),store=${JSON.stringify(ctx.store.id).replace(/</g,'\\u003c')};
+    function say(message){notice.textContent=message;notice.className='card';}
+    async function request(path,body){var response=await fetch('/admin/speed/'+path+'?storeId='+encodeURIComponent(store),{method:body?'POST':'GET',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});var result=await response.json();if(!response.ok||result.error)throw Error(result.error||'Could not complete the request');return result;}
+    var watched=new Set();
+    async function watch(id){if(watched.has(id))return;watched.add(id);try{var result=await request('fixes/'+id);if(result.status==='running'){watched.delete(id);setTimeout(function(){watch(id)},1500);return;}location.reload();}catch(error){say(error.message+' Reload this report to check the fix.');}}
+    document.querySelectorAll('[data-health-fix]').forEach(function(button){button.onclick=async function(){button.disabled=true;button.textContent='AI is fixing…';try{var result=await request('fix',{path:button.dataset.path,check:button.dataset.check});say('AI is working. You can leave this page; the result will appear in Recent fixes.');watch(result.id);}catch(error){say(error.message);button.disabled=false;button.textContent='Retry fix';}};});
+    document.querySelectorAll('[data-health-job]').forEach(function(item){watch(item.dataset.healthJob)});
+    document.querySelectorAll('[data-health-undo]').forEach(function(button){button.onclick=async function(){button.disabled=true;try{await request('fixes/'+button.dataset.healthUndo+'/undo',{});location.reload();}catch(error){say(error.message);button.disabled=false;}}});
+  })();</script>`
 }
 
 /* --------------------------------------------------------- analytics card */
 
+const DAYS_IN: Record<Range, number> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90 }
+
+/**
+ * A page's revenue per session only means something against what its traffic
+ * cost, so the cost per click over the same window rides along and each page
+ * is called against it rather than left as a bare number.
+ */
+function cpcFor(ctx: Ctx, range: Range): number | null {
+  return profitReport(ctx.db, ctx.store.id, DAYS_IN[range]).cpcCents
+}
+
 export function behaviourCard(ctx: Ctx, range: Range): string {
   const report = behaviour(ctx.db, ctx.store.id, range)
+  const cpc = cpcFor(ctx, range)
+  const against = (perSession: number) =>
+    cpc === null ? '' : `<span class="tag ${perSession > cpc ? 'ok' : 'bad'}" style="margin-left:.3rem">${perSession > cpc ? 'above' : 'below'} CPC</span>`
   const bar = (label: string, value: number, of: number) => `<div class="barrow"><span>${e(label)}</span><span class="track"><span class="fill" style="width:${of ? Math.min(100, (value / of) * 100).toFixed(1) : 0}%"></span></span><span>${value}</span></div>`
   return `<div class="grid2"><div class="card"><h2>What visitors did</h2>
     <div class="eyebrow" style="margin-top:.6rem">Scroll depth (sessions reaching)</div><div class="bars" style="margin-top:.4rem">${([25, 50, 75, 100] as const).map((depth) => bar(`${depth}%`, report.scroll[depth], report.sessions)).join('')}</div>
     <div class="eyebrow" style="margin-top:.8rem">Buttons pressed</div><table class="data" style="margin-top:.3rem"><tbody>${report.ctas.slice(0, 8).map((cta) => `<tr><td>${e(cta.label || '(no label)')}</td><td class="muted">${e(cta.path)}</td><td style="text-align:right">${cta.clicks}</td></tr>`).join('') || '<tr><td class="muted">No clicks recorded yet.</td></tr>'}</tbody></table>
     <p class="muted" style="font-size:12px;margin:.6rem 0 0">Popup: shown to ${report.popup.shows}, ${report.popup.submits} signed up.${report.quiz.length ? ` Quiz: ${report.quiz.map((step) => `step ${step.step}: ${step.count}`).join(', ')}; ${report.quiz[0]?.completes ?? 0} finished.` : ''}</p></div>
-  <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Per page</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Revenue per session is AOV × conversion: the number a split test is decided on.</p></div>
-    <table class="data"><thead><tr><th>Page</th><th>Sessions</th><th>Read half</th><th>CTA</th><th>Carts</th><th>Bought</th><th>Rev / session</th></tr></thead><tbody>${report.pages.slice(0, 12).map((page) => `<tr><td class="muted">${e(page.path)}</td><td>${page.sessions}</td><td>${page.sessions ? Math.round((page.readHalf / page.sessions) * 100) : 0}%</td><td>${page.ctaClicks}</td><td>${page.carts}</td><td>${page.purchases}</td><td>${format(page.revenuePerSessionCents, ctx.store.currency)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:1.2rem">No page views yet.</td></tr>'}</tbody></table></div></div>
+  <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Per page</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Revenue per session is AOV × conversion: the number a split test is decided on, and it is decided against the cost of the click. ${cpc === null ? 'Log clicks with your ad spend on the Profit page and each row gets called here.' : `Cost per click over this window: <strong>${format(cpc, ctx.store.currency)}</strong>.`}</p></div>
+    <table class="data"><thead><tr><th>Page</th><th>Sessions</th><th>Read half</th><th>CTA</th><th>Carts</th><th>Bought</th><th>Rev / session</th></tr></thead><tbody>${report.pages.slice(0, 12).map((page) => `<tr><td class="muted">${e(page.path)}</td><td>${page.sessions}</td><td>${page.sessions ? Math.round((page.readHalf / page.sessions) * 100) : 0}%</td><td>${page.ctaClicks}</td><td>${page.carts}</td><td>${page.purchases}</td><td>${format(page.revenuePerSessionCents, ctx.store.currency)}${page.sessions ? against(page.revenuePerSessionCents) : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:1.2rem">No page views yet.</td></tr>'}</tbody></table></div></div>
   ${report.sections.length ? `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Sections seen</h2></div><table class="data"><thead><tr><th>Page</th><th>Section</th><th>Sessions</th></tr></thead><tbody>${report.sections.slice(0, 16).map((section) => `<tr><td class="muted">${e(section.path)}</td><td>${e(section.blockType)} <span class="muted" style="font-size:11px">${e(section.blockId)}</span></td><td>${section.views}</td></tr>`).join('')}</tbody></table></div>` : ''}`
 }
 
@@ -293,11 +326,20 @@ export function behaviourCard(ctx: Ctx, range: Range): string {
 
 export function funnelTestCard(ctx: Ctx): string {
   const groups = funnelGroups(ctx.db, ctx.store.id)
+  const cpc = profitReport(ctx.db, ctx.store.id, 30).cpcCents
   if (!groups.length) return `<div class="card"><h2>Funnel split tests</h2><p class="muted" style="font-size:12.5px">Give two or more funnels the same test group name and a weight, then send traffic to <code>${e(ctx.storeUrl)}/go/&lt;group&gt;</code>. Each visitor is assigned one funnel and followed to the order.</p></div>`
   return groups.map((group) => {
     const stats = funnelStats(ctx.db, ctx.store.id, group)
-    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code></p></div>
-      <table class="data"><thead><tr><th>Funnel</th><th>Weight</th><th>Sessions</th><th>Carts</th><th>Orders</th><th>Revenue</th><th>Rev / session</th></tr></thead><tbody>${stats.map((row) => `<tr><td>${e(row.name)}</td><td>${row.weight}</td><td>${row.sessions}</td><td>${row.carts}</td><td>${row.purchases}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td><strong>${format(row.revenuePerSessionCents, ctx.store.currency)}</strong></td></tr>`).join('')}</tbody></table></div>`
+    // /go/<group> picks among active funnels with a weight above zero, and a
+    // new funnel's weight defaults to 0 — so the obvious path, naming two
+    // funnels into a group and copying the entry URL this card prints into an
+    // ad, produced a URL that answers "No funnel is running under that name"
+    // with nothing here saying why.
+    const running = stats.filter((row) => row.weight > 0).length
+    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">${
+      running ? `Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code>` : `<strong>Not running.</strong> Every funnel in this group is at weight 0, so <code>${e(ctx.storeUrl)}/go/${e(group)}</code> answers with nothing. Give at least one of them a weight.`
+    }${cpc === null ? ' · log clicks with your ad spend to compare these against cost per click' : ` · winning means revenue per session above the ${format(cpc, ctx.store.currency)} it costs to buy one`}</p></div>
+      <table class="data"><thead><tr><th>Funnel</th><th>Weight</th><th>Sessions</th><th>Carts</th><th>Orders</th><th>Revenue</th><th>Rev / session</th></tr></thead><tbody>${stats.map((row) => `<tr><td>${e(row.name)}</td><td>${row.weight}</td><td>${row.sessions}</td><td>${row.carts}</td><td>${row.purchases}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td><strong>${format(row.revenuePerSessionCents, ctx.store.currency)}</strong>${cpc !== null && row.sessions ? ` <span class="tag ${row.revenuePerSessionCents > cpc ? 'ok' : 'bad'}">${row.revenuePerSessionCents > cpc ? 'above' : 'below'} CPC</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`
   }).join('')
 }
 

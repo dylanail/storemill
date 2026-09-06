@@ -19,6 +19,10 @@ export type BundleTier = {
   quantity: number
   /** Percent off the eligible units. 0 means full price. */
   discountPercent: number
+  /** Explicit source package price divided by its quantity, in the store's minor units. */
+  unitPriceCents?: number
+  /** Original displayed package total; does not change the payable price. */
+  compareAtTotalCents?: number
   label: string
   badge?: string
   freeShipping?: boolean
@@ -79,6 +83,8 @@ export function upsertBundle(db: Db, storeId: string, input: { productId: string
   const product = getProduct(db, storeId, input.productId)
   if (!product) throw new Error('No product with that id')
   const tiers = normalizeTiers(input.tiers?.length ? input.tiers : DEFAULT_TIERS)
+  if (tiers.some(tier => tier.unitPriceCents !== undefined && product.variants.some(variant => tier.unitPriceCents! > variant.priceCents))) throw new Error('An exact bundle unit price cannot exceed a product variant price')
+  if (tiers.some(tier => tier.compareAtTotalCents !== undefined && (!Number.isSafeInteger(tier.compareAtTotalCents) || tier.compareAtTotalCents < (tier.unitPriceCents !== undefined ? tier.unitPriceCents * tier.quantity : Math.round(Math.min(...product.variants.map(v => v.priceCents)) * tier.quantity * (1 - tier.discountPercent / 100)))))) throw new Error('Original bundle totals must be whole minor units and at least the sale total')
   const existing = db.one('SELECT * FROM bundles WHERE store_id = ? AND product_id = ?', storeId, product.id)
   const previous = existing ? rowToBundle(existing) : null
 
@@ -87,14 +93,14 @@ export function upsertBundle(db: Db, storeId: string, input: { productId: string
     for (const row of db.all<{ id: string }>("SELECT id FROM promotions WHERE store_id = ? AND json_extract(rules, '$.bundleProductId') = ?", storeId, product.id)) {
       setPromotionStatus(db, storeId, row.id, 'disabled')
     }
-    const discounted = tiers.filter((tier) => tier.discountPercent > 0)
+    const discounted = tiers.filter((tier) => tier.discountPercent > 0 || tier.unitPriceCents !== undefined && product.variants.some(variant => tier.unitPriceCents! < variant.priceCents))
     let promotionId: string | null = null
     if (discounted.length) {
       promotionId = createPromotion(db, storeId, {
         title: `${product.title} bundle`,
         kind: 'tiered',
         automatic: true,
-        rules: { productIds: [product.id], tiers: discounted.map((tier) => ({ quantity: tier.quantity, percent: tier.discountPercent })), bundleProductId: product.id } as never,
+        rules: { productIds: [product.id], tiers: discounted.map((tier) => ({ quantity: tier.quantity, percent: tier.discountPercent, ...(tier.unitPriceCents !== undefined ? { unitPriceCents: tier.unitPriceCents } : {}) })), bundleProductId: product.id } as never,
       }).id
     }
     const shippingTier = tiers.find((tier) => tier.freeShipping)
@@ -135,6 +141,8 @@ export function removeBundle(db: Db, storeId: string, bundleId: string): boolean
 }
 
 function normalizeTiers(tiers: BundleTier[]): BundleTier[] {
+  for (const tier of tiers) if (tier.unitPriceCents !== undefined && (!Number.isSafeInteger(tier.quantity) || tier.quantity < 1 || !Number.isSafeInteger(tier.unitPriceCents) || tier.unitPriceCents <= 0)) throw new Error('Exact bundle tiers require a positive whole quantity and unit price')
+  if (tiers.some(tier => tier.unitPriceCents !== undefined) && new Set(tiers.map(tier => tier.quantity)).size !== tiers.length) throw new Error('Exact bundle tiers require distinct quantities')
   return [...tiers]
     .filter((tier) => tier.quantity >= 1)
     .map((tier) => ({ ...tier, quantity: Math.round(tier.quantity), discountPercent: Math.max(0, Math.min(90, tier.discountPercent)) }))
@@ -162,15 +170,16 @@ export function renderBundleWidget(bundle: Bundle, product: Product, currency: s
   const preselect = Math.max(0, bundle.tiers.findIndex((tier) => Boolean(tier.badge)))
   const rows = bundle.tiers.map((tier, index) => {
     const full = unit * tier.quantity
-    const total = Math.round(full * (1 - tier.discountPercent / 100))
+    const compare = tier.compareAtTotalCents ?? Math.max(...product.variants.map(v => v.compareAtCents || v.priceCents)) * tier.quantity
+    const total = tier.unitPriceCents !== undefined ? Math.min(full, tier.unitPriceCents * tier.quantity) : Math.round(full * (1 - tier.discountPercent / 100))
     const perUnit = Math.round(total / tier.quantity)
     const perks = [tier.freeShipping ? 'Free shipping' : '', tier.giftVariantId ? `+ ${tier.giftLabel || 'free gift'}` : ''].filter(Boolean)
     const checked = index === preselect ? 'checked' : ''
     return `<label class="tier${tier.badge ? ' tier--hi' : ''}">
-      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" ${checked}>
+      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" data-discount="${tier.discountPercent}" ${checked}>
       <span class="tier-main"><span class="tier-label">${escapeHtml(tier.label)}${tier.discountPercent ? ` <em>Save ${tier.discountPercent}%</em>` : ''}</span>
         ${perks.length ? `<span class="tier-perks">${perks.map((perk) => escapeHtml(perk)).join(' · ')}</span>` : ''}</span>
-      <span class="tier-price"><b>${escapeHtml(format(total, currency, opts.locale))}</b>${style.showCompare !== false && tier.discountPercent ? `<s>${escapeHtml(format(full, currency, opts.locale))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small>${escapeHtml(format(perUnit, currency, opts.locale))} each</small>` : ''}</span>
+      <span class="tier-price"><b data-tier-total>${escapeHtml(format(total, currency, opts.locale))}</b>${style.showCompare !== false && compare > total ? `<s data-tier-compare>${escapeHtml(format(compare, currency, opts.locale))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small data-tier-unit>${escapeHtml(format(perUnit, currency, opts.locale))} each</small>` : ''}</span>
       ${tier.badge ? `<span class="tier-badge">${escapeHtml(tier.badge)}</span>` : ''}</label>`
   })
   return `<div class="bundle bundle--${escapeHtml(style.layout ?? 'stacked')}" style="${style.accent ? `--bundle-accent:${escapeHtml(style.accent)};` : ''}${style.radius ? `--bundle-radius:${escapeHtml(style.radius)};` : ''}">

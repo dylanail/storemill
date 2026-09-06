@@ -2,16 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { deflateSync } from 'node:zlib'
 import { fresh } from './helpers.ts'
-import { createStore, environment, setTheme } from '../src/control/stores.ts'
+import { createStore, environment, getStore, publish, setTheme, updateStore } from '../src/control/stores.ts'
 import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
+import { listTodos, refreshTodos, seedTodos } from '../src/control/todos.ts'
+import { adminRouter } from '../src/admin/routes.ts'
+import { install } from '../src/control/plugins.ts'
+import { addDomain, verifyDomain } from '../src/control/stores.ts'
+import { recordAdSpend } from '../src/domain/ops.ts'
 import { answersForPrompt, buildProgress, buildState, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, setSiteShape, SHAPES, skipStep } from '../src/control/build.ts'
 import { knowledge, calendarMonth, TOPIC_NAMES } from '../src/agent/knowledge.ts'
 import { authorResearch, runResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { S, useModelTransport } from '../src/agent/models.ts'
 import { listAvatars, saveAvatar, avatarTree, suggestAvatars } from '../src/agent/avatars.ts'
-import { authorAnalysis, latestDoc, listDocs, rulesAnalysis, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../src/agent/market.ts'
+import { authorAnalysis, latestDoc, listDocs, loopBrief, planRowRequest, rulesAnalysis, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../src/agent/market.ts'
 import { blocksFromOutline, outlinePage, ripHtml, ripToPage } from '../src/pages/rip.ts'
 import { listQueue, photoCoverage, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, rulesSuggestBlocks, setQueueStatus, suggestBlocks } from '../src/creative/briefs.ts'
 import { listReviews } from '../src/domain/reviews.ts'
@@ -23,16 +28,19 @@ import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
 import { renderBlock, blockDefinition, customDefinition, renderTemplate, type BlockContext } from '../src/pages/blocks.ts'
 import { customCatalog, customDefinitions, listCustomBlocks, upsertCustomBlock } from '../src/pages/custom-blocks.ts'
+import { listBlockPresets, saveBlockPreset } from '../src/pages/presets.ts'
 import { acceptSuggestion } from '../src/creative/briefs.ts'
 import { applyAuthoring } from '../src/agent/directions.ts'
 import { editorPage } from '../src/admin/editor.ts'
 import { getPage, renderPageBody } from '../src/pages/store.ts'
 import { layout } from '../src/storefront/render.ts'
-import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
+import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate, updatePage } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
 import { execute } from '../src/agent/registry.ts'
+import { generateVersions, versionStats } from '../src/pages/versions.ts'
+import { PDP_FORMATS } from '../src/agent/directions.ts'
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -110,10 +118,15 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   let progress = buildProgress(db, store.id)
   assert.equal(progress.mode?.id, 'own-product')
   assert.equal(progress.steps[0]?.key, 'shape')
-  assert.equal(progress.steps[0]?.status, 'done', 'a product of one\'s own defaults to a store until the owner says otherwise')
+  assert.equal(buildState(db, store.id).shape, 'store', 'a product of one\'s own defaults to a store so the plan has something to list')
+  assert.equal(progress.steps[0]?.status, 'next', 'but the default is not the owner having decided: step one stays open until they confirm it')
+  assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
+
+  setSiteShape(db, store.id, { shape: 'store', doors: [], popup: 'no' })
+  progress = buildProgress(db, store.id)
+  assert.equal(progress.steps[0]?.status, 'done', 'confirming the shape and the front door is what completes it')
   assert.equal(progress.steps[1]?.key, 'images')
   assert.equal(progress.steps[1]?.status, 'next', 'no product has an image yet')
-  assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
 
   // An image on the product completes the step without anyone ticking anything.
   const { updateProduct } = require_catalog()
@@ -143,6 +156,48 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   for (const mode of MODES) assert.ok(mode.steps.some((step) => step.key === 'shape') && mode.steps.some((step) => step.key === 'pages'), `${mode.id} decides the shape and builds its pages`)
 })
 
+test('the order of work carries past publish to a launch that has actually been read', () => {
+  // It used to stop at "publish". A published store takes no money without a
+  // provider, answers at a platform subdomain, and sells nothing until an ad
+  // runs and the spend behind it is written down.
+  const { db, store, product } = shop()
+  setBuildMode(db, store.id, 'own-product')
+  const keys = () => buildProgress(db, store.id).steps.map((step) => step.key)
+  assert.deepEqual(keys().slice(-5), ['payments', 'domain', 'ads', 'launch', 'read'], 'the last step is reading the numbers, not shipping')
+
+  const step = (key: string) => buildProgress(db, store.id).steps.find((entry) => entry.key === key)!
+  assert.equal(step('payments').status, 'waiting')
+  assert.match(step('payments').why, /cannot take money/)
+  install(db, store.id, 'stripe', { publishableKey: 'pk_test_abc', secretKey: 'sk_test_xyz' })
+  assert.match(step('payments').why, /put one order through/, 'connected is not the same as proven')
+
+  assert.match(step('domain').why, /platform address/)
+  addDomain(db, store.id, 'ironjaw.co')
+  verifyDomain(db, store.id, 'ironjaw.co')
+  assert.match(step('domain').why, /1 domain verified/)
+
+  assert.match(step('launch').why, /nothing can be measured against it/)
+  recordAdSpend(db, store.id, { day: '2026-01-02', platform: 'meta', amountCents: 12_000 })
+  assert.match(step('launch').why, /120\.00 of spend recorded/)
+
+  assert.match(step('read').why, /no loop has been written yet/)
+  saveLoop(db, store.id, { failing: 'Cold traffic bounces on the price', working: 'Retargeting converts', hypotheses: ['The offer is not built yet'], actions: ['Add the 2-for tier'], outcome: '' })
+  assert.equal(step('read').status, 'waiting', 'a loop with no outcome is a note, not a decision')
+  saveLoop(db, store.id, { failing: 'Cold traffic bounces on the price', working: 'Retargeting converts', hypotheses: ['The offer is not built yet'], actions: ['Add the 2-for tier'], outcome: 'ROAS 1.9 against a 1.6 breakeven; kept it running' })
+  assert.match(step('read').why, /1 loop closed with an outcome/)
+  void product
+})
+
+test('every step of every build mode links to a page this admin serves', () => {
+  const router = adminRouter()
+  for (const mode of MODES) {
+    for (const step of mode.steps) {
+      const [path = ''] = `/admin${step.href}`.split('#')
+      assert.ok(router.match('GET', path), `${mode.id}/${step.key} links /admin${step.href}, which no route answers`)
+    }
+  }
+})
+
 test('the shape decides the page plan, and every page on it reads its status from the store', () => {
   const { db, store, product } = shop()
   assert.equal(SHAPES.length, 2)
@@ -164,6 +219,9 @@ test('the shape decides the page plan, and every page on it reads its status fro
   const sales = createPage(db, store.id, { title: 'Save today', kind: 'landing', blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }) })
   const funnel = upsertFunnel(db, store.id, { name: 'Main', productId: product.id, offerPageId: sales.id, upsell: { variantId: product.variants[0]?.id, discountPercent: 20 } })
   plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'draft', 'written but not published is not done: the storefront serves a 404')
+  updatePage(db, store.id, sales.id, { status: 'published' })
+  plan = pagePlan(db, store.id)
   assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'done')
   assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.href, `/pages/${sales.id}/edit`, 'an existing page links to its editor')
   assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'done')
@@ -178,9 +236,13 @@ test('the shape decides the page plan, and every page on it reads its status fro
   assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'missing')
   assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'missing', 'chosen but not on')
   assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.optional, false)
-  createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
-  createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
+  const quizPage = createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
+  const advertorialPage = createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
   setTheme(db, store.id, { popup: { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Send', dismissDays: 7 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'draft', 'a page with a quiz block is the quiz, but a draft one is not a front door yet')
+  updatePage(db, store.id, quizPage.id, { status: 'published' })
+  updatePage(db, store.id, advertorialPage.id, { status: 'published' })
   plan = pagePlan(db, store.id)
   assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'done', 'a page with a quiz block is the quiz')
   assert.equal(plan.pages.find((entry) => entry.key === 'advertorial')?.status, 'done')
@@ -195,7 +257,7 @@ test('the shape decides the page plan, and every page on it reads its status fro
   assert.equal(plan.pages.find((entry) => entry.key === 'pdp')?.status, 'missing', 'the product has no image yet')
   const progress = buildProgress(db, store.id)
   assert.equal(progress.steps.find((step) => step.key === 'shape')?.status, 'done')
-  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Missing: Product page, Bundle tiers/)
+  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Product page \(missing\)/)
   assert.throws(() => setSiteShape(db, store.id, { shape: 'catalogue' }), /No such shape/)
 })
 
@@ -262,6 +324,22 @@ test('the product overview, the ad plan and feedback loops are saved under the s
   assert.equal(listDocs(db, store.id).length, 3)
   const kinds = listDocs(db, store.id).map((doc) => doc.kind).sort()
   assert.deepEqual(kinds, ['ad-plan', 'loop', 'product-overview'])
+
+  // The loop card said the planner and the writers read these; nothing did.
+  const brief = loopBrief(db, store.id)
+  assert.match(brief, /keeps failing: Statics get no purchases/)
+  assert.match(brief, /keeps working: Comparison angle/)
+  assert.match(brief, /outcome: not recorded yet/)
+  assert.equal(loopBrief(db, createStore(db, store.ownerId, { name: 'Empty' }).id), '', 'a store with no loops adds nothing to the prompt')
+
+  // A plan row is a request the ad writer can take, not a note to retype.
+  const request = planRowRequest(plan.body.rows[0]!, listAvatars(db, store.id))
+  assert.match(request.direction, /for The day sleeper/)
+  assert.match(request.direction, /focus on sleep at noon like midnight/)
+  assert.match(request.direction, /"Sleep at noon like it is midnight\."/, 'its variations become the hooks the ad must say')
+  assert.equal(request.avatarId, listAvatars(db, store.id).find((avatar) => avatar.name === 'The day sleeper')?.id)
+  assert.deepEqual(request.formats, ['static'], 'the plan\'s format maps onto an ad format that exists')
+  assert.deepEqual(planRowRequest(plan.body.rows[1]!, listAvatars(db, store.id)).formats, ['ugc-script'], 'a subtitled b-roll row is a video script')
 })
 
 test('sub-avatars hang under a core avatar, keep its desire and add a category each', async () => {
@@ -428,6 +506,22 @@ test('the health audit finds what a screen reader and a slow phone would', () =>
   const { db, store } = shop()
   const report = auditStore(db, store)
   assert.ok(report.pages.length >= 2, 'home and the product page were rendered')
+  // An unpublished store has only a draft, and the report says so rather than
+  // implying it graded what customers see.
+  assert.equal(report.environment, 'draft')
+
+  // Once it is live, the report is about the live environment: the draft can
+  // carry colours and a theme nobody has published, and grading those means
+  // reporting a contrast failure no visitor could hit while missing a real one.
+  updateStore(db, store.id, { brand: { primary: '#7a4a2b', paper: '#faf7f3', ink: '#1c1a17' } })
+  publish(db, store.id)
+  updateStore(db, store.id, { brand: { primary: '#ffff00', paper: '#ffffff', ink: '#cccccc' } })
+  const live = auditStore(db, getStore(db, store.id)!)
+  assert.equal(live.environment, 'live')
+  assert.ok(!live.pages.some((page) => page.issues.some((issue) => issue.check === 'contrast')), 'the unpublished draft palette is not what customers see')
+  const draft = auditStore(db, getStore(db, store.id)!, { environment: 'draft' })
+  assert.equal(draft.environment, 'draft', 'the draft can still be asked for by name')
+  assert.ok(draft.pages.some((page) => page.issues.some((issue) => issue.check === 'contrast')), 'and grading it reports the palette being worked on')
   for (const page of report.pages) {
     assert.ok(!page.issues.some((issue) => ['lang', 'landmark', 'alt', 'skip-link', 'viewport', 'focus', 'h1'].includes(issue.check)), `${page.path} has no basic accessibility failure: ${JSON.stringify(page.issues)}`)
     assert.ok(page.gzipBytes < 120_000, `${page.path} is light on the wire`)
@@ -469,6 +563,16 @@ test('legal pages, the popup and the quiz block render from the store\'s own con
   const offer = offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' }, research: null })
   assert.equal(offer[1]?.type, 'countdown', 'the saving with a timer is above the fold')
   assert.ok(offer.some((block) => block.type === 'buy-box'))
+
+  // The order is the case (docs/knowledge/offers.md): combined proof answers
+  // "is this real" before the problem is named, the authority answers "who
+  // says so" before the story of the failures, and the deeper education sits
+  // after the buy box for whoever scrolled past the offer with a question.
+  const order = offer.map((block) => block.type)
+  const at = (type: string) => order.indexOf(type)
+  assert.ok(at('rating-strip') > at('trust-badges') && at('rating-strip') < at('headline'), 'proof lands between the trust bar and the problem')
+  assert.ok(at('expert-quote') > at('headline') && at('expert-quote') < at('rich-text'), 'the authority comes before the failed alternatives')
+  assert.ok(at('how-it-works') > at('buy-box'), 'and the deeper education is after the offer, not instead of it')
 })
 
 test('the blocks, templates, popup kinds and hygiene checks learned from the reference pages', () => {
@@ -514,7 +618,9 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   assert.ok(home.some((block) => block.type === 'featured-products') && home.some((block) => block.type === 'email-signup'))
   // A page from the sales template is found by the page plan as the sales page.
   setBuildMode(db, store.id, 'copy-funnel')
-  createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  const salesPage = createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'draft')
+  updatePage(db, store.id, salesPage.id, { status: 'published' })
   assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done')
 
   // The popup offers one thing: an email, the deal, or the quiz; it says how long the code is good for.
@@ -524,7 +630,7 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   assert.ok(!offerPopup.includes('<form'), 'the offer kind asks for nothing')
   assert.match(offerPopup, /Valid for 7 days\./)
   const quizPopup = popupHtml('/s/x', { enabled: true, trigger: 'delay', after: 5, kind: 'quiz', headline: 'Find yours', text: '', code: '', buttonLabel: '', dismissDays: 7 })
-  assert.match(quizPopup, /href="\/pages\/quiz"/)
+  assert.match(quizPopup, /href="\/s\/x\/pages\/quiz"/)
   assert.match(quizPopup, /Take the quiz/)
   const emailPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Go', validDays: 3, dismissDays: 7 })
   assert.match(emailPopup, /<form/)
@@ -552,6 +658,21 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /no field "headline"/)
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [{ key: 'width', type: 'string' }], template: '<p>{{width}}</p>' }), /reserved/)
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no <script>/)
+
+  // The rule was checked against the template's own text, so a raw field
+  // carried one in behind it: the check saw nothing and the page got the
+  // script. It is enforced on what was rendered now.
+  const raw = customDefinition({ type: 'custom-raw', name: 'Raw', fields: [{ key: 'html', type: 'string', multiline: true }], template: '<div>{{{html}}}</div>' })
+  const smuggled = raw.render({ html: '<p>fine</p><script>alert(1)</script>' }, context, { id: 'r', type: 'custom-raw', settings: {} })
+  assert.match(smuggled, /<p>fine<\/p>/)
+  assert.ok(!/<script/i.test(smuggled), 'a script that came in through a raw field does not reach the page')
+
+  // A script or a style ends at the first closing tag in its text, not the one
+  // the author meant: one inside the body used to take the rest of the page.
+  const code = blockDefinition('custom-code')!.render({ js: 'var a = "</script><img onerror=x>";', css: 'a{}</style><b>' }, context, { id: 'c', type: 'custom-code', settings: {} })
+  assert.match(code, /<\\\/script/, 'the closing tag inside the script is escaped')
+  assert.equal(code.match(/<\/script>/g)?.length, 1, 'so the block still closes exactly once')
+  assert.equal(code.match(/<\/style>/g)?.length, 1, 'and the style closes exactly once too — what is left inside it is text, not markup')
 
   // Stored, it renders through the same path as the catalog and shows in the editor palette under Custom.
   const block = upsertCustomBlock(db, store.id, { name: 'Ingredient strip', description: 'A row of ingredient chips with a percentage each', fields: [{ key: 'headline', type: 'string', default: 'What is in it' }, { key: 'items', type: 'string', multiline: true, default: 'Amla|100%' }], template: '<h2 class="head">{{headline}}</h2><div class="cols">{{#each items}}<div class="col"><h3>{{0}}</h3><p>{{1}}</p></div>{{/each}}</div>', css: '.chip{color:red}', source: 'model' })
@@ -607,6 +728,42 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.equal(written[0]?.settings.text, 'New')
   assert.equal(written[2]?.settings.headline, 'Three steps')
   assert.equal(written[4]?.settings.js, 'x()')
+})
+
+test('named configured blocks and custom definitions are reusable across this owner\'s sites', () => {
+  const { db, user, store } = shop()
+  const other = createStore(db, user.id, { name: 'Second storefront' })
+  const definition = upsertCustomBlock(db, store.id, {
+    name: 'Cloned ingredient rail',
+    fields: [{ key: 'headline', type: 'string', default: 'Inside every serving' }],
+    template: '<h2>{{headline}}</h2>',
+  })
+  assert.ok(customDefinitions(db, other.id).some((entry) => entry.type === definition.type), 'an owner custom block is in every asset palette')
+
+  const preset = saveBlockPreset(db, user.id, store.id, 'Nuvana ingredient section', {
+    type: definition.type,
+    settings: { headline: 'The Nuvana blend', _font: 'custom', _customFont: 'Cormorant Garamond, serif' },
+  })
+  assert.equal(listBlockPresets(db, user.id)[0]?.id, preset.id)
+  const page = createPage(db, other.id, { title: 'Reusable page', blocks: [] })
+  const editor = editorPage({
+    page,
+    storeSlug: other.slug,
+    products: [],
+    custom: customDefinitions(db, other.id),
+    presets: listBlockPresets(db, user.id),
+    brand: { primary: '#123456', paper: '#fffaf0', ink: '#101820', displayFont: 'Manrope, sans-serif', bodyFont: 'DM Sans, sans-serif' },
+    theme: environment(db, other.id, 'draft').theme,
+  })
+  assert.match(editor, /--site-primary:#123456/)
+  assert.match(editor, /Nuvana ingredient section/)
+  assert.match(editor, /Saved from your sites/)
+  assert.match(editor, /Block typography/)
+
+  const rendered = renderBlock({ id: 'shared', type: definition.type, settings: preset.settings }, blockContextFor(db, other, '/s/second'))
+  assert.match(rendered, /class="blk-font"/)
+  assert.match(rendered, /Cormorant Garamond, serif/)
+  assert.match(rendered, /The Nuvana blend/)
 })
 
 test('css and js can be written for a page, a block, or the whole store', async () => {
@@ -686,8 +843,16 @@ test('behaviour events and funnel split tests are counted per session and judged
   assert.equal(funnelEntry(db, store.id, one), `/products/${product.handle}`)
   track(db, store.id, a, 'funnel.enter', { path: '/go/spring', meta: { funnelId: one.id, group: 'spring' } })
   track(db, store.id, b, 'funnel.enter', { path: '/go/spring', meta: { funnelId: two.id, group: 'spring' } })
+  // Order matters: only what a session did *after* entering counts for the
+  // funnel it entered. Session a's earlier purchase is not this funnel's.
+  const beforeOnly = funnelStats(db, store.id, 'spring')
+  assert.equal(beforeOnly.find((row) => row.funnelId === one.id)?.revenuePerSessionCents, 0, 'a purchase made before entering is not the funnel\'s conversion')
+
+  track(db, store.id, a, 'cart.add', { path: '/pages/offer' })
+  track(db, store.id, a, 'checkout.complete', { path: '/checkout', amountCents: 7900 })
   const stats = funnelStats(db, store.id, 'spring')
   assert.equal(stats.find((row) => row.funnelId === one.id)?.revenuePerSessionCents, 7900)
+  assert.equal(stats.find((row) => row.funnelId === one.id)?.carts, 1)
   assert.equal(stats.find((row) => row.funnelId === two.id)?.revenuePerSessionCents, 0)
 })
 
@@ -715,4 +880,88 @@ test('the planner can drive the build, the market and the creative queue through
   assert.match(health.summary, /Site score/)
   assert.ok(listAvatars(db, store.id).length >= 0)
   assert.ok(S.obj({}))
+})
+
+test('every next-step link the rail renders is a page this admin actually serves', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Links', prompt: 'links' })
+  seedTodos(db, store.id)
+  const router = adminRouter()
+  for (const todo of listTodos(db, store.id)) {
+    const [path = ''] = `/admin${todo.href}`.split('#')
+    assert.ok(router.match('GET', path), `the rail links /admin${todo.href}, which no route answers`)
+  }
+})
+
+test('the shipping row is read from the world like the rest of the punch list', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Ship', prompt: 'ship' })
+  seedTodos(db, store.id)
+  refreshTodos(db, store.id)
+  const status = (key: string) => listTodos(db, store.id).find((todo) => todo.key === key)?.status
+  assert.equal(status('shipping'), 'waiting', 'a store with no region cannot price delivery')
+  seedDefaultRegion(db, store.id, 'USD')
+  refreshTodos(db, store.id)
+  assert.equal(status('shipping'), 'done')
+})
+
+test('a split test is decided on this product, after the session saw the version', async () => {
+  const { db, store, product } = shop()
+  const other = createProduct(db, store.id, { title: 'Something else', status: 'published', variants: [{ title: 'One', priceCents: 9_900, inventory: 5 }] })
+  const versions = await generateVersions(db, store, { kind: 'pdp', productId: product.id, formats: [PDP_FORMATS[0]!.id, PDP_FORMATS[1]!.id], publish: true })
+  const [first, second] = versions
+  assert.ok(first && second)
+
+  const session = sessionFor(db, store.id, { ip: '9.9.9.9', userAgent: 'shopper' })
+  // Bought something else last week, before ever seeing a version of this
+  // product. The events are dated back because the whole test runs inside one
+  // millisecond otherwise.
+  track(db, store.id, session, 'cart.add', { path: '/x', productId: other.id })
+  track(db, store.id, session, 'checkout.complete', { path: '/checkout', amountCents: 9_900 })
+  db.run('UPDATE analytics_events SET created_at = ? WHERE session_id = ?', new Date(Date.now() - 7 * 86400000).toISOString(), session)
+  track(db, store.id, session, 'view.product', { path: '/p', meta: { pageId: first.id } })
+
+  const stats = versionStats(db, store.id, product.id)
+  const a = stats.find((row) => row.pageId === first.id)
+  const b = stats.find((row) => row.pageId === second.id)
+  assert.equal(a?.views, 1)
+  assert.equal(a?.carts, 0, 'a cart add for a different product is not this version\'s')
+  assert.equal(a?.purchases, 0, 'and neither is a purchase made before the version was seen')
+  assert.equal(b?.views, 0, 'the version nobody saw is credited with nothing at all')
+
+  track(db, store.id, session, 'cart.add', { path: '/p', productId: product.id })
+  track(db, store.id, session, 'checkout.complete', { path: '/checkout', amountCents: 4_000 })
+  const after = versionStats(db, store.id, product.id).find((row) => row.pageId === first.id)
+  assert.equal(after?.carts, 1)
+  assert.equal(after?.purchases, 1)
+  assert.equal(after?.revenueCents, 4_000, 'and only the order that came after it')
+  assert.equal(after?.revenuePerSessionCents, 4_000, 'and the version carries the number the course decides a test on')
+})
+
+test('the quiz does not also satisfy the sales page, and a copied funnel page does', () => {
+  const { db, store, product } = shop()
+  setBuildMode(db, store.id, 'copy-funnel')
+  setSiteShape(db, store.id, { shape: 'funnel', doors: ['quiz'] })
+
+  // The quiz template is a landing page with a buy box on it, so it used to
+  // tick the sales row too — and the sales page could then never be created.
+  const quiz = createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }), status: 'published' })
+  const withQuiz = pagePlan(db, store.id)
+  assert.equal(withQuiz.pages.find((entry) => entry.key === 'quiz')?.status, 'done')
+  assert.equal(withQuiz.pages.find((entry) => entry.key === 'sales')?.status, 'missing', 'the quiz is the front door, not the sales page')
+  assert.ok(quiz.id)
+
+  // A page ripped from a competitor's funnel is written with role 'pdp' and
+  // was invisible here, so "Copy a funnel" demanded the page its own first
+  // two steps had just produced.
+  const ripped = createPage(db, store.id, {
+    title: 'Copied structure',
+    kind: 'landing',
+    role: 'pdp',
+    sourceUrl: 'https://example.com/offer',
+    status: 'published',
+    blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }),
+  })
+  assert.ok(ripped.id)
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done', 'the page the rip produced is the sales page')
 })

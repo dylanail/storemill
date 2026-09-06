@@ -12,14 +12,17 @@ export type Todo = { id: string; key: string; label: string; detail: string; sta
 const SEED: Array<Omit<Todo, 'id'>> = [
   { key: 'catalog', label: 'Swap the sample catalog for your own products', detail: 'Import a CSV or ask the assistant to add them.', status: 'waiting', href: '/products', position: 0 },
   { key: 'payments', label: 'Set up payments', detail: 'Connect Stripe so you can take real money.', status: 'waiting', href: '/settings/payments', position: 1 },
-  { key: 'shipping', label: 'Check your shipping rates', detail: 'A free-shipping threshold is already set for your region.', status: 'waiting', href: '/settings/regions', position: 3 },
+  { key: 'shipping', label: 'Check your shipping rates', detail: 'A region with a delivery rate lets checkout price the order.', status: 'waiting', href: '/settings', position: 3 },
   { key: 'publish', label: 'Publish your store', detail: 'Take the draft live at its address.', status: 'waiting', href: '/store', position: 4 },
 ]
 
 export function seedTodos(db: Db, storeId: string) {
   for (const todo of SEED) {
-    if (db.one('SELECT id FROM todos WHERE store_id = ? AND key = ?', storeId, todo.key)) continue
-    db.insert('todos', { id: id('todo'), store_id: storeId, ...todo })
+    const existing = db.one<{ id: string; href: string; label: string; detail: string }>('SELECT id, href, label, detail FROM todos WHERE store_id = ? AND key = ?', storeId, todo.key)
+    if (!existing) db.insert('todos', { id: id('todo'), store_id: storeId, ...todo })
+    else if (existing.href !== todo.href || existing.label !== todo.label || existing.detail !== todo.detail) {
+      db.run('UPDATE todos SET href = ?, label = ?, detail = ? WHERE id = ?', todo.href, todo.label, todo.detail, existing.id)
+    }
   }
 }
 
@@ -36,9 +39,11 @@ export function refreshTodos(db: Db, storeId: string) {
   const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", storeId)?.c ?? 0
   const ownProducts = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND json_extract(metadata, '$.sample') IS NULL", storeId)?.c ?? 0
   const plugins = db.one<{ c: number }>("SELECT COUNT(*) c FROM store_plugins WHERE store_id = ? AND plugin_id = 'stripe'", storeId)?.c ?? 0
+  const shipping = db.one<{ c: number }>('SELECT COUNT(*) c FROM shipping_options o JOIN regions r ON r.id = o.region_id WHERE r.store_id = ?', storeId)?.c ?? 0
   const live = db.one<{ status: string }>('SELECT status FROM stores WHERE id = ?', storeId)?.status === 'live'
   setTodo(db, storeId, 'catalog', products > 0 && ownProducts > 0 ? 'done' : 'waiting')
   setTodo(db, storeId, 'payments', plugins > 0 ? 'done' : 'waiting')
+  setTodo(db, storeId, 'shipping', shipping > 0 ? 'done' : 'waiting')
   setTodo(db, storeId, 'publish', live ? 'done' : 'waiting')
 }
 

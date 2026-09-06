@@ -81,9 +81,9 @@ function meaningful(touch: Touch): boolean {
   return Boolean(touch.source || touch.medium || touch.campaign || touch.gclid || touch.fbclid || touch.ttclid || touch.referrer)
 }
 
-export function sessionFor(db: Db, storeId: string, input: { ip: string; userAgent: string; referrer?: string; country?: string; city?: string; touch?: Touch }): string {
+export function sessionFor(db: Db, storeId: string, input: { ip: string; userAgent: string; visitor?: string; referrer?: string; country?: string; city?: string; touch?: Touch }): string {
   const day = new Date().toISOString().slice(0, 10)
-  const key = fingerprint(input.ip, input.userAgent, day)
+  const key = input.visitor ? fingerprint('visitor', input.visitor, day) : fingerprint(input.ip, input.userAgent, day)
   const existing = db.one<{ id: string; attribution: string }>('SELECT id, attribution FROM sessions_analytics WHERE store_id = ? AND fingerprint = ?', storeId, key)
   if (existing) {
     const attribution = json(existing.attribution, {} as Attribution)
@@ -268,7 +268,7 @@ export function funnel(db: Db, storeId: string, range: Range = '7d'): FunnelStag
   const from = since(range)
   const count = (type: EventType) =>
     db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = ? AND created_at >= ?', storeId, type, from)?.c ?? 0
-  const sessions = db.one<{ c: number }>('SELECT COUNT(*) c FROM sessions_analytics WHERE store_id = ? AND first_seen >= ?', storeId, from)?.c ?? 0
+  const sessions = db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND created_at >= ?', storeId, from)?.c ?? 0
   const raw = [
     { stage: 'Sessions', count: sessions },
     { stage: 'Add to cart', count: count('cart.add') },
@@ -393,7 +393,7 @@ export type Behaviour = {
 export function behaviour(db: Db, storeId: string, range: Range = '7d'): Behaviour {
   const from = since(range)
   const depth = (percent: number) => db.one<{ c: number }>("SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'scroll' AND created_at >= ? AND CAST(json_extract(meta, '$.depth') AS INTEGER) >= ?", storeId, from, percent)?.c ?? 0
-  const sessions = db.one<{ c: number }>('SELECT COUNT(*) c FROM sessions_analytics WHERE store_id = ? AND first_seen >= ?', storeId, from)?.c ?? 0
+  const sessions = db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND created_at >= ?', storeId, from)?.c ?? 0
   const sections = db.all<{ path: string; blockType: string; blockId: string; views: number }>(
     "SELECT path, json_extract(meta, '$.blockType') blockType, json_extract(meta, '$.blockId') blockId, COUNT(DISTINCT session_id) views FROM analytics_events WHERE store_id = ? AND type = 'section.view' AND created_at >= ? GROUP BY path, blockType, blockId ORDER BY views DESC LIMIT 40",
     storeId, from,
