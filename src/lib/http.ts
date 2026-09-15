@@ -68,7 +68,10 @@ function matchSegments(segments: string[], parts: string[]): Record<string, stri
     }
     const part = parts[i]
     if (part === undefined) return null
-    if (segment.startsWith(':')) params[segment.slice(1)] = decodeURIComponent(part)
+    if (segment.startsWith(':')) {
+      try { params[segment.slice(1)] = decodeURIComponent(part) }
+      catch { throw badRequest('Invalid URL encoding') }
+    }
     else if (segment !== part) return null
   }
   return segments.length === parts.length || segments.at(-1) === '*' ? params : null
@@ -130,7 +133,9 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
   // it every absolute link the admin builds would say http://.
   const forwarded = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim().toLowerCase()
   const protocol = forwarded === 'https' ? 'https' : 'http'
-  const url = new URL(req.url ?? '/', `${protocol}://${host}`)
+  let url: URL
+  try { url = new URL(req.url ?? '/', `${protocol}://${host}`) }
+  catch { throw badRequest('Invalid request URL or host') }
   let cached: Buffer | null = null
   const raw = async () => {
     if (cached) return cached
@@ -138,7 +143,9 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
     let size = 0
     for await (const chunk of req) {
       size += (chunk as Buffer).length
-      if (size > 8 * 1024 * 1024) throw badRequest('Request body too large')
+      // The media upload route authenticates before reading a video body. Other routes keep the small default limit.
+      const limit = (url.pathname === '/admin/media/upload'||/^\/admin\/pages\/[^/]+\/media\/upload$/.test(url.pathname)) ? 101 * 1024 * 1024 : (url.pathname === '/admin/media/rebrand'||/^\/admin\/pages\/[^/]+\/media\/rebrand$/.test(url.pathname)) ? 20 * 1024 * 1024 : 8 * 1024 * 1024
+      if (size > limit) throw badRequest('Request body too large')
       chunks.push(chunk as Buffer)
     }
     cached = Buffer.concat(chunks)
@@ -235,7 +242,9 @@ function parseCookies(header?: string): Record<string, string> {
   for (const pair of header.split(';')) {
     const index = pair.indexOf('=')
     if (index === -1) continue
-    out[pair.slice(0, index).trim()] = decodeURIComponent(pair.slice(index + 1).trim())
+    // A corrupt or unrelated cookie must not prevent the whole site loading.
+    try { out[pair.slice(0, index).trim()] = decodeURIComponent(pair.slice(index + 1).trim()) }
+    catch { /* Ignore only the malformed cookie, retaining valid session cookies. */ }
   }
   return out
 }

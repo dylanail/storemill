@@ -4,6 +4,7 @@ import { releaseInventory, reserveInventory } from './catalog.ts'
 import { getCart, totals as computeTotals, type Cart } from './cart.ts'
 import { recordPurchase, upsertCustomer } from './customers.ts'
 import { recordPromotionUse } from './promotions.ts'
+import { convertCents, getRegion, toBaseCents } from './regions.ts'
 import type { Address, LineItem, Order } from './types.ts'
 
 export function rowToOrder(row: Row): Order {
@@ -19,6 +20,7 @@ export function rowToOrder(row: Row): Order {
     shippingCents: row.shipping_cents as number,
     taxCents: row.tax_cents as number,
     totalCents: row.total_cents as number,
+    baseTotalCents: (row.base_total_cents as number | null) ?? row.total_cents as number,
     discountCode: row.discount_code as string,
     status: row.status as Order['status'],
     paymentStatus: row.payment_status as Order['paymentStatus'],
@@ -84,6 +86,7 @@ export function completeCart(
 ): Order {
   const cart = getCart(db, storeId, cartId)
   if (!cart) throw new CheckoutError('No cart')
+  if (cart.checkout.preview) throw new CheckoutError('Preview checkout: no payment or order is created. Publish the store to accept orders.')
   if (cart.orderId) return getOrder(db, storeId, cart.orderId) as Order
   if (!cart.items.length) throw new CheckoutError('Your cart is empty')
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.email)) throw new CheckoutError('Enter a valid email address')
@@ -93,6 +96,9 @@ export function completeCart(
 
   const orderId = id('order')
   const timestamp = now()
+  const region = cart.regionId ? getRegion(db, storeId, cart.regionId) : null
+  const sourceCurrency = db.one<{ currency: string }>('SELECT currency FROM stores WHERE id = ?', storeId)?.currency ?? 'USD'
+  const localizedItems = cart.items.map((item) => ({ ...item, unitCents: convertCents(item.unitCents, region, sourceCurrency) }))
   return db.tx(() => {
     const reserved: LineItem[] = []
     for (const item of cart.items) {
@@ -115,13 +121,14 @@ export function completeCart(
       display_id: nextDisplay,
       email: input.email.toLowerCase(),
       customer_id: customer.id,
-      items: cart.items,
+      items: localizedItems,
       currency: amounts.currency,
       subtotal_cents: amounts.subtotalCents,
       discount_cents: amounts.discountCents,
       shipping_cents: amounts.shippingCents,
       tax_cents: amounts.taxCents,
       total_cents: amounts.totalCents,
+      base_total_cents: toBaseCents(amounts.totalCents, region, sourceCurrency),
       discount_code: cart.discountCode,
       status: 'completed',
       // Demo orders capture on completion. A Stripe order arrives here only
@@ -141,7 +148,7 @@ export function completeCart(
       created_at: timestamp,
       updated_at: timestamp,
     })
-    recordPurchase(db, customer.id, amounts.totalCents)
+    recordPurchase(db, customer.id, toBaseCents(amounts.totalCents, region, sourceCurrency))
     recordPromotionUse(db, amounts.appliedPromotions.map((entry) => entry.id))
     db.update('carts', cart.id, { order_id: orderId, email: input.email, updated_at: timestamp })
     return getOrder(db, storeId, orderId) as Order
@@ -166,12 +173,13 @@ export function recordUpsell(
   db: Db,
   storeId: string,
   orderId: string,
-  outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number; paymentIntentId?: string },
+  outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number; baseAmountCents?: number; paymentIntentId?: string },
 ): Order {
   const order = getOrder(db, storeId, orderId)
   if (!order) throw new Error('No order')
   const items = outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
+  const baseExtra = outcome.accepted ? (outcome.baseAmountCents ?? extra) : 0
   db.tx(() => {
     // completeCart refuses a checkout when the stock is not there; the
     // post-purchase offer threw the same answer away and charged the saved
@@ -183,6 +191,7 @@ export function recordUpsell(
       items,
       subtotal_cents: order.subtotalCents + extra,
       total_cents: order.totalCents + extra,
+      base_total_cents: order.baseTotalCents + baseExtra,
       upsell: { offered: outcome.offered, accepted: outcome.accepted, ...(outcome.line ? { variantId: outcome.line.variantId } : {}), amountCents: extra, ...(outcome.paymentIntentId ? { paymentIntentId: outcome.paymentIntentId } : {}) },
       updated_at: now(),
     })
@@ -190,10 +199,11 @@ export function recordUpsell(
   return getOrder(db, storeId, order.id) as Order
 }
 
-export function recordDownsell(db: Db, storeId: string, orderId: string, outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number }): Order {
+export function recordDownsell(db: Db, storeId: string, orderId: string, outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number; baseAmountCents?: number }): Order {
   const order = getOrder(db, storeId, orderId)
   if (!order) throw new Error('No order')
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
+  const baseExtra = outcome.accepted ? (outcome.baseAmountCents ?? extra) : 0
   db.tx(() => {
     if (outcome.accepted && outcome.line && !reserveInventory(db, outcome.line.variantId, outcome.line.quantity)) {
       throw new CheckoutError('That is out of stock.')
@@ -202,6 +212,7 @@ export function recordDownsell(db: Db, storeId: string, orderId: string, outcome
       items: outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items,
       subtotal_cents: order.subtotalCents + extra,
       total_cents: order.totalCents + extra,
+      base_total_cents: order.baseTotalCents + baseExtra,
       downsell: { offered: outcome.offered, accepted: outcome.accepted, ...(outcome.line ? { variantId: outcome.line.variantId } : {}), amountCents: extra },
       updated_at: now(),
     })
@@ -280,7 +291,7 @@ export function returnOrder(db: Db, storeId: string, orderId: string, reason = '
 export function salesSummary(db: Db, storeId: string, days = 30) {
   const since = new Date(Date.now() - days * 86400000).toISOString()
   const rows = db.all<{ day: string; orders: number; revenue: number }>(
-    `SELECT substr(created_at, 1, 10) day, COUNT(*) orders, SUM(total_cents) revenue
+    `SELECT substr(created_at, 1, 10) day, COUNT(*) orders, SUM(COALESCE(base_total_cents, total_cents)) revenue
      FROM orders WHERE store_id = ? AND created_at >= ? AND status != 'cancelled'
      GROUP BY day ORDER BY day`,
     storeId,

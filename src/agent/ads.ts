@@ -13,7 +13,7 @@ import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
 import { marketBrief, type Direction } from './directions.ts'
 import { latestDoc, loopBrief, type MarketAnalysis } from './market.ts'
-import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+import { catalog, completeJson, describe, modelFor, parseChoice, S, type ModelChoice } from './models.ts'
 import { knowledge } from './knowledge.ts'
 
 const log = logger('ads')
@@ -331,14 +331,10 @@ function withoutInventedQuotes(written: AdCopy, draft: AdCopy, reviews: Array<{ 
     descriptions: checkList(written.descriptions, draft.descriptions),
     script: written.script.some((beat) => unverifiedQuotes(`${beat.line} ${beat.visual}`, reviews).length) ? draft.script : written.script,
   }
-  if (!dropped.length) return result
-  return {
+  return dropped.length ? {
     ...result,
-    notes: [
-      `A quote in this ad was not in any approved review, so that line was put back to the draft written from the reviews on file: "${clip(dropped[0] as string, 90)}". Nothing here quotes a customer who did not say it.`,
-      ...result.notes,
-    ].slice(0, 4),
-  }
+    notes: [`An unverified quote was removed from this ad: "${clip(dropped[0] as string, 90)}".`, ...result.notes].slice(0, 4),
+  } : result
 }
 
 async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInput): Promise<AdCopy> {
@@ -405,6 +401,8 @@ export type DraftRequest = {
   direction?: string
   avatarId?: string
   count?: number
+  /** Optional one-run override; the store's Ads model remains the default. */
+  model?: string
 }
 
 export function suggestAdFormats(platform: AdPlatform, direction: Direction): string[] {
@@ -432,11 +430,13 @@ export async function draftAds(db: Db, store: Store, request: DraftRequest): Pro
   const platform = request.platform ?? 'meta'
   const probe = adInput(db, store, product, { ...request, platform, format: formatById('static') })
   const wanted = request.formats?.length ? request.formats : suggestAdFormats(platform, probe.direction).slice(0, request.count ?? 3)
+  const requested = parseChoice(request.model)
+  const model = requested && catalog().some((entry) => entry.available && entry.provider === requested.provider && entry.model === requested.model) ? requested : modelFor(db, store.id, 'ads')
   const created: Ad[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId)
     const input = { ...probe, format }
-    const body = await authorAd(modelFor(db, store.id, 'ads'), writeAd(input), input)
+    const body = await authorAd(model, writeAd(input), input)
     created.push(
       saveAd(db, store.id, {
         productId: product.id,

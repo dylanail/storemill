@@ -552,62 +552,112 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     `,
   },
   {
-    name: '012_ad_clicks',
+    name: '012_tracking_snapshots',
     sql: `
-    -- Revenue per session decides nothing on its own: the course compares it
-    -- against the cost of the click that produced it. Clicks live beside the
-    -- spend they were bought with so a CPC exists without a second source.
+    -- 17TRACK is polled on demand and cached. This keeps the public tracking
+    -- page fast and avoids spending an API quota on every customer refresh.
+    CREATE TABLE tracking_snapshots (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      tracking TEXT NOT NULL, carrier TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '', sub_status TEXT NOT NULL DEFAULT '',
+      estimate TEXT NOT NULL DEFAULT '{}', events TEXT NOT NULL DEFAULT '[]',
+      registered_at TEXT, synced_at TEXT, error TEXT NOT NULL DEFAULT '',
+      UNIQUE (store_id, tracking));
+    CREATE INDEX tracking_order ON tracking_snapshots(store_id, order_id);
+    `,
+  },
+  {
+    name: '013_growth_automation',
+    sql: `
+    -- Localized storefronts keep product prices in the store's base currency
+    -- and convert once, at the cart boundary. Rates are deliberately owned by
+    -- the operator rather than fetched during checkout.
+    ALTER TABLE regions ADD COLUMN locale TEXT NOT NULL DEFAULT 'en-US';
+    ALTER TABLE regions ADD COLUMN exchange_rate REAL NOT NULL DEFAULT 1;
+
+    -- First/last touch lives with the anonymous first-party session; the order
+    -- snapshot is immutable so reports do not change when a visitor returns.
+    ALTER TABLE sessions_analytics ADD COLUMN attribution TEXT NOT NULL DEFAULT '{}';
+    CREATE TABLE order_attribution (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL, first_touch TEXT NOT NULL DEFAULT '{}',
+      last_touch TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+      UNIQUE (store_id, order_id));
+    CREATE INDEX order_attribution_store ON order_attribution(store_id, created_at DESC);
+
+    -- Meta CAPI and TikTok Events API are delivered from a durable outbox.
+    -- A shared event id is also handed to browser pixels for deduplication.
+    CREATE TABLE server_event_deliveries (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL, event_id TEXT NOT NULL, event_name TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
+      attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, sent_at TEXT, UNIQUE (store_id, provider, event_id));
+    CREATE INDEX server_events_store ON server_event_deliveries(store_id, status, created_at);
+
+    -- Native lifecycle flows and their idempotent delivery ledger.
+    CREATE TABLE marketing_flows (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, trigger_kind TEXT NOT NULL, delay_hours INTEGER NOT NULL DEFAULT 0,
+      subject TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+      sent_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (store_id, trigger_kind));
+    CREATE TABLE marketing_flow_deliveries (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      flow_id TEXT NOT NULL REFERENCES marketing_flows(id) ON DELETE CASCADE,
+      event_key TEXT NOT NULL, recipient TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+      email_send_id TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, sent_at TEXT,
+      UNIQUE (flow_id, event_key));
+    CREATE INDEX marketing_flow_store ON marketing_flow_deliveries(store_id, created_at DESC);
+
+    -- Requests are queued independently of the chat/run ledger so several
+    -- voice or typed jobs can wait while the current agent run is executing.
+    CREATE TABLE assistant_queue (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL, text TEXT NOT NULL, page TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'queued', run_id TEXT, error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT);
+    CREATE INDEX assistant_queue_store ON assistant_queue(store_id, status, created_at);
+    `,
+  },
+  {
+    name: '014_server_event_backoff',
+    sql: `
+    ALTER TABLE server_event_deliveries ADD COLUMN next_attempt_at TEXT;
+    `,
+  },
+  {
+    name: '015_base_order_totals',
+    sql: `
+    -- A charged order keeps its regional currency, while this immutable base
+    -- snapshot makes dashboard, profit and attribution totals comparable.
+    ALTER TABLE orders ADD COLUMN base_total_cents INTEGER;
+    `,
+  },
+  {
+    name: '016_ad_clicks',
+    sql: `
     ALTER TABLE ad_spend ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0;
     `,
   },
   {
-    name: '013_review_requested',
+    name: '017_order_notes',
     sql: `
-    -- "The review request goes out a week from now" was a sentence in the
-    -- admin and nothing else: there was no scheduler for it. The sweep needs
-    -- somewhere to record that it has asked, once, per order.
-    ALTER TABLE orders ADD COLUMN review_requested_at TEXT;
-    `,
-  },
-  {
-    name: '014_order_notes',
-    sql: `
-    -- Somewhere to record what the merchant needs to know about an order that
-    -- the line items cannot say: a charge that did not match the total,
-    -- because the price moved while the shopper was paying.
     ALTER TABLE orders ADD COLUMN notes TEXT NOT NULL DEFAULT '';
     `,
   },
   {
-    name: '015_environment_brand',
+    name: '018_environment_brand',
     sql: `
-    -- The draft/live split covered the theme and nothing else, so the brand —
-    -- name, slogan, palette, fonts, logo and the announcement bar — changed the
-    -- live storefront the moment the assistant touched it, while the composer
-    -- promised edits land on the draft. The live environment keeps its own
-    -- copy now; stores.brand is the draft, and publish copies it over.
     ALTER TABLE store_environments ADD COLUMN brand TEXT NOT NULL DEFAULT '{}';
     UPDATE store_environments SET brand = (SELECT brand FROM stores WHERE stores.id = store_environments.store_id);
     `,
   },
   {
-    name: '016_drop_unused_tables',
+    name: '019_password_resets',
     sql: `
-    -- Two tables nothing ever read or wrote. \`experiments\` was a split-test
-    -- store from before page versions and funnel groups did that job with
-    -- their own weights, and \`geo_prompts\` was for tracking whether a model
-    -- cites the store, which nothing checks. A schema that describes features
-    -- the product does not have is a map of a place that is not there.
-    DROP TABLE IF EXISTS experiments;
-    DROP TABLE IF EXISTS geo_prompts;
-    `,
-  },
-  {
-    name: '017_password_resets',
-    sql: `
-    -- There was no way back into an account. A forgotten password meant the
-    -- store, its products, its orders and its domain were gone, with no
-    -- recovery short of editing the database by hand.
     CREATE TABLE password_resets (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL,
@@ -615,6 +665,83 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX password_resets_user ON password_resets(user_id, created_at DESC);
     `,
   },
+  {
+    name: '020_block_presets',
+    sql: `
+    -- A configured section can be named once and reused on any of this
+    -- owner's stores or funnels. The definition remains in the catalog (or
+    -- the owner's shared custom-block catalog); this table stores the chosen
+    -- settings, not another rendering implementation.
+    CREATE TABLE block_presets (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_store_id TEXT REFERENCES stores(id) ON DELETE SET NULL,
+      name TEXT NOT NULL, block_type TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (owner_id, name));
+    CREATE INDEX block_presets_owner ON block_presets(owner_id, updated_at DESC);
+    `,
+  },
+  {
+    name: '021_page_revisions',
+    sql: `
+    -- Every deliberate builder save is recoverable. Page revisions are kept
+    -- separately from storefront publishing because a page can be restored
+    -- without rolling back the entire store theme and catalog.
+    CREATE TABLE page_revisions (
+      id TEXT PRIMARY KEY, page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+      store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL, snapshot TEXT NOT NULL DEFAULT '{}',
+      note TEXT NOT NULL DEFAULT 'Saved', created_at TEXT NOT NULL,
+      UNIQUE (page_id, version));
+    CREATE INDEX page_revisions_page ON page_revisions(page_id, version DESC);
+    `,
+  },
+  {
+    name: '022_page_template_library',
+    sql: `
+    CREATE TABLE page_templates (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_store_id TEXT REFERENCES stores(id) ON DELETE SET NULL,
+      name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'page',
+      snapshot TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX page_templates_owner ON page_templates(owner_id, updated_at DESC);
+    `,
+  },
+  {
+    name: '023_media_rebrands',
+    sql: `
+    CREATE TABLE media_rebrands (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      actor_id TEXT NOT NULL, request_key TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL, original_url TEXT NOT NULL DEFAULT '',
+      result_url TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, spec TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued', phase TEXT NOT NULL DEFAULT 'Waiting to start',
+      provider_task TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+      changes TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX media_rebrands_store ON media_rebrands(store_id, created_at DESC);
+    CREATE UNIQUE INDEX media_rebrands_request ON media_rebrands(store_id, request_key) WHERE request_key <> '';
+    `,
+  },
+  { name: '024_funnel_steps_and_health_fixes', sql: `ALTER TABLE funnels ADD COLUMN steps TEXT NOT NULL DEFAULT '[]';
+    CREATE TABLE health_fixes (id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE, path TEXT NOT NULL, check_name TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', before_state TEXT NOT NULL DEFAULT '{}', after_state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE UNIQUE INDEX health_fixes_running ON health_fixes(store_id, path, check_name) WHERE status = 'running';` },
+  { name: '025_media_categories', sql: `CREATE TABLE media_labels (
+    id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    url TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'media', label TEXT NOT NULL DEFAULT '',
+    UNIQUE(store_id,url));` },
+  { name: '026_asset_import_jobs', sql: `CREATE TABLE asset_import_jobs (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    request_key TEXT NOT NULL DEFAULT '', input TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued', progress TEXT NOT NULL DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX asset_import_owner ON asset_import_jobs(owner_id, created_at DESC);
+    CREATE UNIQUE INDEX asset_import_request ON asset_import_jobs(owner_id,request_key) WHERE request_key <> '';
+    CREATE TABLE post_purchase_offers (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE, page_id TEXT NOT NULL,
+      status TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '{}', payment_intent_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
+  { name:'027_bundle_pricing_modes', sql: `ALTER TABLE bundles ADD COLUMN pricing_mode TEXT NOT NULL DEFAULT 'bulk';` },
+  { name: '028_review_requested', sql: `ALTER TABLE orders ADD COLUMN review_requested_at TEXT;` },
 ]
 
 function migrate(db: Db) {

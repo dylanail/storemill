@@ -209,6 +209,7 @@ export const growthTools: Tool[] = defineTools([
       body: { type: 'string', required: true, multiline: true },
       excerpt: { type: 'string' },
       status: { type: 'string', enum: ['draft', 'published'], default: 'published' },
+      publishAt: { type: 'string', help: 'Optional ISO date/time. A future time schedules the article.' },
     },
     handler(args, ctx) {
       const blogs = listBlogs(ctx.db, ctx.storeId)
@@ -218,9 +219,10 @@ export const growthTools: Tool[] = defineTools([
         body: args.body as string,
         ...(args.excerpt ? { excerpt: args.excerpt as string } : {}),
         status: args.status as 'draft' | 'published',
+        ...(args.publishAt ? { publishAt: args.publishAt as string } : {}),
       })
       return {
-        summary: `${article.status === 'published' ? 'Published' : 'Drafted'} "${article.title}" in ${blog.title}.`,
+        summary: `${article.status === 'published' ? 'Published' : article.status === 'scheduled' ? `Scheduled for ${article.publishedAt}` : 'Drafted'} "${article.title}" in ${blog.title}.`,
         artifacts: [{ type: 'link', href: `${publicStoreUrl(ctx.db, { slug: getStore(ctx.db, ctx.storeId)?.slug ?? '', id: ctx.storeId })}/blogs/${blog.handle}/${article.handle}`, label: article.title }],
       }
     },

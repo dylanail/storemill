@@ -324,7 +324,7 @@ export async function readSite(url: string): Promise<{ text: string; notes: stri
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 6000)
-    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'AmborasResearch/1.0' } })
+    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'storemillResearch/1.0' } })
     clearTimeout(timer)
     if (!response.ok) return { text: '', notes: [`Could not read ${url} (${response.status})`] }
     const html = (await response.text()).slice(0, 400_000)

@@ -174,7 +174,7 @@ export const realFetcher: Fetcher = async (url) => {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'Mozilla/5.0 (compatible; AmborasResearch/1.0)', accept: 'text/html' } })
+    const response = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'Mozilla/5.0 (compatible; storemillResearch/1.0)', accept: 'text/html' } })
     return { ok: response.ok, status: response.status, text: (await response.text()).slice(0, 600_000) }
   } catch (error) {
     return { ok: false, status: 0, text: error instanceof Error ? error.message : String(error) }

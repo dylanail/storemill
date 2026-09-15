@@ -107,7 +107,7 @@ table{width:100%;border-collapse:collapse;margin:16px 0}
 .brand{font:400 13px/1 Georgia,serif;letter-spacing:.22em;text-transform:uppercase;margin-bottom:22px;color:${accent}}
 .foot{color:#8a8078;font-size:12px;margin-top:22px}
 </style></head><body><div class="wrap"><div class="brand">${escapeHtml(storeName)}</div><div class="card">${inner}</div>
-<p class="foot">Sent by ${escapeHtml(storeName)} on Amboras. Reply to this email and a person will read it.</p></div></body></html>`
+<p class="foot">Sent by ${escapeHtml(storeName)} on storemill. Reply to this email and a person will read it.</p></div></body></html>`
 }
 
 export function lineTotals<T extends { unitCents: number; quantity: number }>(items: T[], currency: string) {

@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import test,{after} from 'node:test';
+import {mkdtempSync,rmSync,existsSync} from 'node:fs';
+import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {chromium} from 'playwright';
+const dir=mkdtempSync(join(tmpdir(),'site-import-'));
+Object.assign(process.env,{AMBORAS_DB:join(dir,'test.db'),PORT:'0',AMBORAS_LOG_LEVEL:'error',AMBORAS_STOREFRONT_HOST:'',AMBORAS_PUBLIC_ORIGIN:'',AMBORAS_ADMIN_HOST:'',OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',GEMINI_API_KEY:''});
+const {server}=await import('../src/main.ts');const {getDb}=await import('../src/lib/db.ts');const {register}=await import('../src/control/auth.ts');const {createBlankAsset}=await import('../src/control/assets.ts');const {createProduct}=await import('../src/domain/catalog.ts');const {createPage,updatePage}=await import('../src/pages/store.ts');const {upsertFunnel}=await import('../src/domain/funnels.ts');const {createCart,addToCart}=await import('../src/domain/cart.ts');const {completeCart,getOrder}=await import('../src/domain/orders.ts');const {startImport,drainImports}=await import('../src/control/asset-import-jobs.ts');
+const db=getDb(),user=register(db,{email:'clone-browser@example.com',password:'fixture-password-long'}),store=createBlankAsset(db,user.id,{name:'Clone regression',kind:'funnel'});
+db.update('stores',store.id,{status:'live'});
+const main=createProduct(db,store.id,{title:'Bottle',status:'published',variants:[{title:'One bottle',priceCents:5995,inventory:50},{title:'Three bottles',priceCents:11985,inventory:50}]}),extra=createProduct(db,store.id,{title:'Extra bottles',status:'published',metadata:{hidden:'true'},variants:[{title:'One extra',priceCents:3999,inventory:50},{title:'Two extra',priceCents:5999,inventory:50}]});
+const homepage=createPage(db,store.id,{title:'Entry',role:'offer',productId:main.id,status:'published'});updatePage(db,store.id,homepage.id,{isHome:true});
+createPage(db,store.id,{title:'Copied checkout',mode:'html',role:'checkout',status:'published',sourceUrl:'https://source.example/checkout',productId:main.id,rawHtml:`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font:16px system-ui}.pl-item{padding:16px;margin:8px;border:1px solid #999;cursor:pointer}.pl-item.selected{border:3px solid blue}</style></head><body><h1>Choose your bottles</h1><div><main class="basic-information-section"><div class="product-list"><div class="pl-item" data-copy-product-id="${main.id}" data-copy-variant-id="${main.variants[0].id}">One bottle — $59.95</div><div class="pl-item" data-copy-product-id="${main.id}" data-copy-variant-id="${main.variants[1].id}">Three bottles — $119.85</div></div></main><aside class="sidebar">Summary</aside></div></body></html>`});
+const upsell=createPage(db,store.id,{title:'Extra bottles offer',mode:'html',role:'upsell',status:'published',sourceUrl:'https://source.example/offer1',productId:extra.id,rawHtml:`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:16px;font:16px system-ui;box-sizing:border-box}a{display:block;padding:14px}</style></head><body><h1>Keep the copied offer design</h1><a href="#yes-link-20" data-copy-variant-id="${extra.variants[1].id}">Yes, two bottles for $59.99</a><a href="#no-link">No thanks</a></body></html>`});
+const second=createPage(db,store.id,{title:'Next offer',mode:'html',role:'upsell',status:'published',sourceUrl:'https://source.example/offer2',productId:extra.id,rawHtml:'<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><h1>Your second offer</h1><a href="#no-link">No thanks</a></body></html>'});
+const bump=createProduct(db,store.id,{title:'Priority shipping',status:'published',metadata:{hidden:'true'},variants:[{title:'Per order',priceCents:495,inventory:50}]});
+const unrelated=createProduct(db,store.id,{title:'Separate checkout offer',status:'published',variants:[{title:'Alternate',priceCents:9999,inventory:50}]});createPage(db,store.id,{title:'Alternate checkout',mode:'html',role:'checkout',status:'published',productId:unrelated.id,rawHtml:'<h1>Alternate checkout</h1>'});
+upsertFunnel(db,store.id,{name:'Copied flow',productId:main.id,bump:{enabled:true,variantId:bump.variants[0].id,priceCents:495,label:'Priority shipping'},upsell:{enabled:false},downsell:{enabled:false},steps:[{pageId:upsell.id,label:upsell.title,role:'upsell',offer:{enabled:true,pageId:upsell.id,variantId:extra.variants[1].id,variantIds:extra.variants.map(v=>v.id),discountPercent:0},nextPageId:second.id,declinePageId:second.id},{pageId:second.id,label:second.title,role:'upsell',offer:{enabled:true,pageId:second.id,variantId:extra.variants[0].id,discountPercent:0}}]});
+await drainImports(db);
+await new Promise(resolve=>server.listening?resolve():server.once('listening',resolve));const origin='http://127.0.0.1:'+server.address().port,base='/s/'+store.slug;
+const browser=await chromium.launch({headless:true,...(existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?{executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'}:{})});
+after(async()=>{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));rmSync(dir,{recursive:true,force:true});});
+async function context(width=390){const ctx=await browser.newContext({viewport:{width,height:900}});await ctx.route('**/*',route=>route.request().url().startsWith(origin)?route.continue():route.abort());return ctx;}
+for(const width of[390,1440])test(`source package cards select actual checkout totals and repeated offers at ${width}px`,async()=>{
+ const ctx=await context(width),page=await ctx.newPage(),errors=[];page.setDefaultTimeout(10000);page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});
+ await page.goto(origin+base+'/checkout');await page.waitForFunction(()=>window.__COPY_COMMERCE_READY,null,{timeout:10000});
+ const card=page.getByRole('radio',{name:'Three bottles — $119.85',exact:true});await card.click();await page.waitForFunction(()=>document.querySelector('.pl-item[aria-checked="true"]')?.textContent.includes('Three'),null,{timeout:10000});
+ assert.equal(await page.getByText('Separate checkout offer',{exact:false}).count(),0);
+ const bumpCheck=page.getByRole('checkbox',{name:/Priority shipping/});await bumpCheck.waitFor();const bumpResponse=page.waitForResponse(r=>r.url().endsWith('/checkout/bump'));await bumpCheck.check();await bumpResponse;
+ const cart=await ctx.request.get(origin+base+'/cart/state').then(r=>r.json());assert.equal(cart.items[0].variantId,main.variants[1].id);assert.equal(cart.totals.subtotalCents,12480);assert.equal(await card.getAttribute('aria-checked'),'true');
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+ const paidCart=createCart(db,store.id);addToCart(db,store.id,paidCart.id,main.variants[0].id);const order=completeCart(db,store.id,paidCart.id,{email:'buyer@example.com',payment:{provider:'demo',status:'captured'}});
+ await page.goto(origin+base+'/orders/'+order.id+'/offer');await page.getByRole('heading',{name:'Keep the copied offer design'}).waitFor();
+ await page.getByRole('link',{name:'Yes, two bottles for $59.99'}).click();await page.getByRole('heading',{name:'Your second offer'}).waitFor();
+ const updated=getOrder(db,store.id,order.id);assert.equal(updated.totalCents-order.totalCents,5999);assert.equal(updated.items.at(-1).variantId,extra.variants[1].id);
+ await page.getByRole('link',{name:'No thanks',exact:true}).click();await page.waitForURL(origin+base+'/orders/'+order.id);assert.deepEqual(errors,[]);await ctx.close();
+});
+test('clone progress survives navigation, reports stages and counts, and opens the completed draft',async()=>{
+ const job=startImport(db,user.id,{url:'https://source.example',kind:'funnel'},'browser_clone_123');db.update('asset_import_jobs',job.id,{status:'working',progress:{percent:42,task:'Copying policy pages',copied:8,discovered:17,products:0,images:24,currentUrl:'https://source.example/privacy'}});
+ const ctx=await context(1440);await ctx.request.post(origin+'/login',{form:{email:user.email,password:'fixture-password-long'}});const page=await ctx.newPage();page.setDefaultTimeout(10000);
+ await page.goto(origin+'/admin/imports/'+job.id);assert.equal(await page.locator('#copy-percent').textContent(),'42%');assert.match(await page.locator('#copy-counts').textContent(),/8 pages copied/);
+ await page.goto(origin+'/admin/stores');await page.getByRole('link',{name:'source.example',exact:true}).click();assert.match(await page.locator('#copy-task').textContent(),/policy/);
+ db.update('asset_import_jobs',job.id,{status:'done',progress:{percent:100,task:'Clone complete',copied:17,discovered:17,products:6,images:40},result:{storeId:store.id,pageId:upsell.id,pages:17,products:6,complete:true}});
+ await page.locator('#copy-result').waitFor({state:'visible'});assert.equal(await page.locator('#copy-percent').textContent(),'100%');assert.match(await page.locator('#copy-summary').textContent(),/17 pages and 6 products/);
+ await page.getByRole('link',{name:'Open copied site',exact:true}).click();await page.waitForURL('**/edit?storeId='+store.id);await ctx.close();
+});

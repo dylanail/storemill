@@ -9,6 +9,7 @@ import { directionFrom, listCompetitors } from '../agent/angles.ts'
 import { imageModels, PRESETS } from '../agent/images.ts'
 import { readBrief } from '../agent/copy.ts'
 import { latestResearch } from '../agent/research.ts'
+import { catalog } from '../agent/models.ts'
 
 /**
  * The growth pages: ads, domains, avatars, competitor angles, image re-shoots.
@@ -42,6 +43,10 @@ function productOptions(ctx: Ctx, selected = ''): string {
     .join('')
 }
 
+function textModelOptions(): string {
+  return `<option value="">Store default</option>${catalog().map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}`
+}
+
 export function avatarOptions(ctx: Ctx, selected = ''): string {
   const avatars = listAvatars(ctx.db, ctx.store.id)
   return `<option value="">First selected avatar</option><option value="none" ${selected === 'none' ? 'selected' : ''}>No avatar</option>${avatars
@@ -68,7 +73,7 @@ export async function adsPage(ctx: Ctx, query: { q?: string; country?: string })
         <td>${escapeHtml(ad.platform)}</td><td><span class="tag ${ad.status === 'ready' ? 'ok' : ''}">${ad.status}</span></td><td class="muted" style="font-size:12px">${escapeHtml((ad.body.hooks[0] ?? ad.body.headline).slice(0, 90))}</td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="padding:0 1.1rem 1rem;font-size:12px">Nothing drafted yet. Use the form on the right.</p>'}</div>
     <div class="card" id="inspiration"><h2>Swipe file</h2>
       <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Ads worth learning from. Drafts read the hooks and angles here. Search the Meta Ad Library (token needed), read a competitor link, or paste an ad.</p>
-      <form method="get" action="/admin/ads" class="row" style="margin-bottom:.6rem"><input name="q" value="${escapeHtml(query.q ?? '')}" placeholder="Search the Ad Library: e.g. leather boxing gloves" style="flex:2"><input name="country" value="${escapeHtml(query.country ?? 'GB')}" style="width:56px" title="Reach country; EU/UK return commercial ads"><button class="btn">Search</button></form>
+      <form method="get" action="/admin/ads" class="row" style="margin-bottom:.6rem"><input aria-label="Search the Ad Library" name="q" value="${escapeHtml(query.q ?? '')}" placeholder="Search the Ad Library: e.g. leather boxing gloves" style="flex:2"><input name="country" value="${escapeHtml(query.country ?? 'GB')}" style="width:56px" title="Reach country; EU/UK return commercial ads"><button class="btn">Search</button></form>
       ${library ? `<p class="muted" style="font-size:12px">${escapeHtml(library.note)}</p>${library.results.map((entry) => `<form method="post" action="/admin/ads/inspiration/keep" style="border-top:1px solid var(--line);padding:.5rem 0">
         <input type="hidden" name="source" value="ad-library"><input type="hidden" name="brand" value="${escapeHtml(entry.brand)}"><input type="hidden" name="url" value="${escapeHtml(entry.url)}"><input type="hidden" name="primaryText" value="${escapeHtml(entry.primaryText)}"><input type="hidden" name="hook" value="${escapeHtml(entry.hook)}">
         <div class="row" style="justify-content:space-between"><strong style="font-size:12.5px">${escapeHtml(entry.brand)}</strong><span class="tag">${escapeHtml(entry.angle)}${entry.startedAt ? ` · since ${escapeHtml(entry.startedAt.slice(0, 10))}` : ''}</span></div>
@@ -90,6 +95,7 @@ export async function adsPage(ctx: Ctx, query: { q?: string; country?: string })
     <form method="post" action="/admin/ads/draft" class="card"><h2>Draft ads</h2>
       <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="productId">${productOptions(ctx)}</select></div>
         <div class="field" style="flex:1"><label>Platform</label><select name="platform">${PLATFORMS.map((platform) => `<option value="${platform.id}">${escapeHtml(platform.name)}</option>`).join('')}</select></div></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
       <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${AD_FORMATS.map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.id}"> ${escapeHtml(format.name)}</label>`).join('')}</div></div>
       <div class="row"><div class="field" style="flex:2"><label>Avatar — who this is written to</label><select name="avatarId">${avatarOptions(ctx)}</select></div><div class="field" style="flex:1"><label>How many</label><input name="count" value="3"></div></div>
       <div class="field"><label>Direction — free-form. "urgent", "premium", "for coaches", "focus on the repair guarantee", "say \"built to order\"".</label><textarea name="direction" rows="2" placeholder="Blunt, for people who have bought the cheap ones twice, focus on the wrist, say &quot;repaired for life&quot;"></textarea></div>
@@ -182,7 +188,7 @@ export function domainsPage(ctx: Ctx): string {
         <label class="row" style="gap:.4rem;font-size:12.5px;margin:.2rem 0"><input type="radio" name="mode" value="forward"> <span><strong>Forward it</strong> — the registrar redirects the name to ${escapeHtml(publicUrl)}. Quickest; visitors land on the platform address.</span></label></div>
       <button class="btn primary" type="submit">Attach and show the records</button></form>
     <div class="card"><h2>Which one</h2>
-      <p style="font-size:12.5px;margin:.4rem 0"><strong>Hosting</strong> is what a real store wants: the domain in the address bar, a certificate for it, pixels and checkout on your name. It needs the platform reachable at <code>${escapeHtml(edge.host)}</code>${edge.ip ? '' : ' — set <code>AMBORAS_EDGE_HOST</code> or <code>AMBORAS_EDGE_IP</code> to what your deployment actually answers on'}.</p>
+      <p style="font-size:12.5px;margin:.4rem 0"><strong>Hosting</strong> is what a real store wants: the domain in the address bar, a certificate for it, pixels and checkout on your name. It needs the platform reachable at <code>${escapeHtml(edge.host)}</code>${edge.ip ? '' : ' — set <code>STOREMILL_EDGE_HOST</code> or <code>STOREMILL_EDGE_IP</code> to what your deployment actually answers on'}.</p>
       <p style="font-size:12.5px;margin:.4rem 0"><strong>Forwarding</strong> is for a domain you own and want pointed somewhere today: Namecheap's "Redirect Domain", GoDaddy's "Forwarding". Nothing is served here; the registrar sends people on.</p>
       <p class="muted" style="font-size:12px;margin:.4rem 0">${REGISTRARS.slice(0, 5).map((registrar) => `<strong>${escapeHtml(registrar.name)}:</strong> ${escapeHtml(registrar.note)}`).join('<br><br>')}</p></div>
   </div></div>`

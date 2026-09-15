@@ -1,10 +1,15 @@
+import { seedDefaultRegion } from '../src/domain/regions.ts'
+import { addToCart, createCart } from '../src/domain/cart.ts'
+import { completeCart, markDelivered } from '../src/domain/orders.ts'
+import { sweepReviewRequests } from '../src/email/reviews.ts'
+import { listSends } from '../src/email/send.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { createStore, getStore } from '../src/control/stores.ts'
 import { onboard } from '../src/agent/onboarding.ts'
 import { execute } from '../src/agent/registry.ts'
-import { getProduct, listProducts } from '../src/domain/catalog.ts'
+import { createProduct, getProduct, listProducts } from '../src/domain/catalog.ts'
 import { createReview, moderate } from '../src/domain/reviews.ts'
 import { saveUpload } from '../src/lib/uploads.ts'
 import { generate, imageModels, imagePrompt, defaultProvider, useImageTransport } from '../src/agent/images.ts'
@@ -16,13 +21,7 @@ import { latestResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { readDirection } from '../src/agent/directions.ts'
 import { generateVersions } from '../src/pages/versions.ts'
-import { sweepReviewRequests } from '../src/email/reviews.ts'
-import { listSends } from '../src/email/send.ts'
 import { TEMPLATES } from '../src/email/templates.ts'
-import { completeCart, markDelivered } from '../src/domain/orders.ts'
-import { addToCart, createCart } from '../src/domain/cart.ts'
-import { createProduct } from '../src/domain/catalog.ts'
-import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { privacyHtml } from '../src/storefront/legal.ts'
 import { install } from '../src/control/plugins.ts'
 
@@ -135,7 +134,7 @@ test('regenerate_product_image renders a sheet from a free-form direction and ke
 
 test('the DNS plan speaks each registrar\'s language and knows which apexes can alias', () => {
   const namecheap = dnsPlan('ironjaw.co', 'host', 'namecheap', 'tok', 'https://ironjaw.example.com')
-  assert.deepEqual(namecheap.records.map((record) => [record.type, record.name]), [['ALIAS', '@'], ['CNAME', 'www'], ['TXT', '_amboras.ironjaw.co']])
+  assert.deepEqual(namecheap.records.map((record) => [record.type, record.name]), [['ALIAS', '@'], ['CNAME', 'www'], ['TXT', '_storemill.ironjaw.co']])
   assert.match(namecheap.steps[0] ?? '', /Domain List/)
   assert.equal(namecheap.caveat, '')
 
@@ -144,7 +143,7 @@ test('the DNS plan speaks each registrar\'s language and knows which apexes can 
   assert.match(godaddy.caveat, /cannot point a bare domain/)
 
   const sub = dnsPlan('shop.ironjaw.co', 'host', 'cloudflare', 'tok', 'https://ironjaw.example.com')
-  assert.deepEqual(sub.records.map((record) => [record.type, record.name]), [['CNAME', 'shop'], ['TXT', '_amboras.shop.ironjaw.co']])
+  assert.deepEqual(sub.records.map((record) => [record.type, record.name]), [['CNAME', 'shop'], ['TXT', '_storemill.shop.ironjaw.co']])
 
   const forward = dnsPlan('ironjaw.co', 'forward', 'namecheap', 'tok', 'https://ironjaw.example.com')
   assert.equal(forward.records[0]?.type, 'FORWARD')

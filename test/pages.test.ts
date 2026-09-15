@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { BLOCKS, blockDefinition, renderBlock, renderBlocks, type BlockContext } from '../src/pages/blocks.ts'
-import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, getPage, homePage, landingTemplate, liveCheckoutPage, newBlock, PAGE_TEMPLATES, pageTemplate, productTemplate, salesTemplate, scienceTemplate, updatePage } from '../src/pages/store.ts'
+import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, getPage, homePage, landingTemplate, listPageRevisions, liveCheckoutPage, newBlock, PAGE_TEMPLATES, pageTemplate, productTemplate, restorePageRevision, salesTemplate, savePageRevision, scienceTemplate, updatePage } from '../src/pages/store.ts'
 import { clonePage, extractBlocks } from '../src/pages/clone.ts'
 import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } from '../src/domain/bundles.ts'
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
 import { createStore, environment } from '../src/control/stores.ts'
 import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
-import { blockPage, htmlPage, productPage } from '../src/storefront/render.ts'
+import { blockPage, htmlPage, notFoundPage, productPage } from '../src/storefront/render.ts'
 import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
@@ -18,6 +18,7 @@ function require_promotions() {
   return { createPromotion }
 }
 import { execute } from '../src/agent/registry.ts'
+import { editorPage } from '../src/admin/editor.ts'
 
 const context: BlockContext = {
   storeName: 'Test Co',
@@ -178,6 +179,9 @@ test('pages are created, updated, and one of them can be the home page', () => {
   const page = createPage(db, store.id, { title: 'Why switch', blocks: [newBlock('headline', { text: 'Hi' })] })
   assert.equal(page.handle, 'why-switch')
   assert.equal(createPage(db, store.id, { title: 'Why switch' }).handle, 'why-switch-2')
+  updatePage(db, store.id, page.id, { isHome: true })
+  assert.equal(homePage(db, store.id), null, 'a draft home is not public')
+  assert.equal(homePage(db, store.id, { preview: true })?.id, page.id, 'but the theme designer previews the selected draft home')
   updatePage(db, store.id, page.id, { status: 'published', isHome: true })
   assert.equal(homePage(db, store.id)?.id, page.id)
   const other = createPage(db, store.id, { title: 'Other', status: 'published' })
@@ -188,18 +192,50 @@ test('pages are created, updated, and one of them can be the home page', () => {
   assert.match(html, /Hi/)
 })
 
+test('every builder save is a named page revision that can be restored', () => {
+  const { db, store } = shop()
+  const page = createPage(db, store.id, { title: 'First draft', blocks: [newBlock('headline', { text: 'Original' })] })
+  assert.equal(listPageRevisions(db, store.id, page.id).length, 1)
+  const changed = updatePage(db, store.id, page.id, { title: 'Second draft', blocks: [newBlock('headline', { text: 'Changed' })] })
+  savePageRevision(db, changed, 'Saved from builder')
+  const revisions = listPageRevisions(db, store.id, page.id)
+  assert.equal(revisions[0]?.version, 2)
+  assert.equal(revisions[0]?.snapshot.title, 'Second draft')
+  const restored = restorePageRevision(db, store.id, page.id, revisions[1]!.id)
+  assert.equal(restored.title, 'First draft')
+  assert.equal(restored.blocks[0]?.settings.text, 'Original')
+  assert.match(listPageRevisions(db, store.id, page.id)[0]!.note, /Restored version 1/)
+})
+
+test('the page builder ships valid, safely embedded client code', () => {
+  const { db, store } = shop()
+  const title = 'A </script><script>alert(1)</script> title'
+  const page = createPage(db, store.id, { title, blocks: [newBlock('headline', { text: title })] })
+  const html = editorPage({ page, storeSlug: store.slug, products: [], revisions: listPageRevisions(db, store.id, page.id) })
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  scripts.forEach((match) => assert.doesNotThrow(() => new Function(match[1] ?? '')))
+  assert.equal(scripts.length, 7)
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/)
+  assert.match(html, /Save history/)
+  assert.match(html, /sandbox="allow-same-origin"/)
+  assert.match(html, /id="preview-draft"/)
+  assert.match(html, /data-width="1200px"/)
+})
+
 /* ---------------------------------------------------------------- clone */
 
 test('cloning inlines stylesheets, makes URLs absolute, drops scripts and keeps the words', async () => {
   const pages: Record<string, { type: string; body: string }> = {
     'https://ref.example.com/landing': {
       type: 'text/html',
-      body: `<!doctype html><html><head><title>Ref Page</title><meta name="description" content="A reference"><base href="/x/">
+      body: `<!doctype html><html><head><title>Ref &ndash; Page &#x2122;</title><meta name="description" content="A reference &amp; source"><base href="/x/">
         <link rel="stylesheet" href="../site.css"><script src="/track.js"></script><meta http-equiv="Content-Security-Policy" content="default-src 'self'"></head>
         <body onload="track()"><h1>Reference headline</h1><img src="img/hero.png" srcset="img/hero.png 1x, img/hero@2x.png 2x"><p>Long enough paragraph to survive extraction into a block.</p><a href="/buy">Buy</a><script>alert(1)</script></body></html>`,
     },
     'https://ref.example.com/site.css': { type: 'text/css', body: 'body{background:url(bg.png)} @import "more.css";' },
     'https://ref.example.com/x/img/hero.png': { type: 'image/png', body: 'PNG' },
+    'https://ref.example.com/x/img/hero@2x.png': { type: 'image/png', body: 'PNG' },
+    'https://ref.example.com/bg.png': { type: 'image/png', body: 'PNG' },
   }
   const fetchImpl = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input)
@@ -210,17 +246,19 @@ test('cloning inlines stylesheets, makes URLs absolute, drops scripts and keeps 
   }) as typeof fetch
 
   const result = await clonePage('https://ref.example.com/landing', { storeId: 'store_clone', fetchImpl })
-  assert.equal(result.title, 'Ref Page')
+  assert.equal(result.title, 'Ref – Page ™')
+  assert.equal(result.description, 'A reference & source')
   assert.equal(result.stylesheets, 1)
   assert.match(result.html, /<style data-cloned-from="https:\/\/ref\.example\.com\/site\.css">/)
-  assert.match(result.html, /url\(https:\/\/ref\.example\.com\/bg\.png\)/, 'css urls resolved against the stylesheet')
+  assert.match(result.html, /url\(\/_uploads\/store_clone\/up_[a-z0-9]+\.png\)/, 'CSS background images are owned too')
   assert.match(result.html, /href="https:\/\/ref\.example\.com\/buy"/, 'links absolute')
   assert.ok(!result.html.includes('<base'), 'base tag removed')
   assert.ok(!result.html.includes('Content-Security-Policy'))
   assert.ok(!/<script/i.test(result.html), 'scripts dropped by default')
   assert.ok(!/onload=/i.test(result.html), 'inline handlers dropped')
-  assert.equal(result.imagesLocalized, 1)
+  assert.equal(result.imagesLocalized, 3)
   assert.match(result.html, /src="\/_uploads\/store_clone\/up_[a-z0-9]+\.png"/, 'the image now lives here')
+  assert.match(result.html, /srcset="\/_uploads\/store_clone\/up_[a-z0-9]+\.png 1x, \/_uploads\/store_clone\/up_[a-z0-9]+\.png 2x"/, 'responsive candidates are localized rather than left on the source CDN')
   assert.ok(result.notes.some((note) => /Dropped 2 scripts/.test(note)))
 
   const kept = await clonePage('https://ref.example.com/landing', { storeId: 'store_clone', fetchImpl, keepScripts: true, localizeImages: false })
@@ -428,7 +466,9 @@ test('bundle tiers re-price against the variant the buyer picks', () => {
   const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
   const pdp = productPage(view as never, { product: getProduct(db, store.id, product.id)!, stats: statsFor(db, store.id, product.id), reviews: [], companions: [] })
   assert.match(pdp, /data-tier-total/, 'and the page can find the number to change')
-  assert.match(pdp, /input\.dataset\.discount/, 'picking a variant re-prices every tier from that variant')
+  assert.match(pdp, /input\.dataset\.variantPrices/, 'picking a variant uses the same price calculation as the cart')
+  const quotes=JSON.parse([...widget.matchAll(/data-variant-prices="([^"]*)"/g)][1]![1]!.replace(/&quot;/g,'"'))
+  assert.equal(quotes[product.variants[1]!.id].total,'$144.00')
 })
 
 test('the buybox promises only what the store has actually configured', () => {
@@ -505,7 +545,10 @@ test('a cloned page carries its own meta, not the site it was copied from', () =
   const source = `<!doctype html><html><head><title>Their Brand — Buy Now</title>
     <meta name="description" content="Their words">
     <link rel="canonical" href="https://competitor.example/offer">
-    <meta property="og:title" content="Their Brand"></head><body><h1>Offer</h1></body></html>`
+    <link rel="stylesheet" href="https://competitor.example/theme.css">
+    <meta property="og:title" content="Their Brand"></head><body><h1>Offer</h1>
+    <a href="/">Return</a><a href="/products/widget?one=1&amp;two=2">Widget</a><a href="https://competitor.example/pages/about#team">About</a>
+    <form action="/contact"><button formaction="/contact/quick">Send</button></form><img src="/logo.png"></body></html>`
   const page = createPage(db, store.id, {
     title: 'Our offer',
     kind: 'landing',
@@ -525,4 +568,17 @@ test('a cloned page carries its own meta, not the site it was copied from', () =
   assert.ok(!/competitor\.example\/offer"/.test(out.match(/rel="canonical"[^>]*/)?.[0] ?? ''), 'the canonical is ours')
   assert.match(out, new RegExp(`rel="canonical" href="[^"]*/pages/${page.handle}"`))
   assert.match(out, /name="robots" content="index"/, 'and the extra head is emitted at all')
+  assert.match(out, new RegExp(`href="/s/${store.slug}/"`), 'return stays in the mounted store instead of opening the Amboras admin')
+  assert.match(out, new RegExp(`href="/s/${store.slug}/products/widget\\?one=1&amp;two=2"`))
+  assert.match(out, new RegExp(`href="/s/${store.slug}/pages/about#team"`), 'same-origin absolute links are rebased too')
+  assert.match(out, new RegExp(`action="/s/${store.slug}/contact"`))
+  assert.doesNotMatch(out, /\sformaction=/, 'copied submit buttons use the store-owned form action, never an unimplemented source endpoint')
+  assert.match(out, /href="https:\/\/competitor\.example\/theme\.css"/, 'stylesheet URLs are not mistaken for navigation')
+  assert.match(out, /src="\/logo\.png"/, 'asset paths are not rebased')
+
+  const missing = notFoundPage({ ...view, env: { ...view.env, brand: { primary: '#123456', paper: '#fefefe', ink: '#102030', displayFont: 'Poppins, sans-serif', bodyFont: 'Inter, sans-serif' } } } as never)
+  assert.match(missing, /That page is not here/)
+  assert.match(missing, /#123456/)
+  assert.match(missing, /family=Poppins/)
+  assert.match(missing, new RegExp(`href="/s/${store.slug}/"`))
 })

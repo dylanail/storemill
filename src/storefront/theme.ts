@@ -16,6 +16,7 @@ export function themeCss(brand: Brand, theme: Theme): string {
   const ink = brand.ink ?? '#241a14'
   const display = brand.displayFont ?? "'Playfair Display', Georgia, serif"
   const body = brand.bodyFont ?? "'Inter', ui-sans-serif, system-ui, sans-serif"
+  const displayWeight=Number(brand.displayWeight)||400,bodyWeight=Number(brand.bodyWeight)||400
   const gallery = theme.template === 'gallery'
   // "Market" was a third option in the template picker and in edit_storefront's
   // enum that rendered byte for byte like the atelier: the merchant chose it,
@@ -27,29 +28,33 @@ export function themeCss(brand: Brand, theme: Theme): string {
   return `
 :root{
   --primary:${primary}; --secondary:${secondary};
-  --paper:${gallery ? '#ffffff' : paper}; --ink:${ink};
+  --paper:${paper}; --ink:${ink};
   --muted:color-mix(in srgb, var(--ink) 55%, var(--paper));
-  --line:color-mix(in srgb, var(--ink) 14%, var(--paper));
-  --raise:color-mix(in srgb, var(--paper) 92%, #ffffff);
+  --line:${brand.border??'color-mix(in srgb, var(--ink) 14%, var(--paper))'};
+  --raise:${brand.surface??'color-mix(in srgb, var(--paper) 92%, #ffffff)'};
   --radius:${theme.radius}; --section:${gap};
-  --display:${display}; --body:${body};
+  --display:${display}; --body:${body}; --display-weight:${displayWeight}; --body-weight:${bodyWeight}; --button-label:${brand.buttonText??paper};
   --measure:68ch;
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 var(--body);overflow-x:hidden}
+button,input,select,textarea{max-width:100%}
+input,select,textarea{min-width:0}
+button,a,input,select,textarea{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+body{margin:0;background:var(--paper);color:var(--ink);font:var(--body-weight) 16px/1.65 var(--body);overflow-x:hidden}
 img,svg{max-width:100%;height:auto;display:block}
 a{color:inherit}
-h1,h2,h3{font-family:var(--display);font-weight:400;line-height:1.06;letter-spacing:-.012em;margin:0}
+h1,h2,h3,h4,h5,h6{font-family:var(--display);font-weight:var(--display-weight);line-height:1.06;letter-spacing:-.012em;margin:0}
 h1{font-size:clamp(2.4rem,6vw,4.4rem)}
 h2{font-size:clamp(1.7rem,3.4vw,2.6rem)}
 h3{font-size:1.15rem}
 p{margin:0 0 1rem;max-width:var(--measure)}
 .wrap{width:min(1180px,92vw);margin-inline:auto}
 .eyebrow{font:500 11px/1 var(--body);letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;background:var(--ink);color:var(--paper);
-  border:1px solid var(--ink);border-radius:var(--radius);padding:.95rem 1.6rem;font:500 14px/1 var(--body);
-  letter-spacing:.06em;text-transform:uppercase;text-decoration:none;cursor:pointer;transition:background .18s,color .18s}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;background:${brand.themeCustomized?'var(--primary)':'var(--ink)'};color:var(--button-label);
+  border:1px solid ${brand.themeCustomized?'var(--primary)':'var(--ink)'};border-radius:var(--radius);padding:.95rem 1.6rem;font:500 14px/1 var(--body);
+  letter-spacing:.06em;text-transform:uppercase;text-decoration:none;cursor:pointer;transition:background .18s,color .18s;max-width:100%;min-height:44px;line-height:1.3;text-align:center}
 .btn:hover{background:var(--primary);border-color:var(--primary)}
 .btn--ghost{background:transparent;color:var(--ink)}
 .btn--ghost:hover{background:var(--ink);color:var(--paper)}
@@ -67,6 +72,10 @@ nav.main{display:flex;gap:1.6rem;margin-left:auto;font:500 12px/1 var(--body);le
 nav.main a{text-decoration:none;padding-block:.4rem;border-bottom:1px solid transparent}
 nav.main a:hover{border-color:var(--ink)}
 .tools{display:flex;gap:1rem;align-items:center;font:500 12px/1 var(--body);letter-spacing:.1em;text-transform:uppercase}
+[data-nav-toggle]{display:none;border:1px solid var(--line);border-radius:var(--radius);background:var(--raise);color:var(--ink);font:500 13px/1 var(--body);padding:.7rem;min-width:44px;min-height:44px;cursor:pointer}
+.cart-layout{display:grid;gap:3rem;grid-template-columns:minmax(0,1.4fr) minmax(0,.8fr);align-items:start}
+.cart-layout>*{min-width:0}.cart-layout form input[name=code]{flex:1;width:0}
+.pdp>*,.buybox-blk>*,.two-col>*,.iwt>*,.cols>*,.checkout>*,.grid>*{min-width:0}
 .hero{position:relative;display:grid;place-items:center;min-height:${gallery ? '58vh' : '72vh'};overflow:hidden;text-align:center}
 .hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 /* Generated hero art can come back light or dark, and the headline has to stay
@@ -264,6 +273,11 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
   footer.site .wrap{grid-template-columns:1fr}
 }
 @media (max-width:900px){
+  .site .row{flex-wrap:wrap;gap:.75rem}.brandmark{flex:1 1 0;min-width:0}.brandmark .name{overflow-wrap:anywhere}.brandmark img{flex-shrink:0}.tools{margin-left:auto;flex-shrink:0;gap:.5rem}
+  [data-nav-toggle]{display:inline-flex;align-items:center;justify-content:center}
+  header.site nav.main[data-open="true"]{display:flex;order:5;flex-basis:100%;flex-direction:column;gap:0;margin:0;padding:.4rem 0;border-top:1px solid var(--line)}
+  header.site nav.main a{display:flex;align-items:center;min-height:44px;padding:.7rem .3rem}
+  .cart-layout{grid-template-columns:minmax(0,1fr);gap:1.5rem}
   .checkout{grid-template-columns:1fr}.co-side{display:none}.co-summary-mobile{display:block}.co-main{justify-self:stretch;max-width:none}
   .upsell-card{grid-template-columns:1fr}
   .pdp{grid-template-columns:1fr;gap:2rem}
@@ -271,6 +285,19 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
   .buybox{position:static}
   footer.site .wrap{grid-template-columns:1fr 1fr}
   nav.main{display:none}
+}
+@media (max-width:640px){
+  .co-main .two{grid-template-columns:minmax(0,1fr)}
+  input,select,textarea{font-size:16px}
+  .site .tools{font-size:11px}.site .tools select{max-width:7rem;font-size:12px}
+  .cart-lines,.cart-lines tbody{display:block;width:100%}
+  .cart-lines tr{display:grid;grid-template-columns:64px minmax(0,1fr);gap:.6rem 1rem;padding:1rem 0;border-bottom:1px solid var(--line)}
+  .cart-lines td{display:block;width:auto!important;border:0;padding:0;min-width:0}
+  .cart-lines td:first-child{grid-row:1 / span 2}.cart-lines td:nth-child(3){grid-column:2}.cart-lines td:last-child{grid-column:2;text-align:left!important}
+  .cart-lines input[name=quantity]{min-height:44px}.cart-lines button{min-height:44px}
+  footer.site .wrap{grid-template-columns:1fr}
+  .stickybar>div{min-width:0}.stickybar .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stickybar .btn{flex-shrink:0;padding:.8rem}
+  .swatches{flex-wrap:wrap}.swatch{width:44px;height:44px}.pill{min-height:44px}
 }
 
 /* Slots a plugin draws into. Four first-party plugins declared components with
@@ -303,13 +330,13 @@ ${market ? `
    colour on the buttons rather than the ink, tighter cards and a shorter hero,
    so more of the catalogue is above the fold. Everything still reads the same
    tokens — this is a different arrangement of the brand, not a second brand. */
-h1,h2,h3{font-family:var(--body);font-weight:600;letter-spacing:-.02em;line-height:1.12}
+h1,h2,h3,h4,h5,h6{font-family:${brand.displayFont?'var(--display)':'var(--body)'};font-weight:${brand.displayWeight?'var(--display-weight)':'600'};letter-spacing:-.02em;line-height:1.12}
 h1{font-size:clamp(1.9rem,4.4vw,3rem)}
 h2{font-size:clamp(1.35rem,2.6vw,1.95rem)}
 h3{font-size:1.05rem}
 .eyebrow{letter-spacing:.12em}
 .hero{min-height:52vh}
-.btn{background:var(--primary);border-color:var(--primary);color:#fff;text-transform:none;letter-spacing:.01em;font-weight:600;padding:.85rem 1.4rem}
+.btn{background:var(--primary);border-color:var(--primary);color:${brand.buttonText?'var(--button-label)':'#fff'};text-transform:none;letter-spacing:.01em;font-weight:600;padding:.85rem 1.4rem}
 .btn:hover{background:var(--secondary);border-color:var(--secondary)}
 .btn--ghost{background:transparent;color:var(--primary);border-color:var(--primary)}
 .btn--ghost:hover{background:var(--primary);color:#fff}
@@ -328,15 +355,17 @@ h3{font-size:1.05rem}
  * Text renders in the fallback stack instantly and upgrades when the woff2
  * arrives.
  */
-export function fontLink(brand: Brand): string {
+export function fontLink(brand: Brand, extra: string[] = []): string {
   const families = new Set<string>()
-  for (const stack of [brand.displayFont, brand.bodyFont]) {
-    const first = /'([^']+)'/.exec(stack ?? '')?.[1]
-    if (first) families.add(first.replace(/ /g, '+'))
+  for (const stack of [brand.displayFont, brand.bodyFont, ...extra]) {
+    const first = /^\s*["']?([a-z0-9][a-z0-9 -]{1,60})["']?(?:\s*,|\s*$)/i.exec(stack ?? '')?.[1]?.trim()
+    if (first && !/^(serif|sans-serif|monospace|system-ui|ui-sans-serif|ui-serif)$/i.test(first)) families.add(first.replace(/ /g, '+'))
   }
   if (!families.size) return ''
-  const query = [...families].map((family) => `family=${family}:wght@400;500;600`).join('&')
-  const href = `https://fonts.googleapis.com/css2?${query}&display=swap`
-  return `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preload" as="style" href="${href}"><link rel="stylesheet" href="${href}" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="${href}"></noscript>`
+  const weights=[...new Set([400,500,600,Number(brand.displayWeight)||400,Number(brand.bodyWeight)||400])].sort((a,b)=>a-b).join(';')
+  return (brand.fontFaces?`<style data-brand-fonts>${brand.fontFaces.replace(/<\/style/gi,'')}</style>`:'')+[...families].filter(family=>!['Arial','Georgia','Verdana','Helvetica','Times+New+Roman'].includes(family)).map(family=>{
+    const name=family.replace(/\+/g,' ');if((brand.fontFaces||'').includes('font-family:"'+name+'"')||(brand.fontFaces||'').includes("font-family:'"+name+"'"))return ''
+    const href=`https://fonts.googleapis.com/css2?family=${family}:wght@${family==='Bebas+Neue'?'400':weights}&display=swap`
+    return `<link rel="stylesheet" href="${href}">`
+  }).join('')
 }

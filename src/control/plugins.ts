@@ -75,10 +75,14 @@ export function install(db: Db, storeId: string, pluginId: string, settings: Rec
   const result = check(schema, merged)
   if (!result.ok) throw badRequest(`${plugin.name} settings are not valid`, result.issues)
 
+  const currentSecrets = kept
   const secrets: Record<string, unknown> = {}
   const publicSettings: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(result.value)) {
-    if (secretFields.includes(key)) secrets[key] = value
+    if (secretFields.includes(key)) {
+      if (value === '' && currentSecrets[key] !== undefined) continue
+      secrets[key] = value
+    }
     else publicSettings[key] = value
   }
 

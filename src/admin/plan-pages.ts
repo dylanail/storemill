@@ -1,3 +1,4 @@
+import { healthFixes, suggestedFix } from '../storefront/health-fixes.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { format } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
@@ -96,8 +97,8 @@ export function answersCard(state: BuildState): string {
     <form method="post" action="/admin/build/answers">
     ${QUESTIONS.map((question) => {
       const answer = state.answers[question.key]
-      return `<div class="field"><label>${e(question.label)}</label>
-        <div class="row"><input name="${question.key}" value="${e(answer?.value ?? '')}" placeholder="${e(question.help)}" style="flex:1" ${answer?.unknown ? '' : ''}>
+      return `<div class="field"><label for="buyer-${question.key}">${e(question.label)}</label>
+        <div class="row"><input id="buyer-${question.key}" name="${question.key}" value="${e(answer?.value ?? '')}" placeholder="${e(question.help)}" style="flex:1" ${answer?.unknown ? '' : ''}>
         <label class="row" style="font-size:12px;gap:.3rem;white-space:nowrap"><input type="checkbox" name="${question.key}_unknown" value="true" ${answer?.unknown ? 'checked' : ''}> I don't know</label></div>
         ${answer?.unknown && answer.assumed ? `<span class="muted" style="font-size:11.5px">Assumed by research: ${e(answer.assumed)} — type it in to confirm.</span>` : ''}</div>`
     }).join('')}
@@ -120,7 +121,7 @@ export function marketPage(ctx: Ctx): string {
 }
 
 function analysisCard(ctx: Ctx, hasResearch: boolean, doc: ReturnType<typeof latestDoc<MarketAnalysis>>): string {
-  const form = `<form method="post" action="/admin/market/analysis" class="row" style="margin-top:.6rem"><input name="notes" placeholder="Anything to add: a competitor, a mechanism you know about, a rule" style="flex:1"><button class="btn primary" type="submit" ${hasResearch ? '' : 'disabled title="Run research first"'}>${doc ? 'Write it again' : 'Write the analysis'}</button></form>`
+  const form = `<form method="post" action="/admin/market/analysis" class="row" style="margin-top:.6rem"><input aria-label="Market analysis notes" name="notes" placeholder="Anything to add: a competitor, a mechanism you know about, a rule" style="flex:1"><button class="btn primary" type="submit" ${hasResearch ? '' : 'disabled title="Run research first"'}>${doc ? 'Write it again' : 'Write the analysis'}</button></form>`
   if (!doc) return `<div class="card"><h2>Market analysis</h2><p class="muted" style="font-size:12.5px">Awareness, sophistication, the desires ranked, the searches to run, the mechanism, the new information, the underserved avatar, and whether there is a way to stand out at all.${hasResearch ? '' : ' Run customer research first; the analysis reads it.'}</p>${form}</div>`
   const a = doc.body
   const stand = a.standOut.found ? `<div class="notice" style="border-left-color:var(--ok)"><strong>A way to stand out: ${e(a.standOut.via)}.</strong> ${e(a.standOut.recommendation)}</div>` : `<div class="notice" style="border-left-color:var(--bad)"><strong>No way to stand out yet.</strong> ${e(a.standOut.recommendation)}</div>`
@@ -161,7 +162,7 @@ function avatarTreeCard(ctx: Ctx): string {
 function overviewCard(ctx: Ctx, docs: Array<ReturnType<typeof latestDoc<ProductOverview>> & object>): string {
   return `<div class="card"><h2>Product overview</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What it is, what it does, why that matters, what the buyer wants, the mechanisms, and the hidden ones. Everything a model writes here is assumed until you confirm it.</p>
-    <form method="post" action="/admin/market/overview" class="row"><select name="productId" style="flex:1">${productOptions(ctx)}</select><button class="btn primary" type="submit">Write it</button></form>
+    <form method="post" action="/admin/market/overview" class="row"><select aria-label="Product for overview" name="productId" style="flex:1">${productOptions(ctx)}</select><button class="btn primary" type="submit">Write it</button></form>
     ${docs.map((doc) => { if (!doc) return ''; const o = doc.body; return `<details style="border-top:1px solid var(--line);margin-top:.6rem"><summary style="cursor:pointer;padding:.5rem 0;font-size:13px"><strong>${e(o.name)}</strong> <span class="muted">· ${e(o.price)}${o.compareAt ? ` (was ${e(o.compareAt)})` : ''} · ${doc.source === 'rules' ? 'rules' : e(doc.model)}${o.assumed ? ' · assumed' : ''}</span></summary>
       <div style="font-size:12.5px"><div class="eyebrow">In plain words</div><p>${e(o.sixthGrade || o.howItWorks)}</p>
       <div class="eyebrow">Features → benefits → desires</div><table class="data"><tbody>${o.benefits.map((entry, index) => `<tr><td>${e(entry.feature)}</td><td class="muted">${e(entry.benefit)}</td><td>${e(o.desires[index]?.desire ?? '')}</td></tr>`).join('')}</tbody></table>
@@ -224,7 +225,7 @@ export function creativePage(ctx: Ctx): string {
     else if (entry.kind === 'gif') { const gif = body as unknown as GifRecord; detail = `<div class="row"><img src="${e(gif.url)}" alt="" style="width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><span class="muted" style="font-size:12px">${gif.width}×${gif.height}, ${gif.frames} frames from ${gif.sources.length} images. Approving adds it to the product's media.</span></div>` }
     return `<details style="border-top:1px solid var(--line)"><summary style="cursor:pointer;padding:.5rem 0;font-size:13px"><span class="tag ${entry.status === 'approved' ? 'ok' : entry.status === 'rejected' ? 'bad' : 'warn'}">${entry.status}</span> <span class="tag">${e(entry.kind)}</span> <strong>${e(entry.title)}</strong>${entry.note ? ` <span class="muted">· ${e(entry.note)}</span>` : ''}</summary>
       <div style="font-size:12.5px;padding:.3rem 0 .6rem">${detail}
-      <form method="post" action="/admin/creative/${e(entry.id)}/status" class="row" style="margin-top:.4rem"><input name="note" placeholder="Note" style="flex:1"><button class="btn" name="status" value="approved" type="submit">Approve</button><button class="btn" name="status" value="rejected" type="submit">Reject</button><button class="btn" name="status" value="delete" type="submit" onclick="return confirm('Delete this item?')">Delete</button></form></div></details>`
+      <form method="post" action="/admin/creative/${e(entry.id)}/status" class="row" style="margin-top:.4rem"><input aria-label="Creative review note" name="note" placeholder="Note" style="flex:1"><button class="btn" name="status" value="approved" type="submit">Approve</button><button class="btn" name="status" value="rejected" type="submit">Reject</button><button class="btn" name="status" value="delete" type="submit" onclick="return confirm('Delete this item?')">Delete</button></form></div></details>`
   }
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Creative</h1><p class="muted" style="margin:.25rem 0 0">Photo briefs to shoot, creator-content concepts to vet, GIFs to approve. Nothing here reaches a page, a review or an ad until you approve it.</p></div>
     <span class="tag ${pending.length ? 'warn' : 'ok'}">${pending.length} waiting</span></div>
@@ -275,13 +276,22 @@ export function legalCard(ctx: Ctx): string {
 }
 
 export function healthCard(ctx: Ctx, run: boolean): string {
-  if (!run) return `<div class="card" id="health"><h2>Accessibility and speed</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Renders the home page, the product pages and every published page as a visitor gets them and checks landmarks, alt text, labels, headings, focus, contrast, weight, scripts, fonts and lazy loading.</p><a class="btn primary" href="/admin/store?health=1#health">Run the report</a></div>`
-  const report = auditStore(ctx.db, ctx.store)
-  return `<div class="card" id="health"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Accessibility and speed</h2><span class="row" style="gap:.4rem"><span class="tag">${report.environment === 'live' ? 'live site' : 'draft'}</span><span class="tag ${report.score >= 90 ? 'ok' : report.score >= 70 ? 'warn' : 'bad'}">score ${report.score}</span></span></div>
-    <p class="muted" style="font-size:11.5px;margin:.3rem 0 0">${report.environment === 'live' ? 'Rendered from the live environment — what customers are looking at now, not the draft you are editing.' : 'This store has never been published, so the draft is what is audited.'}</p>
-    ${report.pages.map((page) => `<details style="border-top:1px solid var(--line);margin-top:.5rem" ${page.issues.length ? 'open' : ''}><summary style="cursor:pointer;padding:.4rem 0;font-size:13px"><span class="tag ${page.score >= 90 ? 'ok' : page.score >= 70 ? 'warn' : 'bad'}">${page.score}</span> <strong>${e(page.title)}</strong> <span class="muted">${e(page.path)} · ${Math.round(page.gzipBytes / 1024)}KB on the wire (${Math.round(page.bytes / 1024)}KB raw) · ${page.metrics.images} images, ${page.metrics.lazyImages} lazy · ${page.metrics.externalScripts} external scripts · ${page.metrics.h1s} h1</span></summary>
-      ${page.issues.length ? `<ul style="margin:.3rem 0 .6rem;padding-left:1.1rem;font-size:12.5px">${page.issues.map((issue) => `<li><span class="tag ${issue.severity === 'error' ? 'bad' : 'warn'}">${issue.check}</span> ${e(issue.detail)}</li>`).join('')}</ul>` : '<p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Nothing to fix.</p>'}</details>`).join('')}
-    <a class="btn" href="/admin/store?health=1#health" style="margin-top:.6rem">Run again</a></div>`
+  if(!run)return `<div class="card" id="health"><h2>Store speed & accessibility</h2><p class="muted">Check the saved pages, see a suggested repair for each finding, and apply a verified AI fix.</p><a class="btn primary" href="/admin/speed">Open Store Speed</a></div>`
+  const report=auditStore(ctx.db,ctx.store,{environment:'draft'}),jobs=healthFixes(ctx.db,ctx.store.id)
+  return `<div id="health"><div class="card"><div class="row" style="justify-content:space-between"><div><h2>Store Speed</h2><p class="muted">${report.pages.length} page URLs checked · all saved pages and up to 3 products · draft theme</p></div><span class="tag ${report.score>=90?'ok':report.score>=70?'warn':'bad'}">Health score ${report.score}</span><a class="btn" href="/admin/speed">Run again</a></div><p class="muted">This is a source audit, not a measured load time or Core Web Vitals score. Compressed sizes estimate HTML only; images, fonts and network timings are not included.</p><p class="muted">AI checks its repair before applying it. Saved page changes affect published pages; theme repairs stay in draft until you publish. Every applied fix can be undone.</p></div>
+  <div id="health-notice" role="status" aria-live="polite"></div>
+  ${report.pages.map(page=>`<details class="card" ${page.issues.length?'open':''}><summary><strong>${e(page.title)}</strong> <span class="muted">${e(page.path)} · ${(page.gzipBytes/1024).toFixed(1)} KB gzip HTML · ${page.issues.length} finding${page.issues.length===1?'':'s'}</span></summary>${page.issues.length?page.issues.map(issue=>{const job=jobs.find(job=>job.path===page.path&&job.check_name===issue.check&&job.status==='running');return `<article style="border-top:1px solid var(--line);padding:14px 0"><span class="tag ${issue.severity==='error'?'bad':'warn'}">${e(issue.check)}</span><p>${e(issue.detail)}</p><p><strong>Suggested fix:</strong> ${e(suggestedFix(issue))}</p><button type="button" class="btn primary" data-health-fix data-path="${e(page.path)}" data-check="${e(issue.check)}" ${job?'disabled':''}>${job?'AI is fixing…':'Fix with AI'}</button></article>`}).join(''):'<p class="muted">No issues found by these checks.</p>'}</details>`).join('')}
+  ${jobs.length?`<div class="card"><h2>Recent fixes</h2>${jobs.map(job=>`<article style="border-top:1px solid var(--line);padding:12px 0" ${job.status==='running'?`data-health-job="${e(job.id)}"`:''}><strong>${e(job.check_name)} · ${e(job.path)}</strong> <span class="tag">${e(job.status)}</span><p>${e(job.message)}</p>${job.status==='completed'?`<button class="btn" data-health-undo="${e(job.id)}">Undo fix</button>`:''}</article>`).join('')}</div>`:''}</div>
+  <script>(function(){
+    var notice=document.getElementById('health-notice'),store=${JSON.stringify(ctx.store.id).replace(/</g,'\\u003c')};
+    function say(message){notice.textContent=message;notice.className='card';}
+    async function request(path,body){var response=await fetch('/admin/speed/'+path+'?storeId='+encodeURIComponent(store),{method:body?'POST':'GET',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});var result=await response.json();if(!response.ok||result.error)throw Error(result.error||'Could not complete the request');return result;}
+    var watched=new Set();
+    async function watch(id){if(watched.has(id))return;watched.add(id);try{var result=await request('fixes/'+id);if(result.status==='running'){watched.delete(id);setTimeout(function(){watch(id)},1500);return;}location.reload();}catch(error){say(error.message+' Reload this report to check the fix.');}}
+    document.querySelectorAll('[data-health-fix]').forEach(function(button){button.onclick=async function(){button.disabled=true;button.textContent='AI is fixing…';try{var result=await request('fix',{path:button.dataset.path,check:button.dataset.check});say('AI is working. You can leave this page; the result will appear in Recent fixes.');watch(result.id);}catch(error){say(error.message);button.disabled=false;button.textContent='Retry fix';}};});
+    document.querySelectorAll('[data-health-job]').forEach(function(item){watch(item.dataset.healthJob)});
+    document.querySelectorAll('[data-health-undo]').forEach(function(button){button.onclick=async function(){button.disabled=true;try{await request('fixes/'+button.dataset.healthUndo+'/undo',{});location.reload();}catch(error){say(error.message);button.disabled=false;}}});
+  })();</script>`
 }
 
 /* --------------------------------------------------------- analytics card */

@@ -6,6 +6,7 @@ import { publicStoreUrl } from '../lib/urls.ts'
 import { sendEmail } from './send.ts'
 
 const log = logger('reviews')
+const sweeping = new WeakSet<Db>()
 
 /**
  * The review request the admin promises.
@@ -17,6 +18,12 @@ const log = logger('reviews')
  * one ask per order, ever, recorded on the row the way abandoned carts are.
  */
 export async function sweepReviewRequests(db: Db, opts: { hours?: number; limit?: number } = {}): Promise<number> {
+  if (sweeping.has(db)) return 0
+  sweeping.add(db)
+  try { return await sweep(db, opts) } finally { sweeping.delete(db) }
+}
+
+async function sweep(db: Db, opts: { hours?: number; limit?: number }): Promise<number> {
   const cutoff = new Date(Date.now() - (opts.hours ?? 168) * 3600_000).toISOString()
   const rows = db.all<{ id: string; store_id: string; email: string; items: string }>(
     `SELECT id, store_id, email, items FROM orders
@@ -35,14 +42,16 @@ export async function sweepReviewRequests(db: Db, opts: { hours?: number; limit?
     }
     const handle = getProduct(db, row.store_id, first.productId)?.handle ?? ''
     try {
-      await sendEmail(db, row.store_id, {
+      const result = await sendEmail(db, row.store_id, {
         template: 'review_request',
         to: row.email,
         context: { product: { title: first.title }, reviewUrl: `${publicStoreUrl(db, store)}/products/${handle}#review` },
       })
+      if (result.status !== 'sent') continue
       sent++
     } catch (error) {
       log.warn(`could not ask ${row.email}: ${error instanceof Error ? error.message : String(error)}`)
+      continue
     }
     db.run('UPDATE orders SET review_requested_at = ? WHERE id = ?', now(), row.id)
   }

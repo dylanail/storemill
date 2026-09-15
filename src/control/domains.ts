@@ -130,7 +130,7 @@ export function dnsPlan(hostname: string, mode: DomainMode, registrarId: string,
   let caveat = ''
   if (mode === 'forward') {
     records.push({ type: 'FORWARD', name: hostLabel(hostname), value: publicUrl, why: 'The registrar redirects visitors to the store. Choose permanent (301) and "forward only", not masking.' })
-    records.push({ type: 'TXT', name: `_amboras.${hostname}`, value: `amboras-verify=${verification}`, why: 'Optional here: proves you control the name. Forwarding is verified by following the redirect.' })
+    records.push({ type: 'TXT', name: `_storemill.${hostname}`, value: `storemill-verify=${verification}`, why: 'Optional here: proves you control the name. Forwarding is verified by following the redirect.' })
     return { records, steps: [...registrar.forwardPath, 'Save, then press Check below. Registrars take from a minute to an hour to start forwarding.'], caveat: 'Forwarding shows the store at its platform address, not at your domain. Use hosting to keep your domain in the address bar.' }
   }
   if (apex) {
@@ -144,7 +144,7 @@ export function dnsPlan(hostname: string, mode: DomainMode, registrarId: string,
   } else {
     records.push({ type: 'CNAME', name: hostLabel(hostname), value: edge.host, why: 'Points the subdomain here.' })
   }
-  records.push({ type: 'TXT', name: `_amboras.${hostname}`, value: `amboras-verify=${verification}`, why: 'Proves you control the name before a certificate is issued for it.' })
+  records.push({ type: 'TXT', name: `_storemill.${hostname}`, value: `storemill-verify=${verification}`, why: 'Proves you control the name before a certificate is issued for it.' })
   return { records, steps: [...registrar.dnsPath, 'Add each record below, save, then press Check. DNS usually settles in minutes; the TTL you set is the longest it can take.'], caveat }
 }
 
@@ -201,8 +201,12 @@ export async function checkDomain(db: Db, storeId: string, hostname: string, pub
   const row = db.one<{ id: string; verification_token: string; mode: DomainMode }>('SELECT id, verification_token, mode FROM domains WHERE store_id = ? AND hostname = ?', storeId, hostname)
   if (!row) throw new Error('That domain is not attached to this store')
   const edge = edgeTarget()
-  const txtFound = await quiet(() => resolver.txt(`_amboras.${hostname}`), [] as string[])
-  const txtOk = txtFound.some((entry) => entry.trim() === `amboras-verify=${row.verification_token}`)
+  const currentTxt = await quiet(() => resolver.txt(`_storemill.${hostname}`), [] as string[])
+  const currentOk = currentTxt.some(entry => entry.trim() === `storemill-verify=${row.verification_token}`)
+  // Previously verified domains continue working while owners update their DNS.
+  const legacyTxt = currentOk ? [] : await quiet(() => resolver.txt(`_amboras.${hostname}`), [] as string[])
+  const txtFound = [...currentTxt, ...legacyTxt]
+  const txtOk = currentOk || legacyTxt.some(entry => entry.trim() === `amboras-verify=${row.verification_token}`)
   let check: DomainCheck
   if (row.mode === 'forward') {
     const head = await quiet(() => resolver.head(`http://${hostname}/`), { status: 0, location: '' })
@@ -230,7 +234,7 @@ export async function checkDomain(db: Db, storeId: string, hostname: string, pub
     const aOk = Boolean(edge.ip) && aFound.includes(edge.ip)
     const targetOk = cnameOk || aOk
     const reason = !txtOk
-      ? `No TXT record at _amboras.${hostname} with the verification value${txtFound.length ? ` (found: ${txtFound.join(', ')})` : ''}.`
+      ? `No TXT record at _storemill.${hostname} with the verification value${txtFound.length ? ` (found: ${txtFound.join(', ')})` : ''}.`
       : !targetOk
         ? `${hostname} points at ${[...cnameFound, ...aFound].join(', ') || 'nothing yet'}, not at ${edge.host}${edge.ip ? ` or ${edge.ip}` : ''}.`
         : `Verified: TXT matches and ${hostname} points at ${cnameOk ? edge.host : edge.ip}.`

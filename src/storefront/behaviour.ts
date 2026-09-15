@@ -65,3 +65,8 @@ var g=p.querySelector('[data-popup-go]');g&&g.addEventListener('click',function(
 var f=p.querySelector('[data-popup-form]');f&&f.addEventListener('submit',function(ev){ev.preventDefault();var d=new FormData(f);fetch(f.action,{method:'POST',body:new URLSearchParams(d),keepalive:true}).catch(function(){});f.hidden=true;p.querySelector('[data-popup-done]').hidden=false;window.__track&&window.__track('popup.submit',{});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
 })();</script>`
 }
+
+/** The generated storefront keeps its navigation available on small screens. */
+export function navigationScript(): string {
+  return `<script>(function(){document.querySelectorAll('[data-nav-toggle]').forEach(function(toggle){var nav=document.getElementById(toggle.getAttribute('aria-controls'));if(!nav)return;function show(open){toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',open?'Close menu':'Open menu');nav.dataset.open=String(open)}toggle.addEventListener('click',function(){show(toggle.getAttribute('aria-expanded')!=='true')});document.addEventListener('keydown',function(e){if(e.key==='Escape'&&toggle.getAttribute('aria-expanded')==='true'){show(false);toggle.focus()}});nav.addEventListener('click',function(e){if(e.target.closest('a'))show(false)});});})();</script>`
+}

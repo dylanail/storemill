@@ -1,6 +1,7 @@
-import { now, type Db } from '../lib/db.ts'
+import { json, now, type Db } from '../lib/db.ts'
 import { fingerprint } from '../lib/crypto.ts'
 import { id } from '../lib/ids.ts'
+import { minorDigits } from '../lib/money.ts'
 
 export type EventType =
   | 'view.page'
@@ -36,16 +37,64 @@ export const BEHAVIOUR_EVENTS: EventType[] = ['scroll', 'section.view', 'cta.cli
  * on the same browser version were a single session; one person on a phone
  * that changed network mid-visit was two.
  */
-export function sessionFor(
-  db: Db,
-  storeId: string,
-  input: { ip: string; userAgent: string; visitor?: string; referrer?: string; country?: string; city?: string },
-): string {
+export type Touch = {
+  source?: string
+  medium?: string
+  campaign?: string
+  content?: string
+  term?: string
+  landingPage?: string
+  referrer?: string
+  gclid?: string
+  fbclid?: string
+  ttclid?: string
+  at: string
+}
+
+export type Attribution = { first?: Touch; last?: Touch }
+
+export function captureAttribution(url: URL, referrer = ''): Touch {
+  const read = (name: string) => url.searchParams.get(name)?.trim() || undefined
+  let externalReferrer = referrer
+  if (externalReferrer) {
+    try {
+      if (new URL(externalReferrer).hostname === url.hostname) externalReferrer = ''
+    } catch { /* keep malformed referrers as a generic referral signal */ }
+  }
+  let source = read('utm_source')
+  if (!source && externalReferrer) {
+    try { source = new URL(externalReferrer).hostname.replace(/^www\./, '') } catch { source = 'referral' }
+  }
+  if (!source && read('gclid')) source = 'google'
+  if (!source && read('fbclid')) source = 'meta'
+  if (!source && read('ttclid')) source = 'tiktok'
+  return {
+    ...(source ? { source } : {}),
+    ...(read('utm_medium') ? { medium: read('utm_medium') } : {}),
+    ...(read('utm_campaign') ? { campaign: read('utm_campaign') } : {}),
+    ...(read('utm_content') ? { content: read('utm_content') } : {}),
+    ...(read('utm_term') ? { term: read('utm_term') } : {}),
+    landingPage: `${url.pathname}${url.search}`,
+    ...(externalReferrer ? { referrer: externalReferrer } : {}),
+    ...(read('gclid') ? { gclid: read('gclid') } : {}),
+    ...(read('fbclid') ? { fbclid: read('fbclid') } : {}),
+    ...(read('ttclid') ? { ttclid: read('ttclid') } : {}),
+    at: now(),
+  }
+}
+
+function meaningful(touch: Touch): boolean {
+  return Boolean(touch.source || touch.medium || touch.campaign || touch.gclid || touch.fbclid || touch.ttclid || touch.referrer)
+}
+
+export function sessionFor(db: Db, storeId: string, input: { ip: string; userAgent: string; visitor?: string; referrer?: string; country?: string; city?: string; touch?: Touch }): string {
   const day = new Date().toISOString().slice(0, 10)
   const key = input.visitor ? fingerprint('visitor', input.visitor, day) : fingerprint(input.ip, input.userAgent, day)
-  const existing = db.one<{ id: string }>('SELECT id FROM sessions_analytics WHERE store_id = ? AND fingerprint = ?', storeId, key)
+  const existing = db.one<{ id: string; attribution: string }>('SELECT id, attribution FROM sessions_analytics WHERE store_id = ? AND fingerprint = ?', storeId, key)
   if (existing) {
-    db.update('sessions_analytics', existing.id, { last_seen: now() })
+    const attribution = json(existing.attribution, {} as Attribution)
+    if (input.touch && meaningful(input.touch)) attribution.last = input.touch
+    db.update('sessions_analytics', existing.id, { last_seen: now(), attribution })
     return existing.id
   }
   const sessionId = id('as')
@@ -57,6 +106,7 @@ export function sessionFor(
     city: input.city ?? geoGuess(input.ip).city,
     referrer: input.referrer ?? '',
     variant: Math.random() < 0.5 ? 'a' : 'b',
+    attribution: input.touch ? { ...(meaningful(input.touch) ? { first: input.touch } : {}), last: input.touch } : {},
     first_seen: now(),
     last_seen: now(),
   })
@@ -84,9 +134,10 @@ export function track(
   sessionId: string,
   type: EventType,
   detail: { path?: string; productId?: string; amountCents?: number; meta?: Record<string, unknown> } = {},
-) {
+) : string {
+  const eventId = id('ev')
   db.insert('analytics_events', {
-    id: id('ev'),
+    id: eventId,
     store_id: storeId,
     session_id: sessionId,
     type,
@@ -96,6 +147,63 @@ export function track(
     meta: detail.meta ?? {},
     created_at: now(),
   })
+  return eventId
+}
+
+export function attributeOrder(db: Db, storeId: string, orderId: string, sessionId: string): void {
+  const session = db.one<{ attribution: string }>('SELECT attribution FROM sessions_analytics WHERE id = ? AND store_id = ?', sessionId, storeId)
+  if (!session) return
+  const attribution = json(session.attribution, {} as Attribution)
+  db.run(
+    `INSERT OR IGNORE INTO order_attribution
+      (id, store_id, order_id, session_id, first_touch, last_touch, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    id('oa'), storeId, orderId, sessionId, JSON.stringify(attribution.first ?? {}), JSON.stringify(attribution.last ?? attribution.first ?? {}), now(),
+  )
+}
+
+export type AttributionRow = { channel: string; campaign: string; orders: number; revenueCents: number; spendCents: number; roas: number | null }
+
+export function attributionReport(db: Db, storeId: string, range: Range = '30d', model: 'first' | 'last' = 'last'): AttributionRow[] {
+  const from = since(range)
+  const storeCurrency = db.one<{ currency: string }>('SELECT currency FROM stores WHERE id = ?', storeId)?.currency ?? 'USD'
+  const rows = db.all<{ touch: string; total_cents: number; base_total_cents: number | null; currency: string; exchange_rate: number | null }>(
+    `SELECT ${model === 'first' ? 'a.first_touch' : 'a.last_touch'} touch,
+            o.total_cents, o.base_total_cents, o.currency, r.exchange_rate
+     FROM order_attribution a JOIN orders o ON o.id = a.order_id
+     LEFT JOIN carts c ON c.order_id = o.id LEFT JOIN regions r ON r.id = c.region_id
+     WHERE a.store_id = ? AND o.status != 'cancelled' AND o.created_at >= ?`,
+    storeId, from,
+  )
+  const grouped = new Map<string, AttributionRow>()
+  for (const row of rows) {
+    const touch = json(row.touch, {} as Touch)
+    const channel = touch.source || (touch.referrer ? 'referral' : 'direct')
+    const campaign = touch.campaign || 'Unassigned'
+    const key = `${channel}\u0000${campaign}`
+    const current = grouped.get(key) ?? { channel, campaign, orders: 0, revenueCents: 0, spendCents: 0, roas: null }
+    current.orders++
+    if (row.base_total_cents !== null) current.revenueCents += row.base_total_cents
+    else {
+      const rate = row.exchange_rate && row.exchange_rate > 0 ? row.exchange_rate : 1
+      const chargedAmount = row.total_cents / 10 ** minorDigits(row.currency)
+      current.revenueCents += Math.round((chargedAmount / rate) * 10 ** minorDigits(storeCurrency))
+    }
+    grouped.set(key, current)
+  }
+  const days = range === '24h' ? 1 : range === '7d' ? 7 : range === '30d' ? 30 : 90
+  const spendFrom = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
+  for (const spend of db.all<{ platform: string; amount: number }>(
+    'SELECT lower(platform) platform, SUM(amount_cents) amount FROM ad_spend WHERE store_id = ? AND day >= ? GROUP BY lower(platform)', storeId, spendFrom,
+  )) {
+    const normalized = spend.platform === 'facebook' || spend.platform === 'instagram' ? 'meta' : spend.platform
+    const matching = [...grouped.values()].filter((row) => row.channel.toLowerCase().includes(normalized))
+    if (!matching.length) continue
+    for (const row of matching) row.spendCents += Math.round(spend.amount / matching.length)
+  }
+  return [...grouped.values()]
+    .map((row) => ({ ...row, roas: row.spendCents ? Number((row.revenueCents / row.spendCents).toFixed(2)) : null }))
+    .sort((a, b) => b.revenueCents - a.revenueCents)
 }
 
 export type Range = '24h' | '7d' | '30d' | '90d'
@@ -117,7 +225,7 @@ export type Kpis = {
 function windowKpis(db: Db, storeId: string, from: string, to: string): Omit<Kpis, 'deltas'> {
   const sessions = db.one<{ c: number }>('SELECT COUNT(*) c FROM sessions_analytics WHERE store_id = ? AND first_seen >= ? AND first_seen < ?', storeId, from, to)?.c ?? 0
   const orderRow = db.one<{ c: number; total: number | null }>(
-    "SELECT COUNT(*) c, SUM(total_cents) total FROM orders WHERE store_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'",
+    "SELECT COUNT(*) c, SUM(COALESCE(base_total_cents, total_cents)) total FROM orders WHERE store_id = ? AND created_at >= ? AND created_at < ? AND status != 'cancelled'",
     storeId, from, to,
   )
   const orders = orderRow?.c ?? 0
@@ -211,7 +319,7 @@ export function recentEvents(db: Db, storeId: string, limit = 20) {
 export function revenueSeries(db: Db, storeId: string, days = 14) {
   const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
   const rows = db.all<{ day: string; revenue: number; orders: number }>(
-    `SELECT substr(created_at,1,10) day, SUM(total_cents) revenue, COUNT(*) orders
+    `SELECT substr(created_at,1,10) day, SUM(COALESCE(base_total_cents, total_cents)) revenue, COUNT(*) orders
      FROM orders WHERE store_id = ? AND substr(created_at,1,10) >= ? AND status != 'cancelled'
      GROUP BY day ORDER BY day`,
     storeId, from,

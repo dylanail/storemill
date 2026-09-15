@@ -6,7 +6,7 @@ export type ProductOption = {
   values: Array<{ value: string; swatch?: string; note?: string }>
 }
 
-export type Media = { url: string; alt: string }
+export type Media = { url: string; alt: string; kind?: 'image' | 'video'; poster?: string }
 
 export type Variant = {
   id: string
@@ -85,6 +85,8 @@ export type LineItem = {
   quantity: number
   /** Set when the line was added by a bundle, upsell or cross-sell component. */
   source?: string
+  /** Customer text retained through checkout and fulfillment. */
+  engraving?: string
   /** A gift line: added by a bundle tier, priced at zero, removed if the tier is lost. */
   giftOf?: string
 }
@@ -92,6 +94,8 @@ export type LineItem = {
 export type Address = {
   name?: string
   line1?: string
+  line2?: string
+  state?: string
   city?: string
   postal?: string
   country?: string
@@ -124,6 +128,8 @@ export type Order = {
   shippingCents: Cents
   taxCents: Cents
   totalCents: Cents
+  /** Total converted back to the store currency at checkout time. */
+  baseTotalCents: Cents
   discountCode: string
   status: 'pending' | 'completed' | 'cancelled'
   paymentStatus: 'awaiting' | 'captured' | 'refunded' | 'partially_refunded'
@@ -153,6 +159,8 @@ export type PromotionKind =
   | 'bogo'
   | 'bundle'
   | 'tiered'
+  | 'mix_match'
+  | 'fixed_bundle'
 
 export type Promotion = {
   id: string
@@ -169,11 +177,20 @@ export type Promotion = {
     collectionIds?: string[]
     buyQuantity?: number
     getQuantity?: number
-    tiers?: Array<{ quantity: number; percent: number }>
+    buyProductIds?: string[]
+    getProductIds?: string[]
+    requiredDistinctProducts?: number
+    bundlePriceCents?: number
+    bundleProductId?: string
+    tiers?: Array<{ quantity: number; percent: number; unitPriceCents?: number; totalPriceCents?: number }>
+    quantityMode?: 'bulk' | 'multiples'
     regionIds?: string[]
     firstOrderOnly?: boolean
     /** Minimum eligible units before the promotion pays out (bundle tiers). */
     minQuantity?: number
+    maxUses?: number
+    priority?: number
+    combinable?: boolean
   }
   automatic: boolean
   status: 'active' | 'scheduled' | 'disabled' | 'expired'
@@ -193,6 +210,16 @@ export type Brand = {
   paper?: string
   displayFont?: string
   bodyFont?: string
+  displayWeight?: number
+  bodyWeight?: number
+  surface?: string
+  buttonText?: string
+  border?: string
+  fontFaces?: string
+  themeCustomized?: boolean
+  sourceTheme?: Partial<Pick<Brand, 'primary' | 'secondary' | 'paper' | 'ink' | 'surface' | 'buttonText' | 'border' | 'displayFont' | 'bodyFont' | 'displayWeight' | 'bodyWeight'>>
+  /** Font families discovered in a cloned site's CSS, available for block-level overrides. */
+  fonts?: string[]
   logoSvg?: string
   announcement?: string
   voice?: string

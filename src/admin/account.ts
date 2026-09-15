@@ -1,3 +1,4 @@
+import { brandHead, brandLogo, brandStyles } from '../brand/index.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { format } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
@@ -19,12 +20,12 @@ import { adminCss } from './shell.ts'
 export function accountShell(input: { userName: string; title: string; body: string }): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(input.title)} — Amboras</title>
+<title>${escapeHtml(input.title)} — storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-<style>${adminCss('#7a4a2b')}
+${brandHead}<style>${brandStyles}${adminCss('#7a4a2b')}
 .account{max-width:1120px;margin:0 auto;padding:2rem 1.5rem 4rem}
-.account .grid3{grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.account .grid3{grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr))}
 .storecard{display:flex;flex-direction:column;gap:.6rem}
 .storecard .top-row{flex-wrap:nowrap;align-items:flex-start;justify-content:space-between;gap:.6rem}
 .storecard h2{font-size:1.05rem;line-height:1.2}
@@ -41,7 +42,7 @@ export function accountShell(input: { userName: string; title: string; body: str
 .blank ol{text-align:left;max-width:420px;margin:1.2rem auto 1.6rem;padding-left:1.1rem;color:var(--muted);font-size:12.5px;line-height:1.9}
 </style></head><body>
 <div class="top">
-  <div class="logo">◮ <strong>Amboras</strong></div>
+  <a class="logo" href="/admin/stores" aria-label="storemill home">${brandLogo(true)}</a>
   <a class="chip" href="/admin/stores">Your stores</a>
   <a class="chip" href="/onboarding">+ New store</a>
   <div class="spacer"></div>

@@ -35,8 +35,9 @@ const jar = new Map<string, string>()
 
 const flashOf = (location: string) => decodeURIComponent(location.replace(/\+/g, ' '))
 
-async function call(path: string, init: { method?: string; form?: Record<string, string>; json?: unknown } = {}) {
+async function call(path: string, init: { method?: string; form?: Record<string, string>; json?: unknown; accept?: string } = {}) {
   const headers: Record<string, string> = { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') }
+  if (init.accept) headers.accept = init.accept
   let body: string | undefined
   if (init.form) {
     headers['content-type'] = 'application/x-www-form-urlencoded'
@@ -51,7 +52,7 @@ async function call(path: string, init: { method?: string; form?: Record<string,
     const [name, value = ''] = (pair ?? '').split('=')
     if (name) jar.set(name.trim(), decodeURIComponent(value))
   }
-  return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+  return { status: response.status, location: response.headers.get('location') ?? '', headers: response.headers, text: await response.text() }
 }
 
 let slug = ''
@@ -149,8 +150,11 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.equal(dashboard.status, 200)
   assert.match(dashboard.text, /Hello Franz/)
   assert.match(dashboard.text, /Ironjaw/)
-  slug = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
+  assert.match(dashboard.text, /commerce-kpis/)
+  assert.match(dashboard.text, /Store pulse/)
+  slug = /\/preview\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
   assert.ok(slug, 'the dashboard links a live preview')
+  assert.match(dashboard.text, new RegExp(`href="/preview/${slug}"[^>]*>Preview store`), 'the admin view action opens the private draft while the public URL is closed')
 
   // The public address is closed until the store is published — that is the
   // whole of what publishing does, and it used to do nothing at all.
@@ -159,6 +163,10 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.match(closed.text, /Not open yet/)
   assert.match(closed.text, /noindex/, 'and it is not offered to a crawler')
   assert.match((await call(`/preview/${slug}`)).text, /Ironjaw/i, 'the draft is where the merchant looks until then')
+  const missingDraft = await call(`/preview/${slug}/this-page-moved`, { accept: 'text/html' })
+  assert.equal(missingDraft.status, 404)
+  assert.match(missingDraft.text, /That page is not here/)
+  assert.match(missingDraft.text, /Return to Ironjaw/, 'the storefront 404 keeps the current store chrome instead of the default error theme')
 
   const opened = await call('/admin/publish', { form: {} })
   assert.match(opened.location.replace(/\+/g, ' '), /Published v\d/)
@@ -185,14 +193,33 @@ test('a shop can be taken down and put back up', async () => {
 test('every admin page renders', async () => {
   for (const path of [
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
-    '/admin/promotions', '/admin/analytics', '/admin/reviews', '/admin/store', '/admin/marketing',
+    '/admin/promotions', '/admin/analytics', '/admin/cro', '/admin/reviews', '/admin/store', '/admin/marketing',
     '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
-    '/admin/build', '/admin/market', '/admin/creative', '/admin/store?health=1',
+    '/admin/build', '/admin/market', '/admin/creative', '/admin/speed',
   ]) {
     const response = await call(path)
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
-    assert.match(response.text, /Amboras Business Assistant/, `${path} carries the assistant panel`)
+    assert.match(response.text, /id="assistant-launcher"/, `${path} carries the assistant launcher`)
   }
+  assert.equal((await call('/admin/store?health=1')).location,'/admin/speed')
+  const settings = await call('/admin/settings')
+  assert.match(settings.text, /Customer event pixels/)
+  assert.match(settings.text, /17TRACK/)
+  assert.match(settings.text, /Download JSON backup/)
+  assert.match(settings.text, /action="\/admin\/profile"/)
+  assert.match(settings.text, /value="franz@example\.com"/)
+  const backup = JSON.parse((await call('/admin/settings/export')).text)
+  assert.equal(backup.tables.stores[0].name, 'Ironjaw & Co')
+  assert.equal(backup.tables.sessions, undefined, 'login sessions are excluded from a store backup')
+})
+
+test('profile settings update the signed-in account', async () => {
+  const saved = await call('/admin/profile', { form: { name: 'Franz Owner', email: 'franz+owner@example.com' } })
+  assert.match(flashOf(saved.location), /Profile saved/)
+  const settings = await call('/admin/settings')
+  assert.match(settings.text, /value="Franz Owner"/)
+  assert.match(settings.text, /value="franz\+owner@example\.com"/)
+  assert.match((await call('/admin')).text, /Hello Franz Owner/)
 })
 
 test('the assistant executes a real change from the panel', async () => {
@@ -319,11 +346,30 @@ test('a checkout laid out from blocks becomes the store\'s checkout once publish
   const saved = await call(`/admin/pages/${pageId}/save`, { json: { title: 'Checkout', mode: 'blocks', blocks: editorPage.blocks, status: 'published' } })
   assert.match(saved.text, /"ok": ?true/)
 
+  const beforeBump = await call(`/s/${slug}/checkout`)
+  assert.doesNotMatch(beforeBump.text, /class="bump"/, 'checkout does not invent an add-on when no funnel configured one')
+  const otherHandle = [...collection.text.matchAll(/\/products\/([a-z0-9-]+)/g)].map(match => match[1]).find(handle => handle !== handleOf)
+  assert.ok(otherHandle, 'the fixture has a second product for an explicitly configured add-on')
+  const bumpVariantId = /id="pdp-variant" value="(var_[a-z0-9]+)"/.exec((await call(`/s/${slug}/products/${otherHandle}`)).text)?.[1] ?? ''
+  assert.ok(bumpVariantId)
+  await call('/admin/funnels', { form: { name: 'Checkout add-on fixture', bumpVariantId, bumpLabel: 'Add the matching accessory', bumpPriceCents: '350' } })
+  const funnelId = /name="id" value="(fun_[a-z0-9]+)"/.exec((await call('/admin/funnels')).text)?.[1] ?? ''
+  assert.ok(funnelId)
+  const cartBeforeBump = JSON.parse((await call(`/s/${slug}/cart/state`)).text) as { items: Array<{ variantId: string }> }
   const live = await call(`/s/${slug}/checkout`)
   assert.equal(live.status, 200)
   assert.match(live.text, /class="checkout checkout--blk/, 'the published page is the checkout')
   assert.match(live.text, /Complete order/)
   assert.match(live.text, /class="bump"/, 'the bump from the funnel is inside the form')
+  assert.match(live.text, /Add the matching accessory/)
+  assert.doesNotMatch(live.text, /name="bumpVariantId"[^>]*checked/, 'an available add-on is not selected for the shopper')
+  assert.deepEqual(JSON.parse((await call(`/s/${slug}/cart/state`)).text).items, cartBeforeBump.items, 'rendering checkout preserves exactly the chosen cart items')
+  const selectedBump = await call(`/s/${slug}/checkout/bump`, { json: { variantId: bumpVariantId, on: true } })
+  assert.equal(selectedBump.status, 200, 'the shopper can explicitly select the configured add-on')
+  const cartWithBump = JSON.parse((await call(`/s/${slug}/cart/state`)).text) as { items: Array<{ variantId: string; lineCents: number }> }
+  assert.equal(cartWithBump.items.find(item => item.variantId === bumpVariantId)?.lineCents, 350, 'the configured server price is used')
+  await call(`/s/${slug}/checkout/bump`, { json: { variantId: bumpVariantId, on: false } })
+  assert.deepEqual(JSON.parse((await call(`/s/${slug}/cart/state`)).text).items, cartBeforeBump.items)
   assert.doesNotMatch(live.text, /Sample order/)
 
   const bad = await call(`/s/${slug}/checkout`, { form: { email: 'nope', firstName: 'A' } })
@@ -332,9 +378,82 @@ test('a checkout laid out from blocks becomes the store\'s checkout once publish
   const placed = await call(`/s/${slug}/checkout`, { form: { email: 'block-buyer@example.com', firstName: 'B', lastName: 'Buyer', line1: '2 Road', city: 'Austin', postal: '78701', country: 'US' } })
   assert.match(placed.location, /\/orders\/order_[a-z0-9]+\/offer$/, 'the order goes through the block checkout')
   await call(placed.location.replace(base, ''), { form: { accept: 'no' } })
+  await call(`/admin/funnels/${funnelId}/delete`, { method: 'POST' })
 
   const suggested = await call('/admin/pages/suggest', { form: { goal: 'checkout' } })
   assert.match(suggested.location, /\/admin\/pages\/page_[a-z0-9]+\/edit/, 'the layout suggester knows the checkout as a goal')
+})
+
+test('an exact HTML page opens as a detected visual canvas and can save a reusable section', async () => {
+  const created = await call('/admin/pages/html', { form: { title: 'Visual clone', html: '<!doctype html><html><head><title>Clone</title></head><body><main><section><h1>Selectable headline</h1><p>Editable copy</p></section></main></body></html>' } })
+  const pageId = /\/admin\/pages\/(page_[a-z0-9]+)\/edit/.exec(created.location)?.[1] ?? ''
+  assert.ok(pageId)
+
+  const editor = await call(`/admin/pages/${pageId}/edit`)
+  assert.match(editor.text, /Visual clone editor/)
+  assert.match(editor.text, /Hover to identify elements/)
+  assert.match(editor.text, />↶ <span>Undo<\/span>/)
+  assert.doesNotMatch(editor.text, /Convert to editable blocks/)
+
+  const canvas = await call(`/admin/pages/${pageId}/canvas`)
+  assert.equal(canvas.status, 200)
+  assert.match(canvas.headers.get('content-security-policy') ?? '', /sandbox allow-same-origin; script-src 'none'/)
+  assert.match(canvas.text, /Selectable headline/)
+  assert.doesNotMatch(canvas.text, /data-amboras-editor/, 'editor-only outlines never leak into the stored page')
+
+  const saved = await call(`/admin/pages/${pageId}/html-presets`, { json: { name: 'Cloned hero', html: '<section><h1>Reusable hero</h1></section>' } })
+  assert.match(saved.text, /"ok": ?true/)
+  assert.match(saved.text, /"type": ?"custom-html"/)
+  const script = await call(`/admin/pages/${pageId}/html-presets`, { json: { name: 'Unsafe hero', html: '<section><script>alert(1)</script></section>' } })
+  assert.match(script.text, /Remove scripts/)
+})
+
+test('native draft preview renders unsaved edits without saving or publishing', async () => {
+  const created = await call('/admin/pages/new', { form: { template: 'landing' } })
+  const pageId = /\/admin\/pages\/(page_[a-z0-9]+)\/edit/.exec(created.location)?.[1] ?? ''
+  const { getDb } = await import('../src/lib/db.ts')
+  const db = getDb()
+  const before = db.one('SELECT * FROM pages WHERE id = ?', pageId)
+  const preview = await call(`/admin/pages/${pageId}/draft-preview`, { json: { title: 'Unsaved preview title', blocks: [{ id: 'headline', type: 'headline', settings: { text: 'Unsaved preview words' } }] } })
+  assert.equal(preview.status, 200)
+  assert.match(preview.text, /Unsaved preview words/)
+  assert.deepEqual(db.one('SELECT * FROM pages WHERE id = ?', pageId), before)
+})
+
+test('editor product data is store-scoped and exposes only public catalog fields', async () => {
+  const { getDb } = await import('../src/lib/db.ts')
+  const { createProduct } = await import('../src/domain/catalog.ts')
+  const db = getDb()
+  const store = db.one<{ id: string }>('SELECT id FROM stores WHERE slug = ?', slug)!
+  const product = createProduct(db, store.id, { title: 'Bound product', status: 'published', metadata: { private: 'do-not-expose' }, variants: [{ title: 'Standard', priceCents: 4900, inventory: 10 }] })
+  const created = await call('/admin/pages/html', { form: { title: 'Bindings', html: '<h1>Original</h1>' } })
+  const pageId = /\/admin\/pages\/(page_[a-z0-9]+)\/edit/.exec(created.location)?.[1] ?? ''
+  const preview = await call(`/admin/pages/${pageId}/product-data/${product.id}`)
+  assert.equal(preview.status, 200)
+  assert.equal(JSON.parse(preview.text).title, 'Bound product')
+  assert.doesNotMatch(preview.text, /do-not-expose|supplier|metadata/)
+  const mediaData=JSON.parse(preview.text)
+  assert.deepEqual(mediaData.media,[])
+  assert.equal(typeof mediaData.mediaRevision,'string')
+  assert.equal((await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:'stale',media:[]}})).status,409)
+  assert.equal((await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[{url:'javascript:alert(1)'}]}})).status,409)
+  const mediaSave=await call(`/admin/pages/${pageId}/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})
+  assert.equal(mediaSave.status,200)
+  assert.equal((await call(`/admin/pages/not-a-page/product-media/${product.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})).status,404)
+
+  const publicData = await call(`/s/${slug}/api/page-products/${product.id}`)
+  assert.equal(publicData.status, 200)
+  assert.equal(JSON.parse(publicData.text).price, '$49.00')
+  const draft = createProduct(db, store.id, { title: 'Draft data', status: 'draft' })
+  assert.equal((await call(`/s/${slug}/api/page-products/${draft.id}`)).status, 404)
+  assert.equal((await call(`/admin/pages/not-a-page/product-data/${product.id}`)).status, 404)
+  const otherStore = db.one<{ id: string }>('SELECT id FROM stores WHERE id != ? LIMIT 1', store.id)
+  if (otherStore) {
+    const foreign = createProduct(db, otherStore.id, { title: 'Other store', status: 'published' })
+    assert.equal((await call(`/s/${slug}/api/page-products/${foreign.id}`)).status, 404)
+    assert.equal((await call(`/admin/pages/${pageId}/product-data/${foreign.id}`)).status, 404)
+    assert.equal((await call(`/admin/pages/${pageId}/product-media/${foreign.id}`,{json:{revision:mediaData.mediaRevision,media:[]}})).status,409)
+  }
 })
 
 test('a block the store defined can be read back, edited, and outlives its own removal on a page', async () => {
@@ -461,7 +580,7 @@ async function upload(path: string, fields: Record<string, string>, file: { fiel
     const [name, value = ''] = (pair ?? '').split('=')
     if (name) jar.set(name.trim(), decodeURIComponent(value))
   }
-  return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+  return { status: response.status, location: response.headers.get('location') ?? '', headers: response.headers, text: await response.text() }
 }
 
 test('a second store can be started from the admin, with a photo, and both show in the hub', async () => {
@@ -469,8 +588,7 @@ test('a second store can be started from the admin, with a photo, and both show 
   assert.equal(hub.status, 200)
   assert.match(hub.text, /New store/)
   assert.match(hub.text, /Ironjaw/)
-  assert.match(hub.text, /orders(&nbsp;| )\/(&nbsp;| )30d/, 'the hub says whether each store is a business yet')
-  assert.ok(!/class="rail"/.test(hub.text), 'the hub is the account, not one store: no store rail around it')
+  assert.match(hub.text, /orders?(&nbsp;| )\/(&nbsp;| )30d/, 'the hub says whether each store is a business yet')
 
   const started = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
   const ticket = new URL(started.location, base).searchParams.get('t') ?? ''
@@ -523,6 +641,25 @@ test('a product photo can be uploaded and staged from the product page', async (
   assert.equal(served.headers.get('x-content-type-options'), 'nosniff')
 })
 
+test('original photo uploads and hero changes preserve a gallery longer than eight slides', async()=>{
+  const products=await call('/admin/products'),productId=/prod_[a-z0-9]+/.exec(products.text)?.[0]||''
+  const before=await call(`/admin/products/${productId}`),beforeCount=(before.text.match(/data-product-media-item/g)||[]).length
+  const originals:string[]=[]
+  for(let i=0;i<10;i++){
+    const uploaded=await upload(`/admin/products/${productId}/photo`,{}, {field:'photo',name:'original.png',type:'image/png',data:PNG})
+    assert.match(flashOf(uploaded.location),/original photo.*without changes/)
+    const detail=await call(`/admin/products/${productId}`)
+    const urls=[...detail.text.matchAll(/<figure data-product-media-item[\s\S]*?<img src="([^"]+)"/g)].map(match=>match[1]!)
+    originals.push(urls.at(-1)!)
+    assert.equal((detail.text.match(/data-product-media-item/g)||[]).length,beforeCount+i+1)
+  }
+  const served=await fetch(base+originals[0]);assert.deepEqual(Buffer.from(await served.arrayBuffer()),PNG)
+  await call(`/admin/products/${productId}/use-image`,{form:{url:originals[9]!,as:'hero'}})
+  const detail=await call(`/admin/products/${productId}`)
+  assert.equal((detail.text.match(/data-product-media-item/g)||[]).length,beforeCount+10)
+  for(const url of originals)assert.ok(detail.text.includes(url))
+})
+
 test('ads are drafted, edited and exported from the Ads tab', async () => {
   const products = await call('/admin/products')
   const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
@@ -565,7 +702,7 @@ test('a domain is attached with the registrar\'s records and a check says what i
   const page = await call('/admin/domains')
   assert.match(page.text, /ironjaw\.co/)
   assert.match(page.text, /Advanced DNS tab/)
-  assert.match(page.text, /_amboras\.ironjaw\.co/)
+  assert.match(page.text, /_storemill\.ironjaw\.co/)
   assert.match(page.text, /ALIAS/)
   const checked = await call('/admin/domains/check', { form: { hostname: 'ironjaw.co' } })
   assert.match(flashOf(checked.location), /No TXT record|points at/)
@@ -667,7 +804,8 @@ test('a photo can be labelled as the shot it is, and the creative checklist coun
 
 test('the storefront product page carries the conversion sections and the sticky bar', async () => {
   const dashboard = await call('/admin')
-  const slug2 = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
+  const slug2 = /\/(?:preview|s)\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
+  assert.ok(slug2)
   // This is a visitor's view of the current store, so it has to be open.
   await call('/admin/publish', { form: {} })
   const collection = await call(`/s/${slug2}/collections/all`)
@@ -697,7 +835,7 @@ test('the storefront serves generated legal pages, takes behaviour beacons, and 
   // Point the admin at the store the beacon is about to hit, or these
   // assertions are about whichever store happened to be selected.
   const hub = await call('/admin/stores')
-  const card = hub.text.split('class="card storecard"').find((chunk) => chunk.includes(`/s/${slug}`)) ?? ''
+  const card = hub.text.split('class="asset-card"').find((chunk) => chunk.includes(`/s/${slug}`)) ?? ''
   const storeId = /storeId=(store_[a-z0-9]+)/.exec(card)?.[1] ?? ''
   assert.ok(storeId, 'the hub links each store by id')
   await call(`/admin/switch?storeId=${storeId}`)
@@ -806,7 +944,7 @@ test('an invited teammate can actually join the store', async () => {
       const [name, value = ''] = (pair ?? '').split('=')
       if (name) own.set(name.trim(), decodeURIComponent(value))
     }
-    return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+    return { status: response.status, location: response.headers.get('location') ?? '', headers: response.headers, text: await response.text() }
   }
 
   const followed = await theirs(link)
@@ -864,4 +1002,59 @@ test('a shopper who edits the checkout gets the same payment intent re-priced, n
 
   useStripeTransport(null)
   await call('/admin/plugins/stripe/uninstall', { form: {} })
+})
+
+test('page type/link editing and the cross-site template library work through the admin', async () => {
+  const created = await call('/admin/pages/html', { form: { title: 'Reusable checkout shell', role: 'checkout', html: '<!doctype html><html><head><style>@media(max-width:767px){main{padding:16px}}</style></head><body><main>Library checkout shell</main></body></html>' } })
+  assert.equal(created.status, 302)
+  const pageId = /\/admin\/pages\/([^/]+)\/edit/.exec(created.location)?.[1]
+  assert.ok(pageId)
+  const { getDb } = await import('../src/lib/db.ts')
+  const { createProduct } = await import('../src/domain/catalog.ts')
+  const storeId = getDb().one<{ store_id: string }>('SELECT store_id FROM pages WHERE id = ?', pageId)?.store_id as string
+  const draftProduct = createProduct(getDb(), storeId, { title: 'Imported draft connection', status: 'draft', variants: [{ title: 'Default', priceCents: 2900 }] })
+  getDb().run('UPDATE pages SET product_id = ?, head_html = ? WHERE id = ?', draftProduct.id, '<style data-template-head>main{letter-spacing:.01em}</style>', pageId)
+  const editor = await call(created.location)
+  assert.match(editor.text, /id="page-role"/);assert.match(editor.text, /id="page-handle"/);assert.match(editor.text, /Save page to library/)
+  assert.match(editor.text, /Imported draft connection \(draft\)/, 'draft imports remain selectable instead of losing their product connection when saved')
+  const saved = await call(`/admin/pages/${pageId}/template`, { json: { name: 'My reusable checkout' } })
+  assert.equal(saved.status, 200)
+  const template = JSON.parse(saved.text).template
+  assert.ok(template.id)
+  const library = await call('/admin/templates')
+  assert.match(library.text, /My reusable checkout/);assert.match(library.text, /Save a page from a link/)
+  const preview = await call(`/admin/templates/${template.id}/preview`)
+  assert.match(preview.text, /Library checkout shell/);assert.match(preview.headers.get('content-security-policy') ?? '', /script-src 'none'/)
+  assert.match(preview.text, /data-template-head/, 'custom head styles appear in the sandboxed template preview')
+  const copy = await call(`/admin/templates/${template.id}/use`, { form: { title: 'Second checkout', role: 'checkout' } })
+  assert.equal(copy.status, 302);assert.notEqual(copy.location, created.location)
+  const nextId = /\/admin\/pages\/([^/]+)\/edit/.exec(copy.location)?.[1]
+  const row = getDb().one<{ role: string; status: string; raw_html: string; handle: string; is_home: number }>('SELECT * FROM pages WHERE id = ?', nextId as string)
+  assert.equal(row?.role, 'checkout');assert.equal(row?.status, 'draft');assert.equal(row?.is_home, 0);assert.match(row?.raw_html ?? '', /@media/)
+  const changed = await call(`/admin/pages/${nextId}/save`, { json: { title: 'A cart design', handle: 'my-cart-design', role: 'cart', mode: 'html', rawHtml: row?.raw_html } })
+  assert.equal(changed.status, 200);assert.equal(JSON.parse(changed.text).handle, 'my-cart-design')
+  assert.equal(getDb().one<{ role: string }>('SELECT role FROM pages WHERE id = ?', nextId as string)?.role, 'cart')
+  const invalid = await call(`/admin/pages/${nextId}/save`, { json: { role: 'invalid-role' } })
+  assert.match(JSON.parse(invalid.text).error, /valid page type/)
+  assert.equal((await call(`/admin/templates/${template.id}/delete`, { form: {} })).status, 302)
+  assert.equal((await call(`/admin/templates/${template.id}/preview`)).status, 404)
+})
+
+test('theme settings persist source colors and font weights in draft without publishing', async () => {
+  const { getDb } = await import('../src/lib/db.ts')
+  const { environment, getStore } = await import('../src/control/stores.ts')
+  const db = getDb()
+  const created = await call('/admin/pages/new', { form: { title: 'Theme scope', template: 'blank', role: 'page' } })
+  const pageId = /\/admin\/pages\/([^/]+)\/edit/.exec(created.location)?.[1]
+  assert.ok(pageId)
+  const storeId = db.one<{store_id:string}>('SELECT store_id FROM pages WHERE id = ?',pageId)!.store_id
+  const before=environment(db,storeId,'live')
+  const source={primary:'#c21882',paper:'#ffffff',ink:'#202223',displayFont:'Georgia',bodyFont:'Arial',displayWeight:700,bodyWeight:400}
+  const response=await call('/admin/theme',{form:{primary:'#2244aa',secondary:'#145b49',paper:'#ffffff',ink:'#202223',surface:'#f5f1f4',buttonText:'#ffffff',border:'#dedede',displayFont:'Georgia',bodyFont:'Arial',displayWeight:'800',bodyWeight:'500',sourceTheme:JSON.stringify(source),template:'market',radius:'8px',density:'roomy'}})
+  assert.equal(response.status,302)
+  const brand=environment(db,storeId,'draft').brand
+  assert.equal(brand.primary,'#2244aa');assert.equal(brand.displayFont,'Georgia');assert.equal(brand.bodyFont,'Arial');assert.equal(brand.displayWeight,800);assert.equal(brand.bodyWeight,500);assert.deepEqual(brand.sourceTheme,source)
+  assert.equal(brand.themeCustomized,true);assert.deepEqual(environment(db,storeId,'live').brand,before.brand)
+  assert.equal(getStore(db,storeId)?.brand.displayWeight,800)
+  const form=await call('/admin/store');assert.match(form.text,/name="displayWeight"[\s\S]*?value="800" selected/);assert.match(form.text,/theme-font-dialog/)
 })

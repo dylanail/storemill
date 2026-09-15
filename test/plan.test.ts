@@ -28,6 +28,7 @@ import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
 import { renderBlock, blockDefinition, customDefinition, renderTemplate, type BlockContext } from '../src/pages/blocks.ts'
 import { customCatalog, customDefinitions, listCustomBlocks, upsertCustomBlock } from '../src/pages/custom-blocks.ts'
+import { listBlockPresets, saveBlockPreset } from '../src/pages/presets.ts'
 import { acceptSuggestion } from '../src/creative/briefs.ts'
 import { applyAuthoring } from '../src/agent/directions.ts'
 import { editorPage } from '../src/admin/editor.ts'
@@ -727,6 +728,42 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.equal(written[0]?.settings.text, 'New')
   assert.equal(written[2]?.settings.headline, 'Three steps')
   assert.equal(written[4]?.settings.js, 'x()')
+})
+
+test('named configured blocks and custom definitions are reusable across this owner\'s sites', () => {
+  const { db, user, store } = shop()
+  const other = createStore(db, user.id, { name: 'Second storefront' })
+  const definition = upsertCustomBlock(db, store.id, {
+    name: 'Cloned ingredient rail',
+    fields: [{ key: 'headline', type: 'string', default: 'Inside every serving' }],
+    template: '<h2>{{headline}}</h2>',
+  })
+  assert.ok(customDefinitions(db, other.id).some((entry) => entry.type === definition.type), 'an owner custom block is in every asset palette')
+
+  const preset = saveBlockPreset(db, user.id, store.id, 'Nuvana ingredient section', {
+    type: definition.type,
+    settings: { headline: 'The Nuvana blend', _font: 'custom', _customFont: 'Cormorant Garamond, serif' },
+  })
+  assert.equal(listBlockPresets(db, user.id)[0]?.id, preset.id)
+  const page = createPage(db, other.id, { title: 'Reusable page', blocks: [] })
+  const editor = editorPage({
+    page,
+    storeSlug: other.slug,
+    products: [],
+    custom: customDefinitions(db, other.id),
+    presets: listBlockPresets(db, user.id),
+    brand: { primary: '#123456', paper: '#fffaf0', ink: '#101820', displayFont: 'Manrope, sans-serif', bodyFont: 'DM Sans, sans-serif' },
+    theme: environment(db, other.id, 'draft').theme,
+  })
+  assert.match(editor, /--site-primary:#123456/)
+  assert.match(editor, /Nuvana ingredient section/)
+  assert.match(editor, /Saved from your sites/)
+  assert.match(editor, /Block typography/)
+
+  const rendered = renderBlock({ id: 'shared', type: definition.type, settings: preset.settings }, blockContextFor(db, other, '/s/second'))
+  assert.match(rendered, /class="blk-font"/)
+  assert.match(rendered, /Cormorant Garamond, serif/)
+  assert.match(rendered, /The Nuvana blend/)
 })
 
 test('css and js can be written for a page, a block, or the whole store', async () => {

@@ -11,6 +11,41 @@ const MAX_ATTEMPTS = 3
 
 export type SendResult = { id: string; status: 'sent' | 'failed' | 'queued'; subject: string }
 
+async function deliver(db: Db, storeId: string, input: { template: string; to: string; subject: string; html: string }): Promise<SendResult> {
+  const store = getStore(db, storeId)
+  if (!store) throw new Error('No store')
+  const sendId = id('em')
+  db.insert('email_sends', {
+    id: sendId, store_id: storeId, template: input.template, recipient: input.to,
+    subject: input.subject, html: input.html, status: 'queued', attempts: 0, error: '', created_at: now(),
+  })
+
+  const apiKey = process.env.RESEND_API_KEY
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      if (!apiKey) {
+        log.info(`(no RESEND_API_KEY) would send "${input.subject}" to ${input.to}`)
+        db.update('email_sends', sendId, { status: 'sent', attempts: attempt })
+        return { id: sendId, status: 'sent', subject: input.subject }
+      }
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: `${store.name} <orders@${process.env.AMBORAS_EMAIL_DOMAIN ?? 'amboras.app'}>`, to: input.to, subject: input.subject, html: input.html }),
+      })
+      if (!response.ok) throw new Error(`Resend replied ${response.status}`)
+      db.update('email_sends', sendId, { status: 'sent', attempts: attempt })
+      return { id: sendId, status: 'sent', subject: input.subject }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      db.update('email_sends', sendId, { status: attempt === MAX_ATTEMPTS ? 'failed' : 'queued', attempts: attempt, error: message })
+      if (attempt === MAX_ATTEMPTS) return { id: sendId, status: 'failed', subject: input.subject }
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
+    }
+  }
+  return { id: sendId, status: 'failed', subject: input.subject }
+}
+
 /**
  * Delivery goes through Resend when a key is configured and through the log
  * otherwise, but the send record is written either way. A store that has not
@@ -29,47 +64,22 @@ export async function sendEmail(
   const subject = render(template.subject, context)
   const html = layout(store.brand, render(template.body, { heading: subject, ...context }), store.name)
 
-  const sendId = id('em')
-  db.insert('email_sends', {
-    id: sendId,
-    store_id: storeId,
-    template: input.template,
-    recipient: input.to,
-    subject,
-    html,
-    status: 'queued',
-    attempts: 0,
-    error: '',
-    created_at: now(),
-  })
+  return deliver(db, storeId, { template: input.template, to: input.to, subject, html })
+}
 
-  const apiKey = process.env.RESEND_API_KEY
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      if (!apiKey) {
-        log.info(`(no RESEND_API_KEY) would send "${subject}" to ${input.to}`)
-        db.update('email_sends', sendId, { status: 'sent', attempts: attempt })
-        return { id: sendId, status: 'sent', subject }
-      }
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: `${store.name} <orders@${process.env.AMBORAS_EMAIL_DOMAIN ?? 'amboras.app'}>`, to: input.to, subject, html }),
-      })
-      if (!response.ok) throw new Error(`Resend replied ${response.status}`)
-      db.update('email_sends', sendId, { status: 'sent', attempts: attempt })
-      return { id: sendId, status: 'sent', subject }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      db.update('email_sends', sendId, { status: attempt === MAX_ATTEMPTS ? 'failed' : 'queued', attempts: attempt, error: message })
-      if (attempt === MAX_ATTEMPTS) {
-        log.warn(`gave up on ${input.template} to ${input.to}: ${message}`)
-        return { id: sendId, status: 'failed', subject }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
-    }
-  }
-  return { id: sendId, status: 'failed', subject }
+/** A flow owns its editable subject/body but still uses the same safe template
+ * renderer, brand chrome, retry policy and auditable email outbox. */
+export async function sendCustomEmail(
+  db: Db,
+  storeId: string,
+  input: { template: string; to: string; subject: string; body: string; context: Record<string, unknown> },
+): Promise<SendResult> {
+  const store = getStore(db, storeId)
+  if (!store) throw new Error('No store')
+  const context = { store: { name: store.name, ...store.brand }, ...input.context }
+  const subject = render(input.subject, context)
+  const html = layout(store.brand, render(input.body, { heading: subject, ...context }), store.name)
+  return deliver(db, storeId, { template: input.template, to: input.to, subject, html })
 }
 
 /**
@@ -93,7 +103,7 @@ export async function sendAccountEmail(input: { to: string; subject: string; htm
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: `Amboras <accounts@${process.env.AMBORAS_EMAIL_DOMAIN ?? 'amboras.app'}>`, to: input.to, subject: input.subject, html: input.html }),
+      body: JSON.stringify({ from: `storemill <accounts@${process.env.AMBORAS_EMAIL_DOMAIN ?? 'amboras.app'}>`, to: input.to, subject: input.subject, html: input.html }),
     })
     if (!response.ok) throw new Error(`Resend replied ${response.status}`)
     return 'sent'

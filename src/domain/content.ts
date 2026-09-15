@@ -55,10 +55,17 @@ export function createArticle(
   db: Db,
   storeId: string,
   blogId: string,
-  input: { title: string; body?: string; excerpt?: string; image?: string; tags?: string[]; status?: Article['status'] },
+  input: { title: string; body?: string; excerpt?: string; image?: string; tags?: string[]; status?: Article['status']; publishAt?: string },
 ): Article {
   const articleId = id('art')
-  const status = input.status ?? 'published'
+  let status = input.status ?? 'published'
+  let publishedAt = status === 'published' ? now() : null
+  if (input.publishAt) {
+    const requested = new Date(input.publishAt)
+    if (Number.isNaN(requested.getTime())) throw new Error('Publish time is not a valid date')
+    publishedAt = requested.toISOString()
+    status = requested.getTime() > Date.now() ? 'scheduled' : 'published'
+  }
   db.insert('articles', {
     id: articleId,
     blog_id: blogId,
@@ -70,7 +77,7 @@ export function createArticle(
     image: input.image ?? '',
     tags: input.tags ?? [],
     status,
-    published_at: status === 'published' ? now() : null,
+    published_at: publishedAt,
     created_at: now(),
   })
   return rowToArticle(db.one('SELECT * FROM articles WHERE id = ?', articleId) as Row)
@@ -90,7 +97,7 @@ export function updateArticle(
   db: Db,
   storeId: string,
   articleId: string,
-  patch: Partial<Pick<Article, 'title' | 'body' | 'excerpt' | 'image' | 'tags' | 'status'>>,
+  patch: Partial<Pick<Article, 'title' | 'body' | 'excerpt' | 'image' | 'tags' | 'status'>> & { publishAt?: string | null },
 ): Article {
   const article = getArticle(db, storeId, articleId)
   if (!article) throw new Error('No such article')
@@ -100,12 +107,16 @@ export function updateArticle(
   if (patch.excerpt !== undefined) values.excerpt = patch.excerpt
   if (patch.image !== undefined) values.image = patch.image
   if (patch.tags !== undefined) values.tags = patch.tags
-  if (patch.status !== undefined) {
-    values.status = patch.status
-    // The date is when it went out, and it is set once: republishing an
-    // article should not tell readers it was written today.
-    if (patch.status === 'published' && !article.publishedAt) values.published_at = now()
-  }
+  if (patch.status !== undefined) values.status = patch.status
+  if (patch.publishAt !== undefined) {
+    if (!patch.publishAt) values.published_at = null
+    else {
+      const requested = new Date(patch.publishAt)
+      if (Number.isNaN(requested.getTime())) throw new Error('Publish time is not a valid date')
+      values.published_at = requested.toISOString()
+      values.status = requested.getTime() > Date.now() ? 'scheduled' : 'published'
+    }
+  } else if (patch.status === 'published' && !article.publishedAt) values.published_at = now()
   if (Object.keys(values).length) db.update('articles', articleId, values)
   return getArticle(db, storeId, articleId) as Article
 }
@@ -114,18 +125,21 @@ export function deleteArticle(db: Db, storeId: string, articleId: string): boole
   return Number(db.run('DELETE FROM articles WHERE id = ? AND store_id = ?', articleId, storeId).changes) > 0
 }
 
-/** Removes a blog and everything in it. */
 export function deleteBlog(db: Db, storeId: string, blogId: string): boolean {
-  return Number(
-    db.tx(() => {
-      db.run('DELETE FROM articles WHERE blog_id = ? AND store_id = ?', blogId, storeId)
-      return db.run('DELETE FROM blogs WHERE id = ? AND store_id = ?', blogId, storeId).changes
-    }),
-  ) > 0
+  return Number(db.tx(() => {
+    db.run('DELETE FROM articles WHERE blog_id = ? AND store_id = ?', blogId, storeId)
+    return db.run('DELETE FROM blogs WHERE id = ? AND store_id = ?', blogId, storeId).changes
+  })) > 0
+}
+
+/** Scheduled posts become public from their timestamp without needing a worker. */
+export function articleIsPublic(article: Article, at = new Date()): boolean {
+  if (article.status === 'published') return true
+  return article.status === 'scheduled' && article.publishedAt !== null && Date.parse(article.publishedAt) <= at.getTime()
 }
 
 export function findArticle(db: Db, storeId: string, blogHandle: string, articleHandle: string): { blog: Blog; article: Article } | null {
   const blog = listBlogs(db, storeId).find((entry) => entry.handle === blogHandle)
-  const article = blog?.articles.find((entry) => entry.handle === articleHandle && entry.status === 'published')
+  const article = blog?.articles.find((entry) => entry.handle === articleHandle && articleIsPublic(entry))
   return blog && article ? { blog, article } : null
 }

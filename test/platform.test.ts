@@ -1,3 +1,4 @@
+import { allPlugins, directoryEntries, findPlugin } from '../src/control/catalog-plugins.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
@@ -6,15 +7,16 @@ import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
 import { createStore, DEFAULT_THEME, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, updateStore, addDomain, verifyDomain } from '../src/control/stores.ts'
 import { themeCss } from '../src/storefront/theme.ts'
-import { requireRole, register, inviteTeammate, acceptInvite, roleOn } from '../src/control/auth.ts'
+import { requireRole, register, inviteTeammate, acceptInvite, roleOn, updateProfile } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
-import { allPlugins, directoryEntries, findPlugin } from '../src/control/catalog-plugins.ts'
 import { createProduct } from '../src/domain/catalog.ts'
 import { createReview, flagsFor, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { funnel, kpis, sessionFor, track } from '../src/analytics/events.ts'
 import { render } from '../src/email/templates.ts'
 import { productJsonLd, validateProductSchema } from '../src/seo/schema.ts'
+import { articleIsPublic, createArticle, createBlog, findArticle, listBlogs } from '../src/domain/content.ts'
+import { atomFeed, rssFeed } from '../src/storefront/feeds.ts'
 
 /** The prefix list the directory names are drawn from; the generator used to repeat once a category ran past it. */
 const PREFIX_COUNT = 17
@@ -61,6 +63,29 @@ test('the router matches params and wildcards and respects mounts', () => {
   assert.equal(router.match('GET', '/files/deep/path')?.params.wildcard, 'deep/path')
   assert.equal(router.match('GET', '/a/7'), null)
   assert.equal(router.match('POST', '/a/7/b'), null)
+})
+
+test('scheduled blog posts publish on time and feeds expose only public articles', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Field & Forge' })
+  const blog = createBlog(db, store.id, 'Field Notes')
+  createArticle(db, store.id, blog.id, { title: 'Draft only', body: 'No', status: 'draft' })
+  createArticle(db, store.id, blog.id, { title: 'Next year', body: 'Later', publishAt: '2099-01-01T00:00:00Z' })
+  const live = createArticle(db, store.id, blog.id, { title: 'Leather & care', excerpt: 'Oil < water & wax', body: 'Now', publishAt: '2020-01-01T00:00:00Z' })
+
+  assert.equal(live.status, 'published')
+  assert.equal(articleIsPublic(live), true)
+  assert.equal(findArticle(db, store.id, blog.handle, live.handle)?.article.id, live.id)
+
+  const current = listBlogs(db, store.id)[0]!
+  const input = { blog: current, storeName: store.name, storefrontUrl: 'https://shop.example/s/field-forge' }
+  const rss = rssFeed(input)
+  const atom = atomFeed(input)
+  assert.match(rss, /Leather &amp; care/)
+  assert.match(rss, /Oil &lt; water &amp; wax/)
+  assert.match(atom, /Leather &amp; care/)
+  assert.doesNotMatch(rss, /Draft only|Next year/)
+  assert.doesNotMatch(atom, /Draft only|Next year/)
 })
 
 /* -------------------------------------------------------------- control plane */
@@ -127,6 +152,16 @@ test('an invite only activates when it is accepted', () => {
   assert.equal(acceptInvite(db, newcomer.id, invite), true)
   assert.equal(requireRole(db, newcomer.id, store.id), 'admin')
   assert.equal(acceptInvite(db, newcomer.id, invite), false, 'an invite cannot be redeemed twice')
+})
+
+test('profile name and sign-in email are editable and email remains unique', () => {
+  const { db, user } = fresh()
+  const other = register(db, { email: 'other@example.com', password: 'a-long-enough-password' })
+  const updated = updateProfile(db, user.id, { name: '  Dylan Owner  ', email: '  DYLAN@example.com ' })
+  assert.equal(updated.name, 'Dylan Owner')
+  assert.equal(updated.email, 'dylan@example.com')
+  assert.throws(() => updateProfile(db, user.id, { name: 'Dylan', email: other.email }), /already has an account/)
+  assert.throws(() => updateProfile(db, user.id, { name: '', email: 'dylan@example.com' }), /Enter a name/)
 })
 
 /* -------------------------------------------------------------------- plugins */

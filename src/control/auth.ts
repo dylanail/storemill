@@ -101,6 +101,22 @@ export function getUser(db: Db, userId: string): User | null {
   return row ? { id: row.id, email: row.email, name: row.name, createdAt: row.created_at } : null
 }
 
+/** Update the signed-in person's account details without touching store ownership. */
+export function updateProfile(db: Db, userId: string, input: { name: string; email: string }): User {
+  const name = input.name.trim()
+  const email = input.email.trim().toLowerCase()
+  if (name.length < 1 || name.length > 80) throw badRequest('Enter a name between 1 and 80 characters')
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Enter a valid email address')
+  const duplicate = db.one<{ id: string }>('SELECT id FROM users WHERE email = ? AND id != ?', email, userId)
+  if (duplicate) throw badRequest('That email already has an account')
+  if (!getUser(db, userId)) throw unauthorized()
+  db.tx(() => {
+    db.update('users', userId, { name, email })
+    db.run('UPDATE team_members SET email = ? WHERE user_id = ?', email, userId)
+  })
+  return getUser(db, userId) as User
+}
+
 export function startSession(db: Db, userId: string): string {
   const secret = token()
   db.insert('sessions', {

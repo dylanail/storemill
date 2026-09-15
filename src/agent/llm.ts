@@ -1,3 +1,4 @@
+import { platformContext } from './context.ts'
 import { listProducts } from '../domain/catalog.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { getStore } from '../control/stores.ts'
@@ -52,9 +53,10 @@ function systemPrompt(context: PlanContext): string {
   const products = listProducts(context.db, context.storeId, { limit: 20 })
   const promotions = listPromotions(context.db, context.storeId)
   return [
-    `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on Amboras, for its owner. You act by calling tools; you do not describe what the owner should click.`,
+    `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on storemill, for its owner. You act by calling tools; you do not describe what the owner should click.`,
+    platformContext(context.db,context.storeId,context.page),
     store?.brand.voice ? `Store voice: ${store.brand.voice}` : '',
-    context.page ? `The owner is on the ${context.page} page; prefer tools relevant to it.` : '',
+    context.page ? `The current area is ${context.page.split('|')[0]}; use its asset/page IDs from the captured context.` : '',
     `Currency is ${store?.currency ?? 'USD'} and every amount you pass is in minor units (cents).`,
     products.length ? `Products: ${products.map((product) => `${product.title} (${product.id})`).join(', ')}` : 'The catalog is empty.',
     promotions.length ? `Promotions: ${promotions.map((promotion) => `${promotion.title}${promotion.code ? ` [${promotion.code}]` : ''}`).join(', ')}` : '',

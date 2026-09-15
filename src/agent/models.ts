@@ -66,11 +66,11 @@ export function catalog(): CatalogEntry[] {
     { provider: 'anthropic', model: 'claude-fable-5-1', name: 'Claude Fable 5.1', note: 'The most capable Claude, for the hardest research; priced above Opus.' },
     { provider: 'anthropic', model: 'claude-sonnet-5', name: 'Claude Sonnet 5', note: 'Faster and cheaper; fine for the assistant and for reading pages.' },
     { provider: 'anthropic', model: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', note: 'Cheapest; reading pages only.' },
-    { provider: 'openai', model: openaiDefault(), name: `OpenAI ${openaiDefault()}`, note: 'The newest GPT. Set AMBORAS_OPENAI_MODEL to move to a newer id.' },
+    { provider: 'openai', model: openaiDefault(), name: `OpenAI ${openaiDefault()}`, note: 'The newest GPT. Set STOREMILL_OPENAI_MODEL to move to a newer id.' },
   ]
   const anthropic = anthropicDefault()
   if (!entries.some((entry) => entry.model === anthropic)) {
-    entries.unshift({ provider: 'anthropic', model: anthropic, name: `Claude ${anthropic}`, note: 'From AMBORAS_MODEL.' })
+    entries.unshift({ provider: 'anthropic', model: anthropic, name: `Claude ${anthropic}`, note: 'From STOREMILL_MODEL.' })
   }
   return entries.map((entry) => ({ ...entry, available: available(entry.provider) }))
 }

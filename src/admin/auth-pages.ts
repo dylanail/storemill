@@ -1,5 +1,6 @@
+import { brandHead, brandLogo, brandStyles } from '../brand/index.ts'
 import { escapeHtml } from '../lib/http.ts'
-import { MODES } from '../control/build.ts'
+import { MODES, SHAPES } from '../control/build.ts'
 
 const EXAMPLES = [
   'A hand-stitched boxing gear store called Ironjaw & Co, 1920s heritage leather atelier in Mexico City',
@@ -10,11 +11,11 @@ const EXAMPLES = [
 
 function frame(title: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} — Amboras</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} — storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-<style>
-:root{--paper:#faf7f3;--ink:#1c1a17;--muted:#7d746a;--line:#e6ded3;--accent:#7a4a2b}
+${brandHead}<style>${brandStyles}
+:root{--paper:#f6f7f9;--ink:#202223;--muted:#6d7175;--line:#dfe3e8;--accent:#2c6ecb}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 'Inter',ui-sans-serif,system-ui,sans-serif;
   min-height:100vh;display:grid;place-items:center;padding:2rem 1rem}
@@ -41,7 +42,7 @@ button:hover{background:var(--accent)}
 .steps{display:grid;gap:.4rem;margin:1.4rem 0 0;font-size:12.5px;color:var(--muted)}
 .steps div{display:flex;gap:.5rem}
 .steps i{width:6px;height:6px;border-radius:999px;background:var(--accent);margin-top:.55rem;flex:0 0 auto}
-</style></head><body><div class="sheet">${inner}</div></body></html>`
+</style></head><body><div class="sheet"><a class="storemill-home" style="margin-bottom:28px" href="/" aria-label="storemill home">${brandLogo()}</a>${inner}</div></body></html>`
 }
 
 export function authPage(mode: 'login' | 'register', error: string | null): string {
@@ -61,18 +62,12 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
     <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a> · <a href="/forgot">Forgot your password?</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
 }
 
-/**
- * Asking for a reset link.
- *
- * The answer is the same whether or not the address has an account: a form
- * that says "no account with that email" is a way to find out who has one.
- */
 export function forgotPage(state: { error?: string | null; sent?: boolean; logged?: boolean }): string {
   return frame('Reset your password', `
     <h1>Reset your password</h1>
-    <p class="lead">${state.sent ? 'If that address has an account, a link is on its way. It is good for an hour.' : 'We will email you a link. It works once, and it expires in an hour.'}</p>
+    <p class="lead">${state.sent ? 'If that address has an account, a link is on its way. It is good for an hour.' : 'We will email you a single-use link that expires in an hour.'}</p>
     ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
-    ${state.logged ? '<div class="err">No email sender is configured on this deployment, so the link was written to the server log instead. Whoever runs the process can read it out.</div>' : ''}
+    ${state.logged ? '<div class="err">No email sender is configured, so the reset link was written to the server log.</div>' : ''}
     <form method="post" action="/forgot">
       <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="email"></div>
       <button type="submit">Email me a link</button>
@@ -80,11 +75,10 @@ export function forgotPage(state: { error?: string | null; sent?: boolean; logge
     <p class="alt">Remembered it? <a href="/login">Sign in</a></p>`)
 }
 
-/** Choosing the new password. The token rides in a hidden field; it is single-use and checked again on submit. */
 export function resetPage(state: { token: string; email?: string; error?: string | null }): string {
   return frame('Choose a new password', `
     <h1>Choose a new password</h1>
-    <p class="lead">${state.email ? `For ${escapeHtml(state.email)}. ` : ''}Signing in everywhere else ends when you save this.</p>
+    <p class="lead">${state.email ? `For ${escapeHtml(state.email)}. ` : ''}Saving signs out every other device.</p>
     ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
     <form method="post" action="/reset">
       <input type="hidden" name="token" value="${escapeHtml(state.token)}">
@@ -95,53 +89,25 @@ export function resetPage(state: { token: string; email?: string; error?: string
     <p class="alt"><a href="/login">Back to sign in</a></p>`)
 }
 
-/**
- * The build, while it is happening.
- *
- * Onboarding used to run inside the POST: a spinning tab for minutes, a
- * gateway error behind any proxy with a timeout, and a flash claiming success
- * whether or not the steps had failed. This page is what the POST redirects
- * to; it polls and says which of the five stages is running.
- */
 export function buildingPage(ticket: { id: string; stage: string; storeName: string }): string {
-  return frame('Building your store', `
+  return frame('Building your asset', `
     <h1>${ticket.storeName ? escapeHtml(ticket.storeName) : 'Building it now'}</h1>
     <p class="lead" id="stage">${escapeHtml(ticket.stage)}</p>
-    <div class="steps" id="steps">
-      <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
-      <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
-      <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
-      <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
-      <div><i></i><span>Builds the storefront and hands you the address</span></div>
-    </div>
+    <div class="steps"><div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div><div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div><div><i></i><span>Writes products with full pages, variants, prices and imagery</span></div><div><i></i><span>Sets offers, shipping and automation</span></div><div><i></i><span>Builds the chosen store or funnel and hands you the address</span></div></div>
     <p class="alt" id="note">This takes a minute or two. You can leave this page open.</p>
-    <script>
-    (function(){
-      var stage = document.getElementById('stage'), note = document.getElementById('note');
-      function poll(){
-        fetch('/onboarding/status?t=${encodeURIComponent(ticket.id)}', { headers: { accept: 'application/json' } })
-          .then(function(r){ return r.json() })
-          .then(function(s){
-            if (s.stage) stage.textContent = s.stage;
-            if (s.state === 'done') { window.location = s.next; return }
-            if (s.state === 'failed') { note.textContent = s.error || 'That did not work. Try again with a little more detail.'; return }
-            setTimeout(poll, 1500);
-          })
-          .catch(function(){ setTimeout(poll, 3000) });
-      }
-      setTimeout(poll, 1200);
-    })();
-    </script>`)
+    <script>(function(){var stage=document.getElementById('stage'),note=document.getElementById('note');function poll(){fetch('/onboarding/status?t=${encodeURIComponent(ticket.id)}',{headers:{accept:'application/json'}}).then(function(r){return r.json()}).then(function(s){if(s.stage)stage.textContent=s.stage;if(s.state==='done'){window.location=s.next;return}if(s.state==='failed'){note.textContent=s.error||'That did not work. Try again.';return}setTimeout(poll,1500)}).catch(function(){setTimeout(poll,3000)})}setTimeout(poll,1200)})();</script>`)
 }
 
-export function onboardingPage(name: string, error: string | null, storeCount = 0): string {
-  return frame('Build your store', `
-    <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${storeCount ? `← Your stores (${storeCount})` : '← Your account'}</a></p>
+export function onboardingPage(name: string, error: string | null, hasStores = false): string {
+  return frame('Build an asset', `
+    <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${hasStores ? '← Stores & funnels' : '← Your account'}</a></p>
     <h1>What are you selling?</h1>
-    <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Research runs first; then naming, brand, three products with pages and imagery, and the promotions all run at once.</p>
+    <p class="lead">Choose a full store or a focused funnel, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Then one sentence builds the brand, products, pages and imagery.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
     <form method="post" action="/onboarding" enctype="multipart/form-data">
-      <div class="field"><label for="prompt">Your store, in a sentence</label>
+      <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">What are you building?</legend>
+        ${SHAPES.map((shape, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="shape" value="${shape.id}" ${index === 0 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(shape.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(shape.description)}</span></span></label>`).join('')}</fieldset>
+      <div class="field"><label for="prompt">The product and angle, in a sentence</label>
         <textarea id="prompt" name="prompt" required placeholder="${escapeHtml(EXAMPLES[0] ?? '')}"></textarea></div>
       <div class="chips">${EXAMPLES.map((example) => `<button type="button" onclick="document.getElementById('prompt').value=${escapeHtml(JSON.stringify(example))}">${escapeHtml(example.slice(0, 46))}…</button>`).join('')}</div>
       <div class="field"><label for="photo">A product photo (optional)</label>
@@ -151,14 +117,14 @@ export function onboardingPage(name: string, error: string | null, storeCount = 
         <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
       <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">How will you build it?</legend>
-        ${MODES.map((mode) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${mode.id === 'own-product' ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
-      <button type="submit">Build my store</button>
+        ${MODES.map((mode, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${index === 2 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
+      <button type="submit">Build my asset</button>
     </form>
     <div class="steps">
       <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
       <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
       <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
       <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
-      <div><i></i><span>Builds the storefront and hands you the address</span></div>
+      <div><i></i><span>Builds the chosen store or funnel and hands you the address</span></div>
     </div>`)
 }

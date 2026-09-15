@@ -1,3 +1,4 @@
+import { productGalleryMedia } from './product-data.ts'
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { handle as toHandle, id } from '../lib/ids.ts'
 import { bundleFor, renderBundleWidget } from '../domain/bundles.ts'
@@ -7,6 +8,14 @@ import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '..
 import type { Store } from '../control/stores.ts'
 import { BLOCK_RUNTIME, blockDefinition, defaultsFor, inlineScript, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
 import { customDefinitions } from './custom-blocks.ts'
+import { minorUnitRate } from '../domain/regions.ts'
+
+export const PAGE_ROLES = { page: 'General page', pdp: 'Product page', advertorial: 'Advertorial', offer: 'Offer / sales page', cart: 'Cart', checkout: 'Checkout', upsell: 'Upsell', downsell: 'Downsell', thankyou: 'Thank you' } as const
+export type PageRole = keyof typeof PAGE_ROLES
+export function pageRole(value: unknown): PageRole {
+  if (typeof value !== 'string' || !Object.hasOwn(PAGE_ROLES, value)) throw new Error('Choose a valid page type')
+  return value as PageRole
+}
 
 export type Page = {
   id: string
@@ -25,13 +34,23 @@ export type Page = {
   /** A version of a product's page (role 'pdp') or an advertorial for it. */
   productId: string
   /** 'checkout' makes this page the store's checkout: the most recently updated published one wins. */
-  role: 'page' | 'pdp' | 'advertorial' | 'offer' | 'checkout'
+  role: PageRole
   /** Split-test weight among a product's pdp versions; 0 = not in the test. */
   weight: number
   format: string
   direction: string
   createdAt: string
   updatedAt: string
+}
+
+export type PageRevision = {
+  id: string
+  pageId: string
+  storeId: string
+  version: number
+  note: string
+  createdAt: string
+  snapshot: Pick<Page, 'title' | 'handle' | 'kind' | 'role' | 'productId' | 'mode' | 'blocks' | 'rawHtml' | 'headHtml' | 'seo' | 'status' | 'isHome'>
 }
 
 function rowToPage(row: Row): Page {
@@ -68,14 +87,82 @@ export function getPage(db: Db, storeId: string, idOrHandle: string): Page | nul
   return row ? rowToPage(row) : null
 }
 
-export function homePage(db: Db, storeId: string): Page | null {
-  const row = db.one("SELECT * FROM pages WHERE store_id = ? AND is_home = 1 AND status = 'published'", storeId)
+function pageSnapshot(page: Page): PageRevision['snapshot'] {
+  return {
+    title: page.title,
+    handle: page.handle,
+    kind: page.kind,
+    role: page.role,
+    productId: page.productId,
+    mode: page.mode,
+    blocks: page.blocks,
+    rawHtml: page.rawHtml,
+    headHtml: page.headHtml,
+    seo: page.seo,
+    status: page.status,
+    isHome: page.isHome,
+  }
+}
+
+function rowToRevision(row: Row): PageRevision {
+  return {
+    id: row.id as string,
+    pageId: row.page_id as string,
+    storeId: row.store_id as string,
+    version: row.version as number,
+    snapshot: json(row.snapshot, {} as PageRevision['snapshot']),
+    note: row.note as string,
+    createdAt: row.created_at as string,
+  }
+}
+
+export function listPageRevisions(db: Db, storeId: string, pageId: string, limit = 40): PageRevision[] {
+  return db.all('SELECT * FROM page_revisions WHERE store_id = ? AND page_id = ? ORDER BY version DESC LIMIT ?', storeId, pageId, limit).map(rowToRevision)
+}
+
+export function savePageRevision(db: Db, page: Page, note = 'Saved'): PageRevision {
+  const version = (db.one<{ version: number | null }>('SELECT MAX(version) version FROM page_revisions WHERE page_id = ?', page.id)?.version ?? 0) + 1
+  const revisionId = id('rev')
+  db.insert('page_revisions', {
+    id: revisionId,
+    page_id: page.id,
+    store_id: page.storeId,
+    version,
+    snapshot: pageSnapshot(page),
+    note: note.slice(0, 120) || 'Saved',
+    created_at: now(),
+  })
+  return rowToRevision(db.one('SELECT * FROM page_revisions WHERE id = ?', revisionId) as Row)
+}
+
+export function ensurePageRevision(db: Db, page: Page): PageRevision {
+  return listPageRevisions(db, page.storeId, page.id, 1)[0] ?? savePageRevision(db, page, 'Original')
+}
+
+export function restorePageRevision(db: Db, storeId: string, pageId: string, revisionId: string): Page {
+  const row = db.one('SELECT * FROM page_revisions WHERE id = ? AND page_id = ? AND store_id = ?', revisionId, pageId, storeId)
+  if (!row) throw new Error('No such page revision')
+  const revision = rowToRevision(row)
+  const restored = updatePage(db, storeId, pageId, revision.snapshot)
+  savePageRevision(db, restored, `Restored version ${revision.version}`)
+  return restored
+}
+
+/** The chosen home page. Draft homes are visible in preview before publication. */
+export function homePage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND is_home = 1 ${opts.preview ? '' : "AND status = 'published'"}`, storeId)
   return row ? rowToPage(row) : null
 }
 
-/** The checkout built from blocks, if the store has one. Drafts count in preview, so the editor shows what it is about to publish. */
-export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
-  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' AND mode = 'blocks' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
+/** Copied and native checkouts use the same store-owned payment endpoints. */
+export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean; productId?: string } = {}): Page | null {
+  if(opts.productId){const matching=db.one(`SELECT * FROM pages WHERE store_id=? AND role='checkout' AND product_id=? ${opts.preview?'':"AND status='published'"} ORDER BY created_at,rowid LIMIT 1`,storeId,opts.productId);if(matching)return rowToPage(matching)}
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
+  return row ? rowToPage(row) : null
+}
+
+export function liveCartPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'cart' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
   return row ? rowToPage(row) : null
 }
 
@@ -120,7 +207,9 @@ export function createPage(
     created_at: timestamp,
     updated_at: timestamp,
   })
-  return getPage(db, storeId, pageId) as Page
+  const page = getPage(db, storeId, pageId) as Page
+  savePageRevision(db, page, 'Created')
+  return page
 }
 
 export function updatePage(db: Db, storeId: string, pageId: string, patch: Partial<Omit<Page, 'id' | 'storeId' | 'createdAt' | 'updatedAt'>>): Page {
@@ -510,9 +599,18 @@ export function pageTemplate(key: string): PageTemplate {
 
 /* ------------------------------------------------------------- rendering */
 
-export function blockContextFor(db: Db, store: Store, base: string): BlockContext {
-  const products = listProducts(db, store.id, { status: 'published', limit: 60 })
-  const currency = store.currency
+export function blockContextFor(db: Db, store: Store, base: string, localized?: { currency: string; exchangeRate: number; locale?: string }): BlockContext {
+  const rawProducts = listProducts(db, store.id, { status: 'published', limit: 60 })
+  const rate = minorUnitRate(localized, store.currency)
+  const products = rawProducts.map((product) => ({
+    ...product,
+    variants: product.variants.map((variant) => ({
+      ...variant,
+      priceCents: Math.round(variant.priceCents * rate),
+      compareAtCents: variant.compareAtCents === null ? null : Math.round(variant.compareAtCents * rate),
+    })),
+  }))
+  const currency = localized?.currency ?? store.currency
   return {
     storeName: store.name,
     base,
@@ -525,6 +623,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
       title: product.title,
       subtitle: product.subtitle,
       image: product.heroImage,
+      media: productGalleryMedia(product),
       priceCents: Math.min(...product.variants.map((variant) => variant.priceCents)),
       variants: product.variants.map((variant) => ({ id: variant.id, title: variant.title, priceCents: variant.priceCents })),
       options: product.options,
@@ -541,7 +640,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
     bundles: products
       .map((product) => {
         const bundle = bundleFor(db, store.id, product.id)
-        return bundle ? { productId: product.id, html: renderBundleWidget(bundle, product, currency) } : null
+        return bundle ? { productId: product.id, html: renderBundleWidget({ ...bundle, tiers: bundle.tiers.map(tier => ({ ...tier, ...(tier.unitPriceCents!==undefined?{unitPriceCents: Math.round(tier.unitPriceCents * rate)}:{}), ...(tier.totalPriceCents!==undefined?{totalPriceCents:Math.round(tier.totalPriceCents*rate)}:{}), ...(tier.compareAtTotalCents !== undefined ? { compareAtTotalCents: Math.round(tier.compareAtTotalCents * rate) } : {}) })) }, product, currency, { locale: localized?.locale }) } : null
       })
       .filter((entry): entry is { productId: string; html: string } => entry !== null),
   }
@@ -558,6 +657,7 @@ export { BLOCK_RUNTIME }
 
 /** Styles the blocks need on top of the theme. Tokens come from the theme; nothing here hard-codes a colour. */
 export const PAGE_CSS = `
+.blk-font{font-family:var(--block-font,var(--body))}.blk-font h1,.blk-font h2,.blk-font h3,.blk-font .name,.blk-font .word,.blk-font .title{font-family:var(--block-display,var(--display))}
 .blk{padding-block:var(--pad)}
 .pad-none{--pad:0}.pad-small{--pad:1.4rem}.pad-medium{--pad:3.2rem}.pad-large{--pad:5.5rem}
 .blk-in{margin-inline:auto;width:min(92vw,var(--w))}
@@ -590,7 +690,7 @@ video.video{width:100%;height:auto;aspect-ratio:auto}
 .ba input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
 .ba .lbl{position:absolute;bottom:.7rem;font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;background:rgba(0,0,0,.55);color:#fff;padding:.4rem .6rem;border-radius:999px}
 .ba .lbl.l{left:.7rem}.ba .lbl.r{right:.7rem}
-.cols{display:grid;gap:1.6rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1.4rem}
+.cols>.col{min-width:0;overflow-wrap:anywhere}.cols{display:grid;gap:1.6rem;grid-template-columns:var(--cols-desktop,repeat(var(--per,3),minmax(0,1fr)));margin-top:1.4rem}
 .col .ico{font-size:1.6rem;color:var(--primary)}.col h3{margin:.5rem 0 .3rem}.col p{color:var(--muted);font-size:.94rem;margin:0}
 .buybox-blk{display:grid;gap:2.5rem;grid-template-columns:1fr 1fr;align-items:start}
 .buybox-blk figure{margin:0}.buybox-blk img{width:100%;border-radius:var(--radius)}
@@ -673,6 +773,6 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .costeps li{display:flex;align-items:center;gap:.4rem}.costeps li+li::before{content:'›';margin-right:.4rem;opacity:.5}
 .costeps span{width:22px;height:22px;border-radius:999px;border:1px solid var(--line);display:grid;place-items:center;font-size:.72rem;font-weight:600}
 .costeps .now{color:var(--ink);font-weight:600}.costeps .now span,.costeps .done span{background:var(--primary);color:#fff;border-color:var(--primary)}
-@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols,.hiw,.vwall{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}.letter{grid-template-columns:1fr}}
-@media (max-width:520px){.cols,.hiw{grid-template-columns:1fr}.tl li{grid-template-columns:1fr;gap:.2rem}}
+@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:var(--cols-tablet,repeat(2,minmax(0,1fr)))}.hiw,.vwall{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}.letter{grid-template-columns:1fr}}
+@media (max-width:520px){.cols{grid-template-columns:var(--cols-mobile,minmax(0,1fr))}.hiw{grid-template-columns:1fr}.tl li{grid-template-columns:1fr;gap:.2rem}}
 `

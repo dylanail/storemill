@@ -159,7 +159,7 @@ export function blocksFromOutline(sections: RipSection[], product: { id: string;
   return blocks
 }
 
-const UA = 'Mozilla/5.0 (compatible; AmborasRip/1.0)'
+const UA = 'Mozilla/5.0 (compatible; storemillRip/1.0)'
 
 export async function ripFunnel(url: string, fetcher: Fetcher = realFetcher): Promise<Omit<RipResult, 'blocks'>> {
   const response = await fetcher(url)

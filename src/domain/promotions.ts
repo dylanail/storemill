@@ -1,5 +1,6 @@
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { quantityPrice } from './quantity-pricing.ts'
 import { percentOf } from '../lib/money.ts'
 import type { LineItem, Promotion } from './types.ts'
 
@@ -113,12 +114,16 @@ export function applyPromotions(
   db: Db,
   storeId: string,
   items: LineItem[],
-  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean } = { subtotalCents: 0 },
+  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean; regionId?: string; currencyRate?: number; promotions?: Promotion[] } = { subtotalCents: 0 },
 ): PromotionOutcome {
   const at = now()
-  const all = listPromotions(db, storeId).filter((promotion) => isLive(promotion, at))
+  const all = (opts.promotions ?? listPromotions(db, storeId)).filter((promotion) => isLive(promotion, at))
   const code = (opts.code ?? '').trim().toUpperCase()
-  const candidates = all.filter((promotion) => (promotion.automatic && !promotion.code) || (code && promotion.code === code))
+  const candidates = all
+    .filter((promotion) => (promotion.automatic && !promotion.code) || (code && promotion.code === code))
+    .filter((promotion) => !promotion.rules.maxUses || promotion.usageCount < promotion.rules.maxUses)
+    .filter((promotion) => !promotion.rules.regionIds?.length || Boolean(opts.regionId && promotion.rules.regionIds.includes(opts.regionId)))
+    .sort((a, b) => Number(b.rules.combinable===false)-Number(a.rules.combinable===false)||(b.rules.priority ?? 0) - (a.rules.priority ?? 0))
 
   const collectionsByProduct = new Map<string, string[]>()
   if (items.length) {
@@ -135,14 +140,11 @@ export function applyPromotions(
 
   const outcome: PromotionOutcome = { discountCents: 0, freeShipping: false, applied: [] }
   for (const promotion of candidates) {
-    if (promotion.rules.minSubtotalCents && opts.subtotalCents < promotion.rules.minSubtotalCents) continue
+    if (promotion.rules.minSubtotalCents && opts.subtotalCents < Math.round(promotion.rules.minSubtotalCents * (opts.currencyRate ?? 1))) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
-    // A gift is not bought and an order bump is not a unit of the product on
-    // offer: counting the $2.99 shipping protection as the second item made a
-    // store-wide "buy two, save 15%" fire on a single-product cart, so every
-    // customer who accepted the bump took 15% off the whole order with it.
     const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf && item.source !== 'order-bump')
-    if (!eligible.length && promotion.kind !== 'free_shipping') continue
+    const scoped = promotion.rules.productIds?.length || promotion.rules.variantIds?.length || promotion.rules.collectionIds?.length
+    if (!eligible.length && (promotion.kind !== 'free_shipping' || scoped)) continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
     if (promotion.rules.minQuantity && units < promotion.rules.minQuantity) continue
@@ -153,7 +155,7 @@ export function applyPromotions(
         amount = percentOf(eligibleTotal, promotion.value)
         break
       case 'fixed':
-        amount = Math.min(promotion.value, eligibleTotal)
+        amount = Math.min(Math.round(promotion.value * (opts.currencyRate ?? 1)), eligibleTotal)
         break
       case 'free_shipping':
         outcome.freeShipping = true
@@ -163,20 +165,42 @@ export function applyPromotions(
         if (units >= (promotion.rules.buyQuantity ?? 2)) amount = percentOf(eligibleTotal, promotion.value)
         break
       case 'tiered': {
-        const tiers = [...(promotion.rules.tiers ?? [])].sort((a, b) => b.quantity - a.quantity)
-        const hit = tiers.find((tier) => units >= tier.quantity)
-        if (hit) amount = percentOf(eligibleTotal, hit.percent)
+        const tiers=(promotion.rules.tiers||[]).filter(tier=>Number.isSafeInteger(tier.quantity)&&tier.quantity>0)
+        const valid=tiers.filter(tier=>[tier.unitPriceCents,tier.totalPriceCents].every(price=>price===undefined||Boolean(promotion.rules.productIds?.length&&Number.isSafeInteger(price)&&price>0)))
+        const converted=valid.map(tier=>({...tier,...(tier.unitPriceCents!==undefined?{unitPriceCents:Math.round(tier.unitPriceCents*(opts.currencyRate??1))}:{}),...(tier.totalPriceCents!==undefined?{totalPriceCents:Math.round(tier.totalPriceCents*(opts.currencyRate??1))}:{})}))
+        if(units)amount=Math.max(0,eligibleTotal-quantityPrice(converted,units,eligibleTotal/units,promotion.rules.quantityMode))
         break
       }
       case 'bogo': {
         const buy = promotion.rules.buyQuantity ?? 1
         const free = promotion.rules.getQuantity ?? 1
-        const sets = Math.floor(units / (buy + free))
+        const buying = promotion.rules.buyProductIds?.length
+          ? items.filter((item) => promotion.rules.buyProductIds?.includes(item.productId) && !item.giftOf && item.source !== 'order-bump')
+          : eligible
+        const rewards = promotion.rules.getProductIds?.length
+          ? items.filter((item) => promotion.rules.getProductIds?.includes(item.productId) && !item.giftOf && item.source !== 'order-bump')
+          : eligible
+        const buyUnits = buying.reduce((sum, item) => sum + item.quantity, 0)
+        const sets = promotion.rules.getProductIds?.length ? Math.floor(buyUnits / buy) : Math.floor(buyUnits / (buy + free))
         if (sets > 0) {
-          const unitPrices = eligible
+          const unitPrices = rewards
             .flatMap((item) => Array.from({ length: item.quantity }, () => item.unitCents))
             .sort((a, b) => a - b)
-          amount = unitPrices.slice(0, sets * free).reduce((sum, price) => sum + price, 0)
+          amount = percentOf(unitPrices.slice(0, sets * free).reduce((sum, price) => sum + price, 0), promotion.value || 100)
+        }
+        break
+      }
+      case 'mix_match': {
+        const distinct = new Set(eligible.map((item) => item.productId)).size
+        if (distinct >= (promotion.rules.requiredDistinctProducts ?? 2)) amount = percentOf(eligibleTotal, promotion.value)
+        break
+      }
+      case 'fixed_bundle': {
+        const required = promotion.rules.minQuantity ?? promotion.rules.buyQuantity ?? 2
+        const target = Math.round((promotion.rules.bundlePriceCents ?? promotion.value) * (opts.currencyRate ?? 1))
+        if (units >= required && target >= 0) {
+          const prices=eligible.flatMap(item=>Array.from({length:item.quantity},()=>item.unitCents)).sort((a,b)=>b-a)
+          for(let offset=0;offset+required<=prices.length;offset+=required)amount+=Math.max(0,prices.slice(offset,offset+required).reduce((sum,unit)=>sum+unit,0)-target)
         }
         break
       }
@@ -192,13 +216,14 @@ export function applyPromotions(
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
       outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount, kind: promotion.kind })
+      if (promotion.rules.combinable === false) break
     }
   }
 
   // Quantity discounts do not stack. A store-wide "buy two, save 15%" and a
   // product's own bundle tiers are two answers to the same question; the
   // customer gets the better one, not both.
-  const quantityKinds = new Set(['bundle', 'tiered'])
+  const quantityKinds = new Set(['bundle', 'tiered', 'mix_match', 'fixed_bundle'])
   const quantity = outcome.applied.filter((entry) => quantityKinds.has(entry.kind))
   if (quantity.length > 1) {
     const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))
@@ -213,4 +238,47 @@ export function recordPromotionUse(db: Db, promotionIds: string[]) {
   for (const promotionId of promotionIds) {
     db.run('UPDATE promotions SET usage_count = usage_count + 1 WHERE id = ?', promotionId)
   }
+}
+
+/** Allocate the final server discounts to eligible cart lines, preserving every cent. */
+export function promotionLineDiscounts(db: Db, storeId: string, items: LineItem[], applied: Array<{ id: string; amountCents: number }>, currencyRate = 1): number[] {
+  const discounts = items.map(() => 0)
+  const promotions = listPromotions(db, storeId)
+  const memberships = new Map<string, string[]>()
+  for (const row of db.all<{ product_id: string; collection_id: string }>('SELECT cp.product_id,cp.collection_id FROM collection_products cp JOIN products p ON p.id=cp.product_id WHERE p.store_id=?', storeId)) {
+    memberships.set(row.product_id, [...(memberships.get(row.product_id) || []), row.collection_id])
+  }
+  for (const appliedRule of applied) {
+    const rule = promotions.find(rule => rule.id === appliedRule.id)
+    if (!rule || !appliedRule.amountCents) continue
+    const eligible = (rule.kind === 'bogo' && rule.rules.getProductIds?.length ? items.filter(item => rule.rules.getProductIds!.includes(item.productId)) : eligibleItems(rule, items, memberships)).filter(item => !item.giftOf && item.source !== 'order-bump')
+    const indices = items.map((item, index) => eligible.includes(item) ? index : -1).filter(index => index >= 0)
+    const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
+    const tier = rule.kind === 'tiered' ? [...(rule.rules.tiers || [])].sort((a,b) => b.quantity-a.quantity).find(tier => units >= tier.quantity) : undefined
+    // Only complete sets are discounted. Preserve the normal line price of
+    // an unrelated spare item instead of spreading set savings across it.
+    let setWeights: number[] | undefined
+    if(rule.kind==='fixed_bundle'){
+      setWeights=items.map(()=>0)
+      const required=rule.rules.minQuantity??rule.rules.buyQuantity??2
+      const target=Math.round((rule.rules.bundlePriceCents??rule.value)*currencyRate)
+      const units=indices.flatMap(index=>Array.from({length:items[index]!.quantity},()=>({index,price:items[index]!.unitCents}))).sort((a,b)=>b.price-a.price)
+      for(let offset=0;offset+required<=units.length;offset+=required){
+        const group=units.slice(offset,offset+required),full=group.reduce((sum,item)=>sum+item.price,0),saving=Math.max(0,full-target)
+        for(const item of group)setWeights[item.index]!+=full?saving*item.price/full:0
+      }
+    }
+    const weights = indices.map(index => setWeights ? Math.min(setWeights[index]!,items[index]!.unitCents*items[index]!.quantity-discounts[index]!) : tier?.unitPriceCents !== undefined
+      ? Math.min(items[index]!.unitCents * items[index]!.quantity - discounts[index]!, Math.max(0, items[index]!.unitCents - Math.round(tier.unitPriceCents * currencyRate)) * items[index]!.quantity)
+      : items[index]!.unitCents * items[index]!.quantity - discounts[index]!)
+    let remaining = appliedRule.amountCents
+    let weight = weights.reduce((sum, amount) => sum + amount, 0)
+    for (const [position, index] of indices.entries()) {
+      const available = items[index]!.unitCents * items[index]!.quantity - discounts[index]!
+      const take = Math.min(available, weight ? Math.round(remaining * weights[position]! / weight) : 0)
+      discounts[index]! += take
+      remaining -= take; weight -= weights[position]!
+    }
+  }
+  return discounts
 }

@@ -21,4 +21,16 @@ try {
   /* no .env — every setting has a default, and the deployments pass real variables */
 }
 
+// Storemill settings take precedence; legacy deployment variables remain valid.
+for (const [name, value] of Object.entries(process.env)) {
+  if (name.startsWith('STOREMILL_') && value !== undefined) process.env['AMBORAS_' + name.slice(10)] = value
+}
+
+if (process.env.NODE_ENV === 'production') {
+  const secret = process.env.AMBORAS_SECRET ?? ''
+  if (secret.trim().length < 32 || /^(change-me|dev-secret)/i.test(secret.trim())) {
+    throw new Error('Set STOREMILL_SECRET (or AMBORAS_SECRET) to a persistent random value of at least 32 characters before starting production.')
+  }
+}
+
 export {}

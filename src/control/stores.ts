@@ -8,11 +8,6 @@ export type StoreEnvironment = {
   storeId: string
   kind: 'draft' | 'live'
   theme: Theme
-  /**
-   * The brand as this environment has it. `stores.brand` is the working copy
-   * every editor and tool writes; publishing copies it here, and the live
-   * storefront renders from this rather than from the row underneath it.
-   */
   brand: Brand
   buildState: 'idle' | 'building' | 'ready' | 'failed'
   buildLog: Array<{ at: string; message: string; level: string }>
@@ -24,6 +19,8 @@ export type StoreEnvironment = {
 export type Store = {
   id: string
   ownerId: string
+  /** Top-level asset shape. Funnels get a conversion path; stores get a catalog storefront. */
+  kind: 'store' | 'funnel'
   name: string
   slug: string
   currency: string
@@ -47,9 +44,11 @@ export const DEFAULT_THEME: Theme = {
 }
 
 function rowToStore(row: Row): Store {
+  const build = json<{ shape?: string }>(row.build, {})
   return {
     id: row.id as string,
     ownerId: row.owner_id as string,
+    kind: build.shape === 'funnel' ? 'funnel' : 'store',
     name: row.name as string,
     slug: row.slug as string,
     currency: row.currency as string,
@@ -66,7 +65,7 @@ function rowToStore(row: Row): Store {
 export function createStore(
   db: Db,
   ownerId: string,
-  input: { name: string; prompt?: string; currency?: string; referenceImage?: string; referenceUrl?: string },
+  input: { name: string; kind?: Store['kind']; prompt?: string; currency?: string; referenceImage?: string; referenceUrl?: string },
 ): Store {
   const storeId = id('store')
   const timestamp = now()
@@ -83,6 +82,7 @@ export function createStore(
       models: {},
       reference_image: input.referenceImage ?? '',
       reference_url: input.referenceUrl ?? '',
+      ...(input.kind ? { build: { shape: input.kind } } : {}),
       created_at: timestamp,
     })
     for (const kind of ['draft', 'live'] as const) {
@@ -139,8 +139,18 @@ export function updateStore(
   if (patch.models !== undefined) values.models = patch.models
   if (patch.referenceImage !== undefined) values.reference_image = patch.referenceImage
   if (patch.referenceUrl !== undefined) values.reference_url = patch.referenceUrl
-  if (patch.brand !== undefined) values.brand = { ...store.brand, ...patch.brand }
-  db.update('stores', storeId, values)
+  const brand = patch.brand === undefined ? undefined : { ...store.brand, ...patch.brand }
+  if (brand !== undefined) values.brand = brand
+  // The store row is the editable working copy used by the admin and the
+  // assistant. Mirror brand edits into the draft environment so preview and
+  // live can both render through the same explicit environment boundary.
+  db.tx(() => {
+    db.update('stores', storeId, values)
+    if (brand !== undefined) {
+      const draft = environment(db, storeId, 'draft')
+      db.update('store_environments', draft.id, { brand, updated_at: now() })
+    }
+  })
   return getStore(db, storeId) as Store
 }
 
@@ -152,8 +162,8 @@ function rowToEnvironment(row: Row): StoreEnvironment {
     storeId: row.store_id as string,
     kind: row.kind as 'draft' | 'live',
     theme: { ...DEFAULT_THEME, ...json(row.theme, {} as Theme) },
-    buildState: row.build_state as StoreEnvironment['buildState'],
     brand: json(row.brand, {} as Brand),
+    buildState: row.build_state as StoreEnvironment['buildState'],
     buildLog: json(row.build_log, []),
     version: row.version as number,
     publishedAt: (row.published_at as string | null) ?? null,
@@ -194,11 +204,10 @@ export function publish(db: Db, storeId: string): StoreEnvironment {
   const draft = environment(db, storeId, 'draft')
   const live = environment(db, storeId, 'live')
   const timestamp = now()
-  const store = getStore(db, storeId)
   db.tx(() => {
     db.update('store_environments', live.id, {
       theme: draft.theme,
-      brand: store?.brand ?? live.brand,
+      brand: draft.brand,
       version: live.version + 1,
       build_state: 'ready',
       build_log: [...live.buildLog, { at: timestamp, message: `Published draft v${draft.version}`, level: 'info' }].slice(-40),
@@ -215,8 +224,6 @@ export function rollback(db: Db, storeId: string): StoreEnvironment {
   const draft = environment(db, storeId, 'draft')
   db.tx(() => {
     db.update('store_environments', draft.id, { theme: live.theme, brand: live.brand, updated_at: now() })
-    // The brand goes back with the theme, or rolling back would restore a
-    // layout with the colours that broke it still in place.
     if (Object.keys(live.brand).length) db.update('stores', storeId, { brand: live.brand })
   })
   return environment(db, storeId, 'draft')
@@ -229,16 +236,17 @@ export function rollback(db: Db, storeId: string): StoreEnvironment {
  */
 export function publishState(db: Db, storeId: string): { label: string; ready: boolean; reason: string } {
   const store = getStore(db, storeId)
-  if (!store) return { label: 'Publish store', ready: false, reason: 'No store' }
+  if (!store) return { label: 'Publish asset', ready: false, reason: 'No asset' }
+  const noun = store.kind === 'funnel' ? 'funnel' : 'store'
   const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", storeId)?.c ?? 0
-  if (!products) return { label: 'Add a product to publish', ready: false, reason: 'A live store needs at least one published product.' }
+  if (!products) return { label: 'Add a product to publish', ready: false, reason: `A live ${noun} needs at least one published product.` }
   const draft = environment(db, storeId, 'draft')
   const live = environment(db, storeId, 'live')
-  if (store.status !== 'live') return { label: 'Publish store', ready: true, reason: 'Your storefront goes live at its address.' }
-  if (JSON.stringify(draft.theme) !== JSON.stringify(live.theme) || JSON.stringify(store.brand) !== JSON.stringify(live.brand)) {
+  if (store.status !== 'live') return { label: `Publish ${noun}`, ready: true, reason: `Your ${noun} goes live at its address.` }
+  if (JSON.stringify(draft.theme) !== JSON.stringify(live.theme) || JSON.stringify(draft.brand) !== JSON.stringify(live.brand)) {
     return { label: 'Publish changes', ready: true, reason: 'The draft has edits that are not live yet.' }
   }
-  return { label: 'Store is live', ready: false, reason: `Live since ${live.publishedAt?.slice(0, 10) ?? 'today'}.` }
+  return { label: `${noun === 'store' ? 'Store' : 'Funnel'} is live`, ready: false, reason: `Live since ${live.publishedAt?.slice(0, 10) ?? 'today'}.` }
 }
 
 /* -------------------------------------------------------------------- domains */
@@ -262,7 +270,7 @@ export function addDomain(db: Db, storeId: string, hostname: string) {
     hostname: clean,
     records: [
       { type: 'CNAME', name: clean.split('.').length > 2 ? (clean.split('.')[0] as string) : 'www', value: 'edge.amboras.app' },
-      { type: 'TXT', name: `_amboras.${clean}`, value: `amboras-verify=${verification}` },
+      { type: 'TXT', name: `_storemill.${clean}`, value: `storemill-verify=${verification}` },
     ],
   }
 }

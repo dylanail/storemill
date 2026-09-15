@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createPage, getPage, listPageRevisions } from '../src/pages/store.ts'
+import { captureAssistantContext } from '../src/agent/context.ts'
 import { fresh } from './helpers.ts'
 import { anyModel, catalog, complete, completeJson, defaultChoice, modelFor, parseChoice, planWithTools, resolvedModels, S, useModelTransport, type ModelChoice } from '../src/agent/models.ts'
 import { createStore, updateStore } from '../src/control/stores.ts'
@@ -352,5 +354,34 @@ test('with no model the assistant still answers, from the tools own summaries', 
   await withEnv({}, async () => {
     const result = await ask(db, { storeId: store.id, userId: user.id, text: 'Create a 15% discount on code SPRING15' })
     assert.match(result.assistant.content, /SPRING15/)
+  })
+})
+
+
+test('assistant reads copied HTML and uses the observed hash to finish the edit in one request', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    const { db, user } = fresh()
+    const store = createStore(db, user.id, { name: 'Context test' })
+    const page = createPage(db, store.id, { title: 'Imported home', mode: 'html', rawHtml: '<!doctype html><h1>Old heading</h1><p>Preserve this paragraph.</p>' })
+    let step = 0
+    const net = fakeNetwork(({ body }) => {
+      step++
+      if (step === 1) return anthropicText('', { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'read_1', name: 'read_page_html', input: { pageId: page.id, search: 'Old heading' } }] })
+      if (step === 2) {
+        const prompt = (body.messages as Array<{content:string}>).at(-1)!.content
+        const hash = /"hash":"([a-f0-9]+)"/.exec(prompt)?.[1]
+        assert.ok(hash, 'the actual read result must reach the second planning call')
+        assert.match(prompt, /Old heading/)
+        return anthropicText('', { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'write_1', name: 'replace_page_html', input: { pageId: page.id, hash, find: 'Old heading', replacement: 'New heading' } }] })
+      }
+      return anthropicText('Updated the heading on Imported home.')
+    })
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'Change this heading to New heading', page: captureAssistantContext(db, store.id, 'editor', { path: '/admin/pages/' + page.id + '/edit' }) })
+    assert.deepEqual(result.failures, [])
+    assert.equal(getPage(db, store.id, page.id)!.rawHtml, '<!doctype html><h1>New heading</h1><p>Preserve this paragraph.</p>')
+    assert.equal(listPageRevisions(db, store.id, page.id).length, 2)
+    assert.equal(net.calls.length, 3)
+    assert.match(JSON.stringify(net.calls[0]!.body.system), /Imported home/)
+    assert.equal(result.assistant.content, 'Updated the heading on Imported home.')
   })
 })

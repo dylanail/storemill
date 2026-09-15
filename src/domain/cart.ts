@@ -1,12 +1,15 @@
 import { json, now, type Db, type Row } from '../lib/db.ts'
+import { getInstalled } from '../control/plugins.ts'
+import { badRequest } from '../lib/http.ts'
 import { id } from '../lib/ids.ts'
 import { bundleFor, tierFor } from './bundles.ts'
 import { getProduct, getVariant } from './catalog.ts'
 import { applyPromotions } from './promotions.ts'
-import { defaultRegion, getRegion, rateFor } from './regions.ts'
+import { convertCents, defaultRegion, getRegion, minorUnitRate, rateFor } from './regions.ts'
 import type { Address, LineItem, Totals } from './types.ts'
 
-export type CheckoutDraft = { email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean }
+export type CheckoutAdvertising = { url:string; ip:string; userAgent:string; fbp?:string; fbc?:string; ttp?:string; ttclid?:string }
+export type CheckoutDraft = { preview?: boolean; email?: string; name?: string; phone?: string; address?: Address; billingSame?: boolean; billingAddress?: Address; marketing?: boolean; advertising?:CheckoutAdvertising }
 
 export type Cart = {
   id: string
@@ -45,10 +48,10 @@ export function getCart(db: Db, storeId: string, cartId: string): Cart | null {
   return row ? rowToCart(row) : null
 }
 
-export function createCart(db: Db, storeId: string): Cart {
+export function createCart(db: Db, storeId: string, regionId?: string, options: { preview?: boolean } = {}): Cart {
   const cartId = id('cart')
   const timestamp = now()
-  const region = defaultRegion(db, storeId)
+  const region = regionId ? getRegion(db, storeId, regionId) : defaultRegion(db, storeId)
   db.insert('carts', {
     id: cartId,
     store_id: storeId,
@@ -57,25 +60,36 @@ export function createCart(db: Db, storeId: string): Cart {
     discount_code: '',
     region_id: region?.id ?? null,
     order_id: null,
+    checkout: options.preview ? { preview: true } : {},
     created_at: timestamp,
     updated_at: timestamp,
   })
   return getCart(db, storeId, cartId) as Cart
 }
 
-/**
- * `unitCents` overrides the catalog price for this line. It exists for the
- * order bump, whose whole point is a price the funnel sets rather than the
- * one on the product, and it is only ever passed from a record on the server
- * — never from a request.
- */
-export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number): Cart {
+export function setCartRegion(db: Db, storeId: string, cartId: string, regionId: string): Cart {
+  const cart = getCart(db, storeId, cartId)
+  const region = getRegion(db, storeId, regionId)
+  if (!cart || !region) throw new Error('No such cart or region')
+  db.update('carts', cart.id, { region_id: region.id, shipping_option_id: '', updated_at: now() })
+  return getCart(db, storeId, cart.id) as Cart
+}
+
+/** A trusted server-side price override is used by configured order bumps. */
+export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number, engraving = ''): Cart {
   const cart = getCart(db, storeId, cartId) ?? createCart(db, storeId)
   const variant = getVariant(db, storeId, variantId)
   if (!variant) throw new Error(`No variant ${variantId}`)
   const product = getProduct(db, storeId, variant.productId)
-  if (!product || product.status !== 'published') throw new Error('That product is not available')
+  if (!product || product.status !== 'published' && !(cart.checkout.preview && product.status === 'draft')) throw new Error('That product is not available')
 
+  engraving = engraving.trim()
+  if (engraving) {
+    const plugin = getInstalled(db, storeId, 'engraving')
+    if (!plugin?.enabled) throw badRequest('Engraving is not available on this store')
+    const limit = Number(plugin.settings.maxCharacters) || 12
+    if (engraving.length > limit) throw badRequest(`Engraving is limited to ${limit} characters`)
+  }
   const items = [...cart.items]
   // A gift line for the same variant is not the line being added to: it is
   // derived, priced at zero, and rebuilt by reconcileGifts on every change,
@@ -83,13 +97,15 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
   // cannot buy the product at all. setQuantity has always made this
   // distinction; adding did not.
   const existing = items.find((item) => item.variantId === variantId && !item.giftOf)
+  if (existing && (existing.engraving || '') !== engraving) throw badRequest('This variant is already in your cart with different engraving. Remove it before choosing new text.')
   if (existing) existing.quantity += quantity
   else {
     items.push({
       variantId,
       productId: product.id,
       title: product.title,
-      variantTitle: variant.title,
+      variantTitle: engraving ? `${variant.title} · Engraving: ${engraving}` : variant.title,
+      ...(engraving ? { engraving } : {}),
       image: variant.image || product.heroImage,
       unitCents: unitCents ?? variant.priceCents,
       quantity,
@@ -141,6 +157,19 @@ export function reconcileGifts(db: Db, storeId: string, items: LineItem[]): Line
       giftOf: productId,
     })
   }
+  for (const item of paid) {
+    const owner = getProduct(db, storeId, item.productId)
+    let giftIds: unknown
+    try { giftIds = JSON.parse(owner?.metadata['includedGifts:' + item.variantId] || '[]') } catch { continue }
+    if (!Array.isArray(giftIds)) continue
+    for (const giftId of new Set(giftIds.slice(0, 30))) {
+      if (typeof giftId !== 'string') continue
+      const variant = getVariant(db, storeId, giftId), product = variant ? getProduct(db, storeId, variant.productId) : null
+      if (!variant || !product || product.metadata.sourcePurpose !== 'gift' || variant.priceCents !== 0) continue
+      if (kept.some(line => line.giftOf === item.productId && line.variantId === giftId)) continue
+      kept.push({variantId:variant.id,productId:product.id,title:product.title,variantTitle:variant.title+' — included',image:variant.image||product.heroImage,unitCents:0,quantity:item.quantity,source:'package-gift',giftOf:item.productId})
+    }
+  }
   return kept
 }
 
@@ -178,10 +207,14 @@ export function applyCode(db: Db, storeId: string, cartId: string, code: string)
 export function totals(db: Db, storeId: string, cart: Cart, opts: { isFirstOrder?: boolean } = {}): Totals {
   const region = cart.regionId ? getRegion(db, storeId, cart.regionId) : defaultRegion(db, storeId)
   const currency = region?.currency ?? 'USD'
-  const subtotalCents = cart.items.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
-  const promo = applyPromotions(db, storeId, cart.items, {
+  const sourceCurrency = db.one<{ currency: string }>('SELECT currency FROM stores WHERE id = ?', storeId)?.currency ?? 'USD'
+  const localizedItems = cart.items.map((item) => ({ ...item, unitCents: convertCents(item.unitCents, region, sourceCurrency) }))
+  const subtotalCents = localizedItems.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
+  const promo = applyPromotions(db, storeId, localizedItems, {
     code: cart.discountCode,
     subtotalCents,
+    regionId: region?.id,
+    currencyRate: minorUnitRate(region, sourceCurrency),
     ...(opts.isFirstOrder === undefined ? {} : { isFirstOrder: opts.isFirstOrder }),
   })
   const discounted = Math.max(0, subtotalCents - promo.discountCents)

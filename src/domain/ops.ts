@@ -3,7 +3,9 @@ import { id } from '../lib/ids.ts'
 import { createProduct, getProduct, listProducts } from './catalog.ts'
 import { createReview } from './reviews.ts'
 import { listOrders } from './orders.ts'
-import type { Order, Product, Supplier } from './types.ts'
+import type { Order, Product, Supplier, Media } from './types.ts'
+import { readProductImages } from '../pages/product-media-import.ts'
+import type { TrackingEvent, TrackingSnapshot } from '../shipping/seventeen-track.ts'
 
 /**
  * The operations a dropshipper runs a store on: where products come from,
@@ -118,19 +120,21 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
   let fees = 0
   const byDay = new Map<string, { revenue: number; spend: number; profit: number }>()
   for (const order of orders) {
-    revenue += order.totalCents
-    const refunded = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
+    const baseTotal = order.baseTotalCents
+    revenue += baseTotal
+    const refundedCharged = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
+    const refunded = order.totalCents ? Math.round(refundedCharged * baseTotal / order.totalCents) : refundedCharged
     refunds += refunded
     const orderCogs = order.supplierOrder.costCents ?? order.items.reduce((sum, item) => sum + (products.get(item.productId)?.supplier.costCents ?? 0) * item.quantity, 0)
     const orderShip = order.supplierOrder.shippingCents ?? order.items.reduce((sum, item) => sum + (products.get(item.productId)?.supplier.shippingCents ?? 0), 0)
-    const orderFees = Math.round(order.totalCents * 0.029) + 30
+    const orderFees = Math.round(baseTotal * 0.029) + 30
     cogs += orderCogs
     supplierShipping += orderShip
     fees += orderFees
     const day = order.createdAt.slice(0, 10)
     const entry = byDay.get(day) ?? { revenue: 0, spend: 0, profit: 0 }
-    entry.revenue += order.totalCents
-    entry.profit += order.totalCents - refunded - orderCogs - orderShip - orderFees
+    entry.revenue += baseTotal
+    entry.profit += baseTotal - refunded - orderCogs - orderShip - orderFees
     byDay.set(day, entry)
   }
   let adSpend = 0
@@ -211,24 +215,32 @@ export type TrackingView = {
   steps: Array<{ key: string; label: string; at: string | null; done: boolean; detail?: string }>
   tracking: { number: string; carrier: string; url: string } | null
   estimate: { from: string; to: string } | null
+  live: { status: string; subStatus: string; syncedAt: string | null; events: TrackingEvent[] } | null
 }
 
-export function trackingFor(db: Db, storeId: string, order: Order): TrackingView {
+export function trackingFor(db: Db, storeId: string, order: Order, snapshot?: TrackingSnapshot | null): TrackingView {
   const shipment = order.fulfillments.find((entry) => entry.tracking)
-  const tracking = shipment ? (() => { const carrier = carrierFor(shipment.tracking, shipment.carrier); return { number: shipment.tracking, carrier: carrier.name, url: carrier.url } })() : null
+  const tracking = shipment ? (() => { const carrier = carrierFor(shipment.tracking, snapshot?.carrier || shipment.carrier); return { number: shipment.tracking, carrier: snapshot?.carrier || carrier.name, url: carrier.url } })() : null
   const first = order.items[0]
   const product = first ? getProduct(db, storeId, first.productId) : null
-  const estimate = product ? deliveryEstimate(product.supplier, order.createdAt) : null
+  const fallbackEstimate = product ? deliveryEstimate(product.supplier, order.createdAt) : null
+  const estimate = snapshot?.estimate.from || snapshot?.estimate.to
+    ? { from: snapshot.estimate.from ?? snapshot.estimate.to ?? '', to: snapshot.estimate.to ?? snapshot.estimate.from ?? '' }
+    : fallbackEstimate
   const shippedAt = shipment?.createdAt ?? null
+  const normalized = `${snapshot?.status ?? ''} ${snapshot?.subStatus ?? ''}`.toLowerCase()
+  const inTransit = /transit|pickup|delivered|exception/.test(normalized)
+  const delivered = Boolean(order.deliveredAt || /delivered/.test(normalized))
   return {
     order,
     tracking,
     estimate,
+    live: snapshot ? { status: snapshot.status, subStatus: snapshot.subStatus, syncedAt: snapshot.syncedAt, events: snapshot.events } : null,
     steps: [
       { key: 'placed', label: 'Order placed', at: order.createdAt, done: true },
       { key: 'processing', label: 'Being prepared', at: order.supplierOrder.placedAt ?? null, done: Boolean(order.supplierOrder.placedAt || shippedAt || order.deliveredAt), detail: product?.supplier.processingDays ? `Usually ${product.supplier.processingDays} days` : undefined },
-      { key: 'shipped', label: 'Shipped', at: shippedAt, done: Boolean(shippedAt || order.deliveredAt), detail: tracking ? `${tracking.carrier} ${tracking.number}` : undefined },
-      { key: 'delivered', label: 'Delivered', at: order.deliveredAt, done: Boolean(order.deliveredAt), detail: estimate && !order.deliveredAt ? `Estimated ${estimate.from} – ${estimate.to}` : undefined },
+      { key: 'shipped', label: 'Shipped', at: shippedAt, done: Boolean(shippedAt || inTransit || delivered), detail: tracking ? `${tracking.carrier} ${tracking.number}` : undefined },
+      { key: 'delivered', label: 'Delivered', at: order.deliveredAt ?? (delivered ? snapshot?.events[0]?.at ?? null : null), done: delivered, detail: estimate && !delivered ? `Estimated ${estimate.from} – ${estimate.to}` : undefined },
     ],
   }
 }
@@ -387,7 +399,7 @@ export function importReviews(db: Db, storeId: string, csv: string, opts: { prod
 
 /* ------------------------------------------------------- product import */
 
-export type ImportedProduct = { title: string; description: string; images: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; sku?: string }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string }
+export type ImportedProduct = { title: string; description: string; images: string[]; media?: Media[]; mediaIssues?: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
 
 /**
  * Import a product from a URL.
@@ -403,26 +415,56 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
   if (shopifyMatch) {
     try {
       const jsonUrl = `${source.origin}/products/${shopifyMatch[1]}.json`
-      const response = await fetchImpl(jsonUrl, { headers: { accept: 'application/json', 'user-agent': 'AmborasImport/1.0' } })
+      const response = await fetchImpl(jsonUrl, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
       if (response.ok) {
         const payload = (await response.json()) as { product?: ShopifyProduct }
-        if (payload.product) return fromShopify(payload.product, url)
+        if (payload.product) {
+          const imported = fromShopify(payload.product, url)
+          // The Ajax product feed exposes ordered videos as well as original images.
+          try {
+            const mediaResponse = await fetchImpl(`${source.origin}/products/${shopifyMatch[1]}.js`, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
+            const feed = mediaResponse.ok ? await mediaResponse.json() as { media?: Array<{media_type?:string;src?:string;alt?:string;preview_image?:{src?:string};sources?:Array<{url:string;mime_type?:string;width?:number}>}> } : null
+            if (Array.isArray(feed?.media) && feed.media.length) {
+              const media: Media[] = []
+              for (const item of feed.media) {
+                if (item.media_type === 'image' && item.src) media.push({ url: new URL(item.src, url).href, alt: item.alt || '', kind: 'image' })
+                else if (item.media_type === 'video') {
+                  const file = (item.sources || []).filter(source => source.mime_type === 'video/mp4' || /\.mp4([?#]|$)/i.test(source.url)).sort((a,b) => (b.width || 0) - (a.width || 0))[0]
+                  if (file) media.push({ url: new URL(file.url, url).href, alt: item.alt || '', kind: 'video', ...(item.preview_image?.src ? { poster: new URL(item.preview_image.src,url).href } : {}) })
+                  else (imported.mediaIssues ??= []).push('A source product video has no downloadable MP4. Keep the source player or upload its original video; its poster was not imported as a slide.')
+                } else if (item.media_type !== 'image') (imported.mediaIssues ??= []).push(`Source product media ${item.media_type || 'of unknown type'} needs its original player or model support; no still image was substituted.`)
+              }
+              // Never replace a complete image feed with an incomplete preview-only feed.
+              if (imported.images.every(url => media.some(item => item.kind === 'image' && item.url === url))) {
+                imported.media = media
+                imported.images = media.filter(item => item.kind === 'image').map(item => item.url)
+              }
+            }
+          } catch { /* The original .json image list remains authoritative if Ajax media is unavailable. */ }
+          return imported
+        }
       }
     } catch { /* fall through to the generic path */ }
   }
-  const response = await fetchImpl(url, { headers: { 'user-agent': 'AmborasImport/1.0', accept: 'text/html' } })
+  const response = await fetchImpl(url, { headers: { 'user-agent': 'storemillImport/1.0', accept: 'text/html' } })
   if (!response.ok) throw new Error(`The page answered ${response.status}`)
   return fromHtml(await response.text(), url)
 }
 
-type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ src: string }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ title: string; price: string; sku?: string }> }
+type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string; alt?: string; position?: number }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
 
 function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
-  const variants = (product.variants ?? []).map((variant) => ({ title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.sku ? { sku: variant.sku } : {}) }))
+  const sourceImages = [...(product.images ?? [])].sort((a,b) => (a.position ?? 0) - (b.position ?? 0))
+  const imagesById = new Map((product.images ?? []).flatMap((image) => image.id === undefined ? [] : [[image.id, image.src] as const]))
+  const variants = (product.variants ?? []).map((variant) => {
+    const image = variant.featured_image?.src || (variant.image_id === undefined || variant.image_id === null ? '' : imagesById.get(variant.image_id)) || ''
+    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.compare_at_price && Number(variant.compare_at_price)>Number(variant.price)?{compareAtCents:Math.round(Number(variant.compare_at_price)*100)}:{}), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
+  })
   return {
     title: product.title,
     description: stripHtml(product.body_html ?? ''),
-    images: (product.images ?? []).map((image) => image.src).slice(0, 8),
+    images: sourceImages.map((image) => new URL(image.src, url).href),
+    media: sourceImages.map(image => ({ url: new URL(image.src, url).href, alt: image.alt || '', kind: 'image' })),
     priceCents: variants[0]?.priceCents ?? null,
     currency: 'USD',
     variants,
@@ -438,9 +480,10 @@ function fromHtml(html: string, url: string): ImportedProduct {
   const description = decode(meta('og:description') || meta('description'))
   const priceRaw = meta('product:price:amount') || meta('og:price:amount') || /"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)/.exec(html)?.[1] || ''
   const currency = meta('product:price:currency') || meta('og:price:currency') || /"priceCurrency"\s*:\s*"([A-Z]{3})"/.exec(html)?.[1] || 'USD'
-  const images = [...new Set([meta('og:image'), ...[...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi)].map((match) => match[1] as string)].filter(Boolean).map((src) => { try { return new URL(src, url).toString() } catch { return '' } }).filter(Boolean))].slice(0, 8)
+  const media = readProductImages(html, url)
+  const images = media.filter(item => item.kind !== 'video').map(item => item.url)
   const priceCents = priceRaw ? Math.round(parseFloat(priceRaw) * 100) : null
-  return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
+  return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, media, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
 }
 
 function stripHtml(input: string): string {
@@ -471,18 +514,25 @@ export function createFromImport(
   const supplierCost = opts.asSupplier ? (imported.priceCents ?? 0) : 0
   const supplierShipping = Math.max(0, Math.round(opts.supplierShippingCents ?? 0))
   const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round(((cents + supplierShipping) * markup) / 100) * 100 - 1) : cents)
-  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.sku ? { sku: variant.sku } : {}), inventory: 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
-  return createProduct(db, storeId, {
+  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.compareAtCents!==undefined&&!opts.asSupplier?{compareAtCents:variant.compareAtCents}:{}), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: variant.inventory ?? 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
+  const product = createProduct(db, storeId, {
     title: imported.title,
     description: imported.description,
     status: opts.status ?? 'draft',
     heroImage: imported.images[0] ?? '',
-    media: imported.images.map((url) => ({ url, alt: imported.title })),
+    media: imported.media?.map(item => ({ ...item, alt: item.alt || imported.title })) ?? imported.images.map((url) => ({ url, alt: imported.title })),
     options: imported.options.map((option) => ({ title: option.title, values: option.values.map((value) => ({ value })) })),
     tags: ['imported'],
+    metadata: imported.metadata ?? {},
     supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, shippingCents: supplierShipping, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
     variants,
   })
+  const mapping = Object.fromEntries(product.variants.flatMap((variant, index) => [...(imported.variants[index]?.sourceId ? [[`sourceVariant:${variant.id}`, imported.variants[index]!.sourceId!]] : []), ...(imported.variants[index]?.sourceAliases ? [[`sourceVariantAliases:${variant.id}`, JSON.stringify(imported.variants[index]!.sourceAliases)]] : [])]))
+  if (Object.keys(mapping).length) {
+    db.update('products', product.id, { metadata: { ...product.metadata, ...mapping } })
+    return { ...product, metadata: { ...product.metadata, ...mapping } }
+  }
+  return product
 }
 
 export { json }

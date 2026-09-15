@@ -2,12 +2,13 @@
 export type Cents = number
 
 const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK'])
+export const minorDigits = (currency: string) => ZERO_DECIMAL.has(currency.toUpperCase()) ? 0 : 2
 
-export function format(cents: Cents, currency = 'USD'): string {
-  const minor = ZERO_DECIMAL.has(currency) ? 0 : 2
+export function format(cents: Cents, currency = 'USD', locale = 'en-US'): string {
+  const minor = minorDigits(currency)
   const value = cents / 10 ** minor
   try {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(locale, {
       style: 'currency',
       currency,
       minimumFractionDigits: minor,
@@ -22,7 +23,7 @@ export function percentOf(cents: Cents, percent: number): Cents {
   return Math.round((cents * percent) / 100)
 }
 
-/** Card fees follow the plan tier; the platform fee is charged separately. */
+/** Estimate Stripe-style card processing; personal mode adds no platform fee. */
 export function cardFee(cents: Cents, rate: number): Cents {
   return Math.round(cents * rate) + 30
 }

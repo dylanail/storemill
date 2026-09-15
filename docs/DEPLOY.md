@@ -159,3 +159,4 @@ See `.env.example`. The ones that matter in production:
 | `OPENAI_API_KEY`, `GEMINI_API_KEY` | Image re-shoots with GPT Image 2 and Gemini 3 Pro Image. |
 | `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | Transactional email actually sends. |
 | `META_AD_LIBRARY_TOKEN` | The Ads tab searches the Meta Ad Library. |
+| `AMBORAS_META_API_VERSION` | Graph API version for Meta CAPI; defaults to `v25.0`. Pixel IDs and sealed Meta/TikTok server tokens are configured per store in Settings. |
