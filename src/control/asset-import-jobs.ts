@@ -1,10 +1,11 @@
+import { copyScope, type CopyScope } from './copy-scope.ts'
 import { json, now, type Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { notFound } from '../lib/http.ts'
 import { importAssetFromUrl, type ImportProgress } from './assets.ts'
 import { recordAudit } from './todos.ts'
 
-type Input = {url:string;name?:string;kind:'store'|'funnel';currency?:string;additionalUrls?:string[];maxPages?:number}
+type Input = {url:string;name?:string;kind:'store'|'funnel';currency?:string;additionalUrls?:string[];scope?:CopyScope;maxPages?:number}
 export type ImportJob = {id:string;owner_id:string;input:string;status:'queued'|'working'|'done'|'failed'|'cancelled';progress:string;result:string;error:string;created_at:string;updated_at:string}
 export type ImportResult = {storeId:string;pageId:string;pages:number;products:number;complete:boolean}
 export function listImports(db: Db, ownerId: string): ImportJob[] {
@@ -16,7 +17,8 @@ export function getImport(db: Db, ownerId: string, jobId: string): ImportJob {
   return job
 }
 export function startImport(db: Db, ownerId: string, input: Input, requestKey=''): ImportJob {
-  input={...input,url:input.url.trim(),additionalUrls:(input.additionalUrls||[]).map(url=>url.trim()).filter(Boolean)}
+  input={...input,scope:copyScope(input.scope,'site'),url:input.url.trim(),additionalUrls:(input.additionalUrls||[]).map(url=>url.trim()).filter(Boolean)}
+  if(input.scope==='page'&&input.additionalUrls!.length)throw Error('One-page copies cannot include extra URLs. Choose Only the pages I list.')
   if(!/^https?:\/\/[^\s]+$/i.test(input.url))throw Error('Paste a full URL starting with https://')
   if(!['store','funnel'].includes(input.kind)||! /^[A-Z]{3}$/.test(input.currency||'USD'))throw Error('Choose an asset type and three-letter currency')
   if(input.additionalUrls!.length>100||input.additionalUrls!.some(url=>!/^https?:\/\/[^\s]+$/i.test(url)))throw Error('Use up to 100 full URLs for additional pages')

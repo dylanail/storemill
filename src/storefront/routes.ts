@@ -1,3 +1,4 @@
+import { browserCartEvent, type BrowserCartEvent } from '../analytics/browser-cart-events.ts'
 import { cartDisplayLines } from '../domain/cart-prices.ts'
 import { currentOfferStep, respondToOffer, offerReceipts } from '../domain/post-purchase.ts'
 import { id } from '../lib/ids.ts'
@@ -75,11 +76,14 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
   const base = process.env.AMBORAS_STOREFRONT_HOST && !opts.preview ? '' : `${opts.preview ? '/preview' : '/s'}/${store.slug}`
   const pendingName='amboras_meta_'+store.id;let pending:MetaEvent[]=[];
   if(ctx.cookies[pendingName]){try{const parsed=JSON.parse(ctx.cookies[pendingName]!);if(parsed&&typeof parsed.id==='string'&&typeof parsed.name==='string')pending=[parsed];}catch{}setCookie(ctx.res,pendingName,'',{maxAge:0});}
+  const cartEventCookie='storemill_cart_event_'+store.id;let cartEvents:BrowserCartEvent[]=[]
+  if(ctx.cookies[cartEventCookie]){try{const event=JSON.parse(ctx.cookies[cartEventCookie]!);if(typeof event.id==='string'&&typeof event.currency==='string'&&Number.isFinite(event.value))cartEvents=[event]}catch{}setCookie(ctx.res,cartEventCookie,'',{maxAge:0})}
   const fbclid=ctx.url.searchParams.get('fbclid');
   const advertising={eventId:id('pv'),url:ctx.url.origin+ctx.url.pathname,ip:ctx.ip,userAgent:String(ctx.req.headers['user-agent']||''),...(ctx.cookies._fbp?{fbp:ctx.cookies._fbp}:{}),...(ctx.cookies._fbc?{fbc:ctx.cookies._fbc}:fbclid?{fbc:'fb.1.'+Date.now()+'.'+fbclid}:{})};
   return {
     db,
     metaEvents:pending,
+    cartEvents,
     ...(opts.preview?{}:{advertising}),
     store: branded,
     env,
@@ -144,6 +148,8 @@ function record(ctx: Ctx, current: StoreView, type: Parameters<typeof track>[3],
   queueServerEvents(current.db,current.store.id,serverInput);
   const browser=metaEvent(serverInput);
   if(browser){(current.metaEvents||=[]).push(browser);if(ctx.req.method==='POST'&&!wantsJson(ctx))setCookie(ctx.res,'amboras_meta_'+current.store.id,JSON.stringify(browser),{maxAge:60});}
+  const cartEvent=browserCartEvent(serverInput)
+  if(cartEvent){(current.cartEvents||=[]).push(cartEvent);if(ctx.req.method==='POST'&&!wantsJson(ctx))setCookie(ctx.res,'storemill_cart_event_'+current.store.id,JSON.stringify(cartEvent),{maxAge:60})}
   return { sessionId: session, eventId }
 }
 
@@ -207,16 +213,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const visitor = current.preview ? '' : visitorFor(ctx)
     const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, visitor)
     record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
+    const identity = { title: product.seo.title || `${product.title} — ${current.store.name}`, description: product.seo.description || product.subtitle || product.description.slice(0, 155), canonical: `${current.base}/products/${product.handle}` }
     if (version && version.productId === product.id) {
-      if (version.mode === 'html') return html(view.htmlPage(current, version))
-      return html(view.blockPage(current, version, {
-        title: product.seo.title || `${product.title} — ${current.store.name}`,
-        description: product.seo.description || product.subtitle || product.description.slice(0, 155),
-        canonical: `${current.base}/products/${product.handle}`,
-      }))
+      return html(version.mode === 'html' ? view.htmlPage(current, version, undefined, identity) : view.blockPage(current, version, identity))
     }
     const imported = current.db.one<{ id: string }>(`SELECT id FROM pages WHERE store_id=? AND product_id=? AND role='pdp' AND mode='html' AND source_url<>'' ${current.preview ? '' : "AND status='published'"} ORDER BY updated_at DESC LIMIT 1`,current.store.id,product.id)
-    if (imported) return html(view.htmlPage(current,getPage(current.db,current.store.id,imported.id)!))
+    if (imported) return html(view.htmlPage(current,getPage(current.db,current.store.id,imported.id)!,undefined,identity))
     const stats = statsFor(current.db, current.store.id, product.id)
     const reviews = listReviews(current.db, current.store.id, { productId: product.id, status: 'approved', limit: 12 })
     const companions = companionsFor(current.db, current.store.id, product.id, 2)
@@ -593,7 +595,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     addToCart(current.db, current.store.id, cart.id, String(body.variantId ?? ''), cartQuantity(body.quantity, 1), 'buy-now')
     const line = getCart(current.db, current.store.id, cart.id)?.items[0]
     record(ctx, current, 'cart.add', { ...(line ? { productId: line.productId } : {}), amountCents: (line?.unitCents ?? 0) * (line?.quantity ?? 1) })
-    if (wantsJson(ctx)) return { ok: true, metaEvents:current.preview?[]:current.metaEvents||[], checkoutUrl: `${current.base}/checkout` }
+    if (wantsJson(ctx)) return { ok: true, metaEvents:current.preview?[]:current.metaEvents||[], cartEvents:current.preview?[]:current.cartEvents||[], checkoutUrl: `${current.base}/checkout` }
     return redirect(`${current.base}/checkout`)
   })
 
@@ -1040,5 +1042,5 @@ function cartQuantity(value: unknown, fallback: number): number {
 }
 function cartState(current: StoreView) {
   const cart = current.cart!, totals = paymentTotals(current.db, current.store.id, cart)
-  return { metaEvents:current.preview?[]:current.metaEvents||[], items:cartDisplayLines(current.db,current.store.id,cart,totals), count:cart.items.reduce((sum,item)=>sum+item.quantity,0), totals, discountCode:cart.discountCode }
+  return { metaEvents:current.preview?[]:current.metaEvents||[], cartEvents:current.preview?[]:current.cartEvents||[], items:cartDisplayLines(current.db,current.store.id,cart,totals), count:cart.items.reduce((sum,item)=>sum+item.quantity,0), totals, discountCode:cart.discountCode }
 }

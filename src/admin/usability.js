@@ -1,6 +1,6 @@
 // Shared enhancements for server-rendered admin forms and data tables.
 (function () {
-  var page = document.querySelector('main.page');
+  var page = document.querySelector('main.page, main.account');
   if (!page) return;
   var sequence = 0;
   page.querySelectorAll('.field').forEach(function (field) {

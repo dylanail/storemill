@@ -21,6 +21,7 @@
     const body = await response.json();
     if (!response.ok || body.error) throw new Error(body.error || 'Please try again.');
     (body.metaEvents||[]).forEach(event=>window.amborasMeta?.(event));
+    (body.cartEvents||[]).forEach(event=>window.storemillCartEvent?.(event));
     return body;
   }
   function productFor(node) {

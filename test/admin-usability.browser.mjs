@@ -23,7 +23,7 @@ await test('admin usability across the operator workspace',async t=>{
 for(const width of [320,390,820,1440]) for(const path of paths) await t.test(`${path} has named controls and contained layout at ${width}px`,async()=>{
  await p.setViewportSize({width,height:900});const response=await p.goto(origin+path);assert.equal(response.status(),200,path);
  const state=await p.evaluate(()=>({path:location.pathname,width:innerWidth,scrollWidth:document.documentElement.scrollWidth,unnamed:[...document.querySelectorAll('main input:not([type=hidden]),main select,main textarea,main button')].filter(e=>e.getClientRects().length&&!e.closest('details:not([open])')&&!((e.labels&&[...e.labels].some(l=>l.textContent.trim()))||e.getAttribute('aria-label')||e.getAttribute('aria-labelledby')||e.getAttribute('title')||(e.matches('button')&&e.textContent.trim()))).map(e=>({tag:e.tagName,name:e.getAttribute('name'),html:e.outerHTML.slice(0,200)}))}));
- assert.equal(await p.locator('.rail [aria-current=page]').count(),1,path+' has exactly one selected navigation item');
+ assert.equal(await p.locator('.rail [aria-current=page]').count(),path==='/admin/stores'?0:1,path+' has selected-store navigation only inside a store');
  report.push(state);assert.ok(state.scrollWidth<=width+1,`${path} overflows to ${state.scrollWidth}px at ${width}px`);assert.deepEqual(state.unnamed,[],path+' needs accessible names');
  if(process.env.QA_OUTPUT_DIR&&width===390&&path==='/admin/orders'){mkdirSync(process.env.QA_OUTPUT_DIR,{recursive:true});await p.screenshot({path:join(process.env.QA_OUTPUT_DIR,'orders-mobile.png')});}
 });

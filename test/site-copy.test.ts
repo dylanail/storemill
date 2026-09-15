@@ -226,3 +226,32 @@ test('duplicating an owned funnel copies every page and all catalog references i
   assert.equal(db.one<{ product_id: string }>('SELECT product_id FROM bundles WHERE store_id = ?', copied.store.id)?.product_id, copiedProduct.id)
   assert.throws(() => duplicateAsset(db, 'another-owner', source.id), /own stores/)
 })
+
+for (const scope of ['page', 'selected', 'site'] as const) test(`${scope} copy enforces its page boundary instead of treating every URL as a site crawl`, async () => {
+  const { db, user } = fresh()
+  const { fetchImpl, requests } = fixtureFetch({
+    'https://scope.example/': document('<a href="/listed">Listed</a><a href="/unlisted">Unlisted</a>'),
+    'https://scope.example/listed': document('<a href="/deeper">Deeper</a>'),
+    'https://scope.example/unlisted': document('Unlisted'),
+    'https://scope.example/deeper': document('Deeper'),
+  })
+  const result = await importAssetFromUrl(db, user.id, { url: 'https://scope.example/', kind: 'store', scope, additionalUrls: scope === 'page' ? [] : ['https://scope.example/listed', 'https://scope.example/listed#same-page'], fetchImpl })
+  const expected = scope === 'page' ? 1 : scope === 'selected' ? 2 : 4
+  assert.equal(result.report.scope, scope)
+  assert.equal(result.report.copied, expected)
+  assert.equal(result.pages.length, expected + (scope === 'site' ? 1 : 0), 'only whole-site imports can generate an extra checkout')
+  if (scope !== 'site') {
+    assert.ok(!requests.includes('https://scope.example/unlisted'))
+    assert.ok(!requests.includes('https://scope.example/deeper'))
+    assert.deepEqual(result.report.remaining, [])
+    assert.equal(result.report.generatedPages, undefined)
+  }
+  if (scope === 'selected') assert.match(result.page.rawHtml, /href="\/pages\//, 'links between explicitly copied pages are owned')
+})
+
+test('one-page copy rejects extra URLs instead of ignoring the selected boundary', async () => {
+  const { db, user } = fresh()
+  let fetched = false
+  await assert.rejects(importAssetFromUrl(db, user.id, { url: 'https://scope.example/', kind: 'store', scope: 'page', additionalUrls: ['https://scope.example/extra'], fetchImpl: (async () => { fetched = true; throw Error('Should not fetch') }) as typeof fetch }), /Only the pages I list/)
+  assert.equal(fetched, false)
+})

@@ -55,7 +55,7 @@ await test('Storemill repair, cloning and save-conflict workflows',async t=>{
    await p.goto(origin+'/admin/funnels');await p.getByRole('button',{name:'Clone whole funnel',exact:true}).click();await p.waitForURL('**/admin/funnels?flash=*');
    const copy=listFunnels(db,store.id).find(funnel=>funnel.name==='Original funnel (copy)');assert.ok(copy);assert.equal(copy.status,'paused');assert.notEqual(copy.steps[0].pageId,saved.id);
    assert.equal(getPage(db,store.id,copy.steps[0].pageId).status,'draft');
-   await p.goto(origin+'/admin/pages');await p.getByLabel('What to clone',{exact:true}).selectOption('funnel');assert.equal(await p.getByLabel('What to clone',{exact:true}).inputValue(),'funnel');
+   await p.goto(origin+'/admin/pages');await p.getByLabel('Copy scope',{exact:true}).selectOption('site');assert.equal(await p.getByLabel('Copy scope',{exact:true}).inputValue(),'site');
   });
   assert.deepEqual(errors,[]);
  }finally{await ctx.close();}

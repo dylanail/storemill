@@ -64,7 +64,7 @@ await test('admin controls and tracking browser workflows',async t=>{
   await ctx.route(origin+'/admin/assets/import',route=>{requests++;pending.push(route)});
   try {
    await p.goto(origin+'/admin/stores');
-   const submit=p.getByRole('button',{name:'Clone and open',exact:true});
+   const submit=p.getByRole('button',{name:'Copy selected scope',exact:true});
    const progress=p.locator('#clone-asset-progress');
    assert.equal(await progress.isVisible(),false,'An idle form must not claim it is cloning');
    assert.equal(await submit.isVisible(),true);
@@ -79,13 +79,13 @@ await test('admin controls and tracking browser workflows',async t=>{
    assert.equal(await progress.isVisible(),true);assert.equal(requests,2,'Cancel must allow a fresh attempt');
    await pending.shift().fulfill({status:302,headers:{location:'/admin/stores?flash=Clone%20completed'},body:''});
    await p.waitForURL('**/admin/stores?flash=Clone%20completed');
-   assert.equal(await p.locator('#clone-asset-progress').isVisible(),false);assert.equal(await p.getByRole('button',{name:'Clone and open',exact:true}).isVisible(),true);
+   assert.equal(await p.locator('#clone-asset-progress').isVisible(),false);assert.equal(await p.getByRole('button',{name:'Copy selected scope',exact:true}).isVisible(),true);
   } finally {for(const route of pending)await route.abort().catch(()=>{});await ctx.close();}
  });
  for(const failure of ['network','server','unexpected response']) await t.test('clone '+failure+' failure returns to a usable form',async()=>{
   const {ctx,p}=await context(true);
   await ctx.route(origin+'/admin/assets/import',route=>failure==='network'?route.abort('failed'):route.fulfill({status:failure==='server'?503:200,body:'The request did not complete'}));
-  try {await p.goto(origin+'/admin/stores');await p.locator('#clone-asset-form [name=url]').fill('https://source.example/');await p.getByRole('button',{name:'Clone and open',exact:true}).click();await p.waitForURL('**/admin/stores?flash=*');assert.match(new URL(p.url()).searchParams.get('flash'),/Could not clone/);assert.equal(await p.locator('#clone-asset-progress').isVisible(),false);assert.equal(await p.getByRole('button',{name:'Clone and open',exact:true}).isVisible(),true);}finally{await ctx.close();}
+  try {await p.goto(origin+'/admin/stores');await p.locator('#clone-asset-form [name=url]').fill('https://source.example/');await p.getByRole('button',{name:'Copy selected scope',exact:true}).click();await p.waitForURL('**/admin/stores?flash=*');assert.match(new URL(p.url()).searchParams.get('flash'),/Could not clone/);assert.equal(await p.locator('#clone-asset-progress').isVisible(),false);assert.equal(await p.getByRole('button',{name:'Copy selected scope',exact:true}).isVisible(),true);}finally{await ctx.close();}
  });
  assert.deepEqual(errors,[]);
 });

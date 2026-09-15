@@ -12,6 +12,7 @@ export type Todo = { id: string; key: string; label: string; detail: string; sta
 const SEED: Array<Omit<Todo, 'id'>> = [
   { key: 'catalog', label: 'Swap the sample catalog for your own products', detail: 'Import a CSV or ask the assistant to add them.', status: 'waiting', href: '/products', position: 0 },
   { key: 'payments', label: 'Set up payments', detail: 'Connect Stripe so you can take real money.', status: 'waiting', href: '/settings/payments', position: 1 },
+  { key: 'domain', label: 'Connect your domain (optional)', detail: 'Use your own domain, or keep the provided store address.', status: 'waiting', href: '/domains', position: 2 },
   { key: 'shipping', label: 'Check your shipping rates', detail: 'A region with a delivery rate lets checkout price the order.', status: 'waiting', href: '/settings', position: 3 },
   { key: 'publish', label: 'Publish your store', detail: 'Take the draft live at its address.', status: 'waiting', href: '/store', position: 4 },
 ]
@@ -27,7 +28,7 @@ export function seedTodos(db: Db, storeId: string) {
 }
 
 export function listTodos(db: Db, storeId: string): Todo[] {
-  return db.all<Todo>("SELECT id, key, label, detail, status, href, position FROM todos WHERE store_id = ? AND key <> 'domain' ORDER BY position", storeId)
+  return db.all<Todo>("SELECT id, key, label, detail, status, href, position FROM todos WHERE store_id = ? ORDER BY position", storeId)
 }
 
 export function setTodo(db: Db, storeId: string, key: string, status: TodoStatus) {
@@ -43,6 +44,8 @@ export function refreshTodos(db: Db, storeId: string) {
   const live = db.one<{ status: string }>('SELECT status FROM stores WHERE id = ?', storeId)?.status === 'live'
   setTodo(db, storeId, 'catalog', products > 0 && ownProducts > 0 ? 'done' : 'waiting')
   setTodo(db, storeId, 'payments', plugins > 0 ? 'done' : 'waiting')
+  const domains = db.one<{ c: number }>("SELECT COUNT(*) c FROM domains WHERE store_id = ? AND status = 'verified'", storeId)?.c ?? 0
+  setTodo(db, storeId, 'domain', domains > 0 ? 'done' : 'waiting')
   setTodo(db, storeId, 'shipping', shipping > 0 ? 'done' : 'waiting')
   setTodo(db, storeId, 'publish', live ? 'done' : 'waiting')
 }

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { brandHead, brandLogo, brandStyles } from '../brand/index.ts'
 import { escapeHtml } from '../lib/http.ts'
 import { format } from '../lib/money.ts'
@@ -23,8 +24,13 @@ export function accountShell(input: { userName: string; title: string; body: str
 <title>${escapeHtml(input.title)} — storemill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
-${brandHead}<style>${brandStyles}${adminCss('#7a4a2b')}
+${brandHead}<style>${brandStyles}${adminCss('#315be8')}
 .account{max-width:1120px;margin:0 auto;padding:2rem 1.5rem 4rem}
+.account .asset-grid{grid-template-columns:repeat(auto-fill,minmax(min(275px,100%),1fr))}
+.account .head{flex-wrap:wrap;gap:12px}
+.account-shell>.top{height:auto;min-height:56px;flex-wrap:wrap;padding:.7rem 1rem}
+.account-shell>.top .chip{display:inline-flex}
+@media(max-width:600px){.account{padding:1rem}.account .asset-create{grid-template-columns:minmax(0,1fr)}.account-shell>.top .muted{max-width:100%;overflow-wrap:anywhere}}
 .account .grid3{grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr))}
 .storecard{display:flex;flex-direction:column;gap:.6rem}
 .storecard .top-row{flex-wrap:nowrap;align-items:flex-start;justify-content:space-between;gap:.6rem}
@@ -40,16 +46,17 @@ ${brandHead}<style>${brandStyles}${adminCss('#7a4a2b')}
 .blank{background:#fff;border:1px solid var(--line);border-radius:14px;padding:2.4rem 2rem;text-align:center;max-width:640px;margin:2rem auto}
 .blank h2{font-family:'Playfair Display',Georgia,serif;font-size:1.5rem;font-weight:400;margin-bottom:.4rem}
 .blank ol{text-align:left;max-width:420px;margin:1.2rem auto 1.6rem;padding-left:1.1rem;color:var(--muted);font-size:12.5px;line-height:1.9}
-</style></head><body>
+</style></head><body class="account-shell">
 <div class="top">
   <a class="logo" href="/admin/stores" aria-label="storemill home">${brandLogo(true)}</a>
   <a class="chip" href="/admin/stores">Your stores</a>
-  <a class="chip" href="/onboarding">+ New store</a>
+  <a class="chip" href="/admin/stores?new=1#new">+ New store or funnel</a>
   <div class="spacer"></div>
   <span class="muted" style="font-size:12px">${escapeHtml(input.userName)}</span>
   <form method="post" action="/logout"><button class="chip" type="submit">Sign out</button></form>
 </div>
-<div class="account">${input.body}</div>
+<main class="account">${input.body}</main>
+<script>${readFileSync(new URL('./usability.js', import.meta.url), 'utf8')}</script>
 </body></html>`
 }
 
@@ -92,7 +99,7 @@ export function storesHub(input: { db: Db; stores: Store[]; userName: string; or
   return `${flash}<div class="head">
     <div><h1 class="serif">Your stores</h1>
       <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}, ${live} live. Each one is its own catalog, customers, orders, brand and address.</p></div>
-    <a class="btn primary" href="/onboarding">+ New store</a></div>
+    <a class="btn primary" href="/admin/stores?new=1#new">+ New store or funnel</a></div>
   <div class="grid3">${stores
     .map((store) => {
       const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
