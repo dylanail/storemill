@@ -2,6 +2,7 @@ import type { Page } from './store.ts'
 import type { ImageLocalizationReport } from './clone-media.ts'
 
 export type CopyReport = {
+  scope?: 'page' | 'selected' | 'site'
   discovered: number
   copied: number
   /** All discovered eligible pages were copied. Unlinked or login-only steps cannot be discovered automatically. */

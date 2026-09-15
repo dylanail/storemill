@@ -176,7 +176,6 @@ export const FIRST_PARTY: Plugin[] = [
               `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${escapeHtml(settings.measurementId)}')</script>`,
           },
           { id: 'Ga4Purchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.gtag&&gtag('event','purchase',{transaction_id:'${escapeHtml(context.orderId ?? '')}',value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
-          { id: 'Ga4AddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.gtag&&gtag('event','add_to_cart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
       disableInPreview: true,
@@ -245,7 +244,6 @@ export const FIRST_PARTY: Plugin[] = [
         components: [
           { id: 'TikTokPixel', slot: 'headEnd', placement: 'fixed', render: ({ settings }) => `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]=n||{};var o=document.createElement("script");o.type="text/javascript";o.async=!0;o.src=i+"?sdkid="+e+"&lib="+t;var a=document.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load('${escapeHtml(settings.pixelId)}');ttq.page();}(window,document,'ttq');</script>` },
           { id: 'TikTokPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('CompletePayment',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}',content_id:'${escapeHtml(context.orderId ?? '')}'},{event_id:'${escapeHtml(context.orderId ?? '')}'})</script>` },
-          { id: 'TikTokAddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('AddToCart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
       capabilities: [{ id: 'tiktok', type: 'analytics_sink', label: 'TikTok Events API' }],

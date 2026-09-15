@@ -91,15 +91,18 @@ export function updateRegion(
 ): Region {
   const region = getRegion(db, storeId, regionId)
   if (!region) throw new Error('No such region')
-  if (input.isDefault) db.run('UPDATE regions SET is_default = 0 WHERE store_id = ?', storeId)
-  db.update('regions', regionId, {
-    ...(input.name !== undefined ? { name: input.name } : {}),
-    ...(input.currency !== undefined ? { currency: input.currency.toUpperCase() } : {}),
-    ...(input.countries !== undefined ? { countries: input.countries } : {}),
-    ...(input.locale !== undefined ? { locale: input.locale } : {}),
-    ...(input.exchangeRate !== undefined ? { exchange_rate: Math.max(0.000001, input.exchangeRate) } : {}),
-    ...(input.taxRate !== undefined ? { tax_rate: input.taxRate } : {}),
-    ...(input.isDefault !== undefined ? { is_default: input.isDefault } : {}),
+  // Keep exactly one default, and roll back the switch if saving the region fails.
+  db.tx(() => {
+    if (input.isDefault) db.run('UPDATE regions SET is_default = 0 WHERE store_id = ?', storeId)
+    db.update('regions', regionId, {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.currency !== undefined ? { currency: input.currency.toUpperCase() } : {}),
+      ...(input.countries !== undefined ? { countries: input.countries } : {}),
+      ...(input.locale !== undefined ? { locale: input.locale } : {}),
+      ...(input.exchangeRate !== undefined ? { exchange_rate: Math.max(0.000001, input.exchangeRate) } : {}),
+      ...(input.taxRate !== undefined ? { tax_rate: input.taxRate } : {}),
+      ...(input.isDefault ? { is_default: true } : {}),
+    })
   })
   return getRegion(db, storeId, regionId) as Region
 }

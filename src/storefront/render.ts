@@ -1,3 +1,4 @@
+import { browserCartEventsHtml, type BrowserCartEvent } from '../analytics/browser-cart-events.ts'
 import { CHECKOUT_CSS, CHECKOUT_ICONS, checkoutField, addressFields, checkoutBrandCss, checkoutPalette } from './checkout-ui.ts'
 import { logoFromClone } from '../pages/source-logo.ts'
 import { cartDisplayLines } from '../domain/cart-prices.ts'
@@ -47,6 +48,7 @@ export type StoreView = {
   region?: Region | null
   advertising?: Omit<ServerEventInput,'type'>
   metaEvents?: MetaEvent[]
+  cartEvents?: BrowserCartEvent[]
   regions?: Region[]
 }
 
@@ -129,7 +131,7 @@ ${page.bare && !page.popup ? '' : popupHtml(view.base, env.theme.popup)}
 ${view.preview ? '' : trackingScript(view.base)}
 ${env.theme.customJs ? `<script data-store-js>${env.theme.customJs.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
-${metaEventsHtml(view)}
+${metaEventsHtml(view)}${browserCartEventsHtml(view)}
 ${navigationScript()}
 </body></html>`
 }
@@ -171,7 +173,8 @@ function renderOwnedPageBody(view: StoreView, page: Page, context: BlockContext)
 }
 
 /** A cloned or hand-written HTML page keeps its body but owns its public metadata. */
-export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput): string {
+export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput, servedAs?: { title: string; description: string; canonical: string }): string {
+  if (servedAs) page = { ...page, seo: { ...page.seo, title: servedAs.title, description: servedAs.description } }
   if(checkout&&page.productId)view={...view,checkoutProductId:page.productId}
   let html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
   if(html.includes('data-pb-gallery')){
@@ -194,7 +197,7 @@ export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput):
   const themeBrand=Object.keys(view.env.brand).length?view.env.brand:view.store.brand
   const themeUpdate=importedThemeHtml(themeBrand)
   if(themeUpdate){html=html.replace(/<\/head>/i,()=>fontLink(themeBrand)+'</head>');html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>themeUpdate+'</body>'):html+themeUpdate}
-  const canonical = absolute(view, `${view.base}/pages/${page.handle}`)
+  const canonical = absolute(view, servedAs?.canonical ?? `${view.base}/pages/${page.handle}`)
   const owned: string[] = []
   if (page.seo.title) owned.push(`<title>${escapeHtml(page.seo.title)}</title>`)
   if (page.seo.description) owned.push(`<meta name="description" content="${escapeHtml(page.seo.description.slice(0, 300))}">`)
@@ -215,7 +218,7 @@ export function htmlPage(view: StoreView, page: Page, checkout?: CheckoutInput):
   }
   const pluginHead=renderSlot(view.db,view.store.id,'headEnd',{}, {preview:view.preview});
   if(pluginHead)html=/<\/head>/i.test(html)?html.replace(/<\/head>/i,()=>pluginHead+'</head>'):pluginHead+html;
-  const pluginBody=renderSlot(view.db,view.store.id,'bodyEnd',{}, {preview:view.preview})+metaEventsHtml(view);
+  const pluginBody=renderSlot(view.db,view.store.id,'bodyEnd',{}, {preview:view.preview})+metaEventsHtml(view)+browserCartEventsHtml(view);
   if(pluginBody)html=/<\/body>/i.test(html)?html.replace(/<\/body>/i,()=>pluginBody+'</body>'):html+pluginBody;
   if (!view.preview) return html
   const banner = previewBar(view.env.kind==='live')

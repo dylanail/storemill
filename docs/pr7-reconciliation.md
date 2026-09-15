@@ -1,5 +1,7 @@
 # PR #7 reconciliation after #8 and #9
 
+Follow-up audit and restoration: [PR #7 behavior restoration and copy scope](pr7-restoration.md). The initial reconciliation missed several UI behaviors and the TikTok browser cart hook; that follow-up documents and repairs them.
+
 The integration combines `ab80efc` (PR #7) with `fd0369f` (main after PR #9). Main already contained adapted versions of much of #7, so overlapping implementations are reconciled into one active implementation.
 
 ## Preserved behavior
@@ -12,7 +14,7 @@ The integration combines `ab80efc` (PR #7) with `fd0369f` (main after PR #9). Ma
 | Editor and media | Main's visual HTML/block editor, revision checks, templates, shared galleries, original uncropped media, rebranding, and verified speed repairs remain. No older editor implementation replaces them. |
 | Content and support | Main's scheduled blog publishing and feeds remain, with one blog panel. Contact submissions appear in settings. Storefront reviews require moderation; enabled review, companion-product and contact components render actual content. Shipping copy reads the store's policy. |
 | Email and integrations | Main's marketing flows remain. The separate seven-day delivery review request runs hourly, retries failed delivery and prevents overlapping sweeps within the process. Delivery/refund/stock emails and review links use the store's public address. Saving integration settings retains sealed credentials. Directory entries have unique identifiers. |
-| Analytics | Durable visitor assignment, attribution and the current browser/server event pipeline remain. The old cart-page-only analytics hook is superseded by that pipeline. |
+| Analytics | Durable visitor assignment, attribution and the current browser/server event pipeline remain. The initial replacement covered Meta but missed browser-only TikTok. The follow-up adds deduplicated GA4/TikTok cart dispatch for native and copied pages. |
 
 ## Database upgrade
 

@@ -1,3 +1,4 @@
+import { copyScope } from '../control/copy-scope.ts'
 import { format } from '../lib/money.ts'
 import { accountShell, storesHub } from './account.ts'
 import { saveDiscount, previewDiscount, changeDiscountStatus } from '../control/discounts.ts'
@@ -339,8 +340,8 @@ export function adminRouter(): Router {
       pendingBuild.delete(ticket.id)
       setCookie(ctx.res, STORE_COOKIE, ticket.storeId, { maxAge: 60 * 60 * 24 * 365 })
       const note = ticket.failures.length
-        ? `${ticket.storeName} is built as a ${selected.shape}, but ${ticket.failures.length} step${ticket.failures.length === 1 ? '' : 's'} failed: ${ticket.failures.slice(0, 2).join('; ')}.`
-        : `${ticket.storeName} is built as a ${selected.shape} — ${ticket.summaries.length} steps ran.`
+        ? `${ticket.storeName} is built as a ${selected.shape}, but ${ticket.failures.length} step${ticket.failures.length === 1 ? '' : 's'} failed: ${ticket.failures.slice(0, 2).join('; ')}. Open Build to review what needs attention.`
+        : `${ticket.storeName} is built as a ${selected.shape} — ${ticket.summaries.length} steps ran. Open Build for the next steps, then publish when you are ready.`
       return { state: 'done', stage: ticket.stage, next: `/admin?flash=${encodeURIComponent(note)}` }
     }
     return { state: ticket.state, stage: ticket.stage, error: ticket.error }
@@ -435,7 +436,7 @@ export function adminRouter(): Router {
       return html(accountShell({ userName, title: 'Stores & funnels', body: storesHub({ db: db(), stores, userName, origin: process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin }) }))
     }
     const current = session(ctx)
-    return page(ctx, current, 'stores', 'Stores & funnels', pages.storesPage(ctxFor(current, ctx), current.stores))
+    return html(accountShell({ userName: current.user.name || current.user.email, title: 'Stores & funnels', body: pages.storesPage(ctxFor(current, ctx), current.stores) }))
   })
 
   router.get('/admin/stores/:id/delete',ctx=>{
@@ -496,7 +497,7 @@ export function adminRouter(): Router {
   router.post('/admin/assets/import', async (ctx) => {
     const current = session(ctx), body = await ctx.body()
     try {
-      const job = startImport(db(), current.user.id, {url:String(body.url??''),name:String(body.name??''),kind:body.kind==='funnel'?'funnel':'store',currency:String(body.currency??'USD').toUpperCase(),additionalUrls:String(body.additionalUrls??'').split(/\r?\n/)},String(body.requestKey??''))
+      const job = startImport(db(), current.user.id, {url:String(body.url??''),scope:copyScope(body.scope),name:String(body.name??''),kind:body.kind==='funnel'?'funnel':'store',currency:String(body.currency??'USD').toUpperCase(),additionalUrls:String(body.additionalUrls??'').split(/\r?\n/)},String(body.requestKey??''))
       return redirect(`/admin/imports/${job.id}`)
     } catch(error) { return redirect(`/admin/stores?flash=${encodeURIComponent('!'+(error instanceof Error?error.message:'Could not start clone'))}`) }
   })
@@ -682,10 +683,13 @@ export function adminRouter(): Router {
     if (!product) return back(ctx, '!No such product')
     const trend = String(body.trend ?? 'unknown')
     const number = (key: string) => Math.max(0, Math.round(Number(body[key] ?? 0)) || 0)
+    const amount = body.aovAmount === undefined ? undefined : String(body.aovAmount).trim()
+    const aov = amount === undefined ? number('aovCents') : amount === '' ? 0 : Math.round(Number(amount) * 10 ** minorDigits(current.store.currency))
+    if (!Number.isSafeInteger(aov) || aov < 0) return back(ctx, '!Enter a valid order value in ' + current.store.currency + '.')
     const notes = {
       ...(TRENDS.includes(trend as (typeof TRENDS)[number]) ? { trend: trend as (typeof TRENDS)[number] } : {}),
       ...(number('weightGrams') ? { weightGrams: number('weightGrams') } : {}),
-      ...(number('aovCents') ? { aovCents: number('aovCents') } : {}),
+      ...(aov ? { aovCents: aov } : {}),
       ...(body.seasonal === 'true' ? { seasonal: true } : {}), ...(body.tech === 'true' ? { tech: true } : {}),
       ...(body.patented === 'true' ? { patented: true } : {}), ...(body.bigBrand === 'true' ? { bigBrand: true } : {}),
       ...(body.printOnDemand === 'true' ? { printOnDemand: true } : {}),
@@ -808,8 +812,10 @@ export function adminRouter(): Router {
     const url = String(body.url ?? '').trim()
     if (!/^https?:\/\//i.test(url)) return back(ctx, '!Paste a full URL, starting with https://')
     try {
-      if (body.scope === 'funnel') {
-        const job=startImport(db(),current.user.id,{url,kind:'funnel',currency:current.store.currency,additionalUrls:String(body.additionalUrls??'').split(/\r?\n/)})
+      const scope = copyScope(body.scope), additionalUrls = String(body.additionalUrls ?? '').split(/\r?\n/).map(url => url.trim()).filter(Boolean)
+      if (scope === 'page' && additionalUrls.length) throw new Error('One-page copies cannot include extra URLs. Choose Only the pages I list.')
+      if (scope !== 'page') {
+        const job=startImport(db(),current.user.id,{url,scope,kind:current.store.kind,currency:current.store.currency,additionalUrls})
         return redirect(`/admin/imports/${job.id}`)
       }
       const result = await clonePage(url, { storeId: current.store.id, keepScripts: body.keepScripts === 'true' })
@@ -1504,7 +1510,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/speed', (ctx) => {
     const current=session(ctx)
-    return page(ctx,current,'speed','Store Speed',plan.healthCard(ctxFor(current,ctx),true))
+    return page(ctx,current,'speed','Store Speed',plan.healthCard(ctxFor(current,ctx),true,ctx.query.get('environment') === 'draft' ? 'draft' : ctx.query.get('environment') === 'live' ? 'live' : undefined))
   })
   router.post('/admin/speed/fix', async(ctx)=>{
     const current=session(ctx),body=await ctx.body()

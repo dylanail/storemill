@@ -1,3 +1,4 @@
+import { copyScope, type CopyScope } from './copy-scope.ts'
 import { readSourceCommerce, bindSourceProducts, type SourceProduct } from '../pages/source-commerce.ts'
 import { createPromotion } from '../domain/promotions.ts'
 import { getProduct } from '../domain/catalog.ts'
@@ -43,9 +44,11 @@ export function createBlankAsset(db: Db, ownerId: string, input: { name: string;
 export async function importAssetFromUrl(
   db: Db,
   ownerId: string,
-  input: { url: string; name?: string; kind: AssetKind; currency?: string; additionalUrls?: string[]; maxPages?: number; fetchImpl?: typeof fetch; signal?: AbortSignal; onProgress?: (progress: ImportProgress) => void },
+  input: { url: string; name?: string; kind: AssetKind; currency?: string; additionalUrls?: string[]; scope?: CopyScope; maxPages?: number; fetchImpl?: typeof fetch; signal?: AbortSignal; onProgress?: (progress: ImportProgress) => void },
 ): Promise<{ store: Store; page: Page; pages: Page[]; products: Product[]; clone: CloneResult; report: CopyReport }> {
   stopIfAborted(input.signal)
+  const scope = copyScope(input.scope, 'site')
+  const crawl = scope === 'site'
   const url = input.url.trim()
   if (!/^https?:\/\/[^\s]+$/i.test(url)) throw new Error('Paste a full URL starting with https://')
   let progress: ImportProgress = {phase:'pages',percent:1,task:'Opening the starting page',copied:0,discovered:1,products:0,images:0,currentUrl:url}
@@ -64,13 +67,14 @@ export async function importAssetFromUrl(
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
   }
   const additionalUrls = (input.additionalUrls ?? []).map((value) => value.trim()).filter(Boolean)
+  if (scope === 'page' && additionalUrls.length) throw new Error('One-page copies cannot include extra URLs. Choose Only the pages I list.')
   if (additionalUrls.length > 100) throw new Error('Add up to 100 page links per copy')
   for (const value of additionalUrls) {
     if (!/^https?:\/\/[^\s]+$/i.test(value)) throw new Error(`Use a full https:// URL for each additional page: ${value}`)
   }
   const homeClone = await clonePage(url, cloneOptions)
   const documents: CloneResult[] = [homeClone]
-  const report: CopyReport = { discovered: 1, copied: 1, complete: true, failed: [], remaining: [], externalSteps: [] }
+  const report: CopyReport = { scope, discovered: 1, copied: 1, complete: true, failed: [], remaining: [], externalSteps: [] }
   const maxPages = Number.isFinite(input.maxPages) ? Math.max(1, Math.min(1000, Math.floor(input.maxPages as number))) : 250
   const origins = new Set([new URL(homeClone.sourceUrl).origin, ...additionalUrls.filter((value) => !isPaymentUrl(value)).map((value) => new URL(value).origin)])
   const queued: string[] = []
@@ -98,7 +102,7 @@ export async function importAssetFromUrl(
     queued.push(fetchable.toString())
   }
   additionalUrls.forEach((value) => enqueue(value, true))
-  for (const linked of homeClone.links ?? discoverPageLinks(homeClone.html, homeClone.sourceUrl)) enqueue(linked)
+  if (crawl) for (const linked of homeClone.links ?? discoverPageLinks(homeClone.html, homeClone.sourceUrl)) enqueue(linked)
   emit({copied:1,discovered:requested.size,percent:8})
   while (queued.length && documents.length < maxPages) {
     queued.sort((a, b) => Number(nextSteps.has(canonicalPageUrl(b))) - Number(nextSteps.has(canonicalPageUrl(a))) || copyUrlPriority(a) - copyUrlPriority(b))
@@ -120,7 +124,7 @@ export async function importAssetFromUrl(
       requested.add(final)
       documents.push(document)
       if(document.nextStep)nextSteps.add(canonicalPageUrl(document.nextStep))
-      for (const discovered of document.links ?? discoverPageLinks(document.html, document.sourceUrl)) enqueue(discovered)
+      if (crawl) for (const discovered of document.links ?? discoverPageLinks(document.html, document.sourceUrl)) enqueue(discovered)
     } catch (error) {
       stopIfAborted(input.signal)
       report.failed.push({ url: linked, reason: error instanceof Error ? error.message : 'Could not read this page.' })
@@ -133,7 +137,7 @@ export async function importAssetFromUrl(
   for (const failure of report.failed) homeClone.notes.push(`Not copied: ${failure.url} — ${failure.reason}`)
   if (report.remaining.length) homeClone.notes.push(`${report.remaining.length} discovered pages remain after the ${maxPages}-page limit. Add their links in another copy or raise the limit.`)
   if (report.externalSteps.length) homeClone.notes.push(`${report.externalSteps.length} external checkout or funnel steps need review. Payment-provider sessions cannot be copied; connect the copied checkout to this store's Stripe account.`)
-  homeClone.notes.push(`Copied ${documents.length} pages. Discovery follows readable links and declared next steps; add unlinked, protected or post-purchase step URLs explicitly.`)
+  homeClone.notes.push(crawl ? `Copied ${documents.length} pages. Discovery follows readable links and declared next steps; add unlinked, protected or post-purchase step URLs explicitly.` : `Copied ${documents.length} requested pages. Links to other pages were not followed.`)
 
 
   emit({phase:'products',percent:70,task:'Finding products, prices and offers across the copied site',copied:documents.length,discovered:report.discovered})
@@ -285,7 +289,7 @@ export async function importAssetFromUrl(
     return index === 0 ? updatePage(db, store.id, created.id, { isHome: true }) : created
   })
   const page = pages[0] as Page
-  const generatedCheckout = ensureCopiedCheckout(db, store.id)
+  const generatedCheckout = crawl ? ensureCopiedCheckout(db, store.id) : null
   if (generatedCheckout) {
     pages.push(generatedCheckout)
     report.generatedPages = [{ id: generatedCheckout.id, role: 'checkout', reason: 'The source did not expose a readable checkout. Added an editable checkout using this asset’s branding and catalog.' }]

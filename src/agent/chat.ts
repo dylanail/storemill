@@ -167,5 +167,9 @@ export const PROMPT_LIBRARY = [
   'Make the storefront darker and roomier',
   'Publish the store',
   'Who are my repeat customers?',
+  'Show me the pending review queue',
+  'Connect the domain ironjaw.co',
+  'Install Shippo for labels',
+  'Ask recent buyers for a review',
   'Summarize the last seven days of profit',
 ]
