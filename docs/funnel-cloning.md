@@ -4,7 +4,7 @@ All assets → Clone from a link and Pages → Whole site / funnel create a sepa
 
 Funnelish links such as `#next-step` are resolved through the public navigation service using public page identity and an empty customer in test mode. Source order, opt-in, subscription and payment endpoints are never submitted. The source is rendered at desktop, tablet and mobile sizes, media is copied locally, executable source scripts are removed, and internal links point to the owned pages. Unlinked or protected content needs a public direct URL. External payment sessions cannot become owned payment accounts.
 
-Clones run as persistent background jobs. The progress page shows an estimated percentage, current task/URL, copied and discovered pages, product count and image count. Navigating away or losing the browser connection does not cancel a clone. Reopen it under Recent site clones in All assets. Cancel explicitly from the progress page. A server restart marks an interrupted job for review instead of silently starting a duplicate. The finished report lists every copied page and its associated product, failures and any incomplete commerce/media.
+Clones run as persistent background jobs. The progress page shows an estimated percentage, current task/URL, copied and discovered pages, product count and image count. Navigating away or losing the browser connection does not cancel a clone. Recent site clones in **Stores & funnels** also shows a live percentage, copied-page count and current task; reopen the full progress page from there. Cancel explicitly from the progress page. A server restart marks an interrupted job for review instead of silently starting a duplicate. The finished report lists every copied page and its associated product, failures and any incomplete commerce/media.
 
 ## Catalog and sales behavior
 
@@ -20,6 +20,14 @@ The owned offer renderer preserves copied page markup and adds explicit, server-
 
 Funnels → Clone whole funnel duplicates its advertorial, offer, saved steps, linked local pages and checkout/post-purchase templates. Pages and native blocks receive independent IDs and handles; copied links and offer destinations point to copied pages. The duplicate is paused, with zero traffic weight and no split-test group, and its pages are drafts. This local campaign copy shares the store's products and media.
 
-All assets → Duplicate creates an independent store/funnel, including its catalog, promotions, gift mappings, theme and local media. Credentials, customers, orders, connected domains, analytics and in-progress jobs are excluded.
+Stores & funnels → Duplicate creates an independent store/funnel, including its catalog, promotions, gift mappings, theme and local media. Credentials, customers, orders, connected domains, analytics and in-progress jobs are excluded.
 
 Tests cover public navigation, recursive menus/policies, cross-subdomain links, tracking deduplication, downstream price discovery, gifts/free shipping, independent flow copies, repeated offers and payment retries, owner-scoped background jobs, progress across navigation, source package cards, alternate checkouts and dynamic order bumps.
+
+## Copied checkout repair
+
+Checkout-bound Add to Cart links, including CheckoutChamp `action` links ending in `/route` or `/of`, go directly to owned checkout even when the funnel was imported as a store. Supported one-time offers are selected initially; a selected subscription still requires subscription support before it can be purchased.
+
+Copied Funnelish contact and delivery fields retain their source layout and are associated with the owned payment form. The copied payment region and order amounts are replaced with working controls while source reviews remain. Script-dependent state dropdowns become editable fields. Copied payment buttons, unlinked product placeholders and subscription terms are removed from the one-time checkout. These runtime repairs apply to existing clones.
+
+`test/imported-commerce.browser.mjs` includes a compact source checkout fixture and verifies payment submission, saved addresses and layout from 320px to 1440px. Set `IMPORTED_CHECKOUT_FIXTURE` to a downloaded source HTML file to run the same checks against that capture. Payment providers are mocked; the tests do not charge a card.

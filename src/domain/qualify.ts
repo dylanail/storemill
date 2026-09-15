@@ -1,5 +1,16 @@
 import { marginFor, type Margin } from './ops.ts'
 import type { Product } from './types.ts'
+import { format, minorDigits } from '../lib/money.ts'
+
+/** The admin accepts currency amounts; persisted qualification notes use minor units. */
+export function parseQualificationAmount(value: string, currency: string): number {
+  if (!value.trim()) return 0
+  const digits = minorDigits(currency)
+  if (!new RegExp(`^\\d+(?:\\.\\d{1,${digits || 1}})?$`).test(value.trim()) || (digits === 0 && value.includes('.'))) throw new Error(`Enter an amount in ${currency} with ${digits} decimal places or fewer`)
+  const amount = Math.round(Number(value) * 10 ** digits)
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('Enter a valid non-negative order value')
+  return amount
+}
 
 /**
  * Product qualification.
@@ -19,6 +30,7 @@ import type { Product } from './types.ts'
 export type Trend = 'up' | 'flat' | 'declining' | 'spike' | 'unknown'
 
 export type QualifyInput = {
+  currency?: string
   title?: string
   /** What the unit costs to get to the customer: the supplier's price plus their shipping. */
   landedCostCents: number
@@ -49,9 +61,9 @@ export type Qualification = {
   summary: string
 }
 
-const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
 
 export function qualifyProduct(input: QualifyInput): Qualification {
+  const currency=input.currency||'USD', money=(amount:number)=>`${format(amount,currency)} ${currency}`
   const price = Math.max(0, Math.round(input.sellPriceCents))
   const landed = Math.max(0, Math.round(input.landedCostCents))
   const aov = Math.max(price, Math.round(input.aovCents ?? price))
@@ -61,7 +73,12 @@ export function qualifyProduct(input: QualifyInput): Qualification {
   // against later.
   const margin = marginFor(price, { costCents: landed, shippingCents: 0 })
   const checks: Check[] = []
-  const add = (key: string, label: string, verdict: Verdict, detail: string, rule: string) => checks.push({ key, label, verdict, detail, rule })
+  const add = (key: string, label: string, verdict: Verdict, detail: string, rule: string) => {
+    if(currency!=='USD'&&['aov','unit-price','high-ticket'].includes(key)){
+      verdict='warn';detail=`${money(key==='aov'?aov:price)}. Convert the USD research benchmark to ${currency} before judging this amount.`
+    }
+    checks.push({key,label,verdict,detail,rule})
+  }
 
   add(
     'aov',

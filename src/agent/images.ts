@@ -74,7 +74,7 @@ export async function enhance(request: ImageRequest & { lanes?: number }): Promi
 /**
  * Two model families, plus the vector stage.
  *
- * OpenAI's GPT Image 2 (the "ChatGPT Images 2.0" model) and Google's Gemini 3
+ * OpenAI's GPT Image 2.5 Sunburst and Google's Gemini 3
  * Pro Image ("Nano Banana Pro") are both wired directly, with no SDK. Which
  * one runs is a choice per request; the default is whichever has a key, and
  * the vector stage is what you get with neither. The model ids are overridable
@@ -85,16 +85,17 @@ export type ImageProvider = 'openai' | 'google' | 'svg'
 export type ImageModel = { id: ImageProvider; name: string; model: string; envKey: string; note: string }
 
 export function imageModels(): Array<ImageModel & { available: boolean }> {
+  const openaiModel = process.env.STOREMILL_IMAGE_MODEL ?? process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-2.5-sunburst'
   const models: ImageModel[] = [
-    { id: 'openai', name: 'OpenAI GPT Image 2', model: process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-2', envKey: 'OPENAI_API_KEY', note: 'ChatGPT Images 2.0. Edits your photo into the scene; strong on text and product fidelity.' },
-    { id: 'google', name: 'Google Gemini 3 Pro Image', model: process.env.AMBORAS_GOOGLE_IMAGE_MODEL ?? 'gemini-3-pro-image-preview', envKey: 'GEMINI_API_KEY', note: 'Nano Banana Pro. Keeps the product identity across shots; good at lifestyle composites.' },
+    { id: 'openai', name: openaiModel === 'gpt-image-2.5-sunburst' ? 'OpenAI GPT Image 2.5 Sunburst' : `OpenAI · ${openaiModel}`, model: openaiModel, envKey: 'OPENAI_API_KEY', note: 'Precise image editing, similar variations, text changes and product branding.' },
+    { id: 'google', name: 'Google Gemini 3 Pro Image', model: process.env.STOREMILL_GOOGLE_IMAGE_MODEL ?? process.env.AMBORAS_GOOGLE_IMAGE_MODEL ?? 'gemini-3-pro-image-preview', envKey: 'GEMINI_API_KEY', note: 'Nano Banana Pro. Keeps the product identity across shots; good at lifestyle composites.' },
     { id: 'svg', name: 'Vector stage (no key)', model: 'built-in', envKey: '', note: 'Your photo staged into the scene deterministically. Always available.' },
   ]
   return models.map((entry) => ({ ...entry, available: entry.id === 'svg' || Boolean(process.env[entry.envKey]) }))
 }
 
 export function defaultProvider(): ImageProvider {
-  const wanted = process.env.AMBORAS_IMAGE_PROVIDER as ImageProvider | undefined
+  const wanted = (process.env.STOREMILL_IMAGE_PROVIDER ?? process.env.AMBORAS_IMAGE_PROVIDER) as ImageProvider | undefined
   const models = imageModels()
   if (wanted && models.find((entry) => entry.id === wanted)?.available) return wanted
   return models.find((entry) => entry.available)?.id ?? 'svg'

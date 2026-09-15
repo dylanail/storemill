@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    *{box-sizing:border-box}body{margin:0;font:16px Arial;color:#222}
+    .wrap{max-width:620px;margin:0 auto;padding:20px}.sidebar{background:#fff1f5}
+    input,select{width:100%;min-height:50px;padding:12px;font:inherit;border:1px solid #aaa;border-radius:6px;margin:5px 0}
+    .names,.address-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.address-row{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .btn-primary{background:#d82e76;color:white;padding:16px;border:0;border-radius:8px}
+    input[type=checkbox]{width:18px;min-height:18px}.sub_details{font-size:12px}
+    @media(max-width:600px){.names,.address-row{grid-template-columns:minmax(0,1fr)}}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="basic-information-section">
+      <section class="wrap">
+        <h2>Contact</h2>
+        <input name="emailAddress" type="email" placeholder="Email address">
+        <h2>Delivery</h2>
+        <select name="shipCountry"><option value="US">United States</option></select>
+        <div class="names"><input name="shipFirstName" placeholder="First name"><input name="shipLastName" placeholder="Last name"></div>
+        <input name="shipAddress1" placeholder="Address"><input name="shipAddress2" placeholder="Apartment, suite, etc.">
+        <div class="address-row"><input name="shipCity" placeholder="City"><select name="shipState"><option value="">State</option></select><input name="shipPostalCode" placeholder="Postal code"></div>
+        <input name="phoneNumber" type="tel" placeholder="Phone number">
+        <label><input type="checkbox" name="sourceMarketing" checked>Text me offers</label>
+        <div class="productBox"><input name="product" type="radio" value="placeholder">Product 1 · $0.00</div>
+        <section class="fk-payment-option-wrapper">
+          <h2>Payment</h2><p>All transactions are secure and encrypted</p>
+          <div><input id="card-radio" type="radio" name="sourcePayment"><input id="paypal-radio" type="radio" name="sourcePayment">
+            <form class="fk-card-payment-container"><input name="cardNumber"><input name="cardDate"><input name="cardSecurityCode"></form>
+          </div>
+        </section>
+        <p class="sub_details">I agree to a recurring subscription charge.</p>
+        <button class="btn-primary">Pay Now</button><button class="btnPayPal2">Checkoutwithpaypal</button>
+      </section>
+    </div>
+    <aside class="sidebar"><div class="sticky wrap"><div class="cc-cart-wrapper">Copied stale totals</div><div class="reviews-container"><p>The source review stays visible.</p><p>- Jess C.</p></div></div></aside>
+  </main>
+</body>
+</html>

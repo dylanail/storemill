@@ -117,7 +117,7 @@ function mountNativeMedia(block) {
     urls.forEach((source,index)=>{
       const kind=(/video/i.test(field.label||key)&&key!=='poster')||/\.(mp4|webm|mov)([?#]|$)/i.test(source)?'video':'image';
       for(const mode of ['edit','replace']){
-        const button=document.createElement('button');button.type='button';button.className='btn';button.textContent=(mode==='edit'?'Regenerate with branding':'Upload / choose asset')+(urls.length>1?' '+(index+1):'');
+        const button=document.createElement('button');button.type='button';button.className='btn';button.textContent=(mode==='edit'?'Regenerate / edit':'Upload / choose asset')+(urls.length>1?' '+(index+1):'');
         button.onclick=()=>window.__EDITOR_MEDIA.open({source,kind,embed:kind==='video'&&/youtube|youtu\.be|vimeo/.test(source),mode,apply:(url,scope)=>{
           const owner=state.blocks.find(item=>item.id===block.id),current=String(owner?.settings[key]||'');
           if(!owner||(source?!nativeMediaUrls(current).includes(source):current!==''))throw Error('This media field changed while the edit was running. Reopen it to apply the preview.');

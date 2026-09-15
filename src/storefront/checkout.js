@@ -64,7 +64,7 @@
     clearInvalid(input);input.setAttribute('aria-invalid','true');
     const message=document.createElement('span');message.className='field-error';message.id=input.id+'-error';message.textContent=input.validity.valueMissing?'This field is required.':'Enter a valid '+(input.type==='email'?'email address.':'value.');input.setAttribute('aria-describedby',message.id);input.closest('.field')?.append(message);
   }
-  form.addEventListener('input',event=>{if(event.target.matches('[aria-invalid=true]')&&event.target.validity.valid)clearInvalid(event.target);});
+  document.addEventListener('input',event=>{if(event.target.form===form&&event.target.matches('[aria-invalid=true]')&&event.target.validity.valid)clearInvalid(event.target);});
   form.addEventListener('submit',event=>{
     if(pending||config.preview){event.preventDefault();event.stopImmediatePropagation();return;}
     const invalid=[...form.elements].filter(el=>el.willValidate&&!el.validity.valid);

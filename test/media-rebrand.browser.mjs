@@ -34,8 +34,13 @@ await test('media rebrand browser workflows',async t=>{
   const {ctx,p}=await context();await p.goto(origin+media);assert.ok(await p.getByRole('link',{name:'Rebrand',exact:true}).count()>=3);assert.ok(await p.locator('.media-card video').count());
   await p.goto(form(source));assert.equal(await p.getByLabel('Desired brand name').inputValue(),'Northline');await p.getByLabel('Desired logo',{exact:true}).selectOption(logo);
   for(const width of [1440,820,390]){await p.setViewportSize({width,height:1050});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.equal(await p.getByRole('button',{name:'Create preview'}).isVisible(),true);}
-  await p.getByLabel('How to redo it').selectOption('overlay');assert.equal(await p.getByLabel('Logo position').isVisible(),true);assert.equal(await p.getByLabel('What should change? (optional)').isVisible(),false);
+  await p.getByLabel('How to redo it').selectOption('overlay');assert.equal(await p.getByLabel('Logo position').isVisible(),true);assert.equal(await p.getByLabel('What should change?').isVisible(),false);
   if(process.env.MEDIA_FORM_SCREENSHOT)await p.screenshot({path:process.env.MEDIA_FORM_SCREENSHOT});await ctx.close();
+ });
+ await t.test('library supports similar variations and word edits without brand fields',async()=>{
+  const {ctx,p}=await context();
+  for(const intent of ['variation','text']){await p.goto(form(source));await p.getByLabel('Edit goal').selectOption(intent);assert.equal(await p.getByLabel('Desired brand name').isVisible(),false);assert.equal(await p.getByLabel('Desired logo',{exact:true}).isVisible(),false);await p.getByLabel('What should change?').fill(intent==='text'?'Change DAILY to EVERYDAY':'Keep a similar pose and setting');await p.getByRole('button',{name:'Create preview'}).click();await p.waitForURL(/\/rebrand\/rebrand_/);await p.getByRole('button',{name:'Apply to this asset',exact:true}).waitFor();const saved=JSON.parse(db.one('SELECT spec FROM media_rebrands WHERE id=?',new URL(p.url()).pathname.split('/').at(-1)).spec);assert.equal(saved.intent,intent);assert.equal(saved.logo,'');}
+  await ctx.close();
  });
  await t.test('creates a real overlay preview, applies it, and undoes it',async()=>{
   const {ctx,p}=await context();await p.goto(form(source));await p.getByLabel('Desired logo',{exact:true}).selectOption(logo);await p.getByLabel('How to redo it').selectOption('overlay');await p.getByLabel('Or upload a new logo').setInputFiles(join(dir,'logo.svg'));await p.getByRole('button',{name:'Create preview'}).click();await p.waitForURL(/\/rebrand\/rebrand_/);
@@ -48,7 +53,7 @@ await test('media rebrand browser workflows',async t=>{
  await t.test('AI progress survives navigation, cancellation stops work, and failures expose a retry',async()=>{
   const {ctx,p}=await context();providerMode='hold';await p.goto(form(source));await p.getByLabel('How to redo it').selectOption('ai');await p.getByRole('button',{name:'Create preview'}).click();await p.waitForURL(/\/rebrand\/rebrand_/);const jobUrl=p.url();await p.getByText('Replacing image branding',{exact:true}).waitFor();
   await p.goto(origin+media);await p.getByRole('region',{name:'Recent media edits'}).waitFor();await p.goto(jobUrl);await p.getByRole('button',{name:'Cancel edit'}).click();await p.getByText('Edit cancelled. Your original has been kept.',{exact:true}).waitFor();release?.();providerMode='failure';
-  await p.getByRole('link',{name:'Redo with different branding'}).click();await p.getByRole('button',{name:'Create preview'}).click();await p.waitForURL(/\/rebrand\/rebrand_/);await p.getByRole('alert').filter({hasText:'503'}).waitFor();assert.equal(await p.getByRole('button',{name:'Apply to this asset'}).count(),0);providerMode='success';await ctx.close();
+  await p.getByRole('link',{name:'Redo with different instructions'}).click();await p.getByRole('button',{name:'Create preview'}).click();await p.waitForURL(/\/rebrand\/rebrand_/);await p.getByRole('alert').filter({hasText:'503'}).waitFor();assert.equal(await p.getByRole('button',{name:'Apply to this asset'}).count(),0);providerMode='success';await ctx.close();
  });
  await t.test('form recovers from network failures and duplicate request keys create one job',async()=>{
   const {ctx,p}=await context();await p.goto(form(source));await p.getByLabel('How to redo it').selectOption('overlay');await p.getByLabel('Desired logo',{exact:true}).selectOption(logo);
@@ -68,9 +73,15 @@ await test('media rebrand browser workflows',async t=>{
   const canvas=p.frameLocator('#edit-frame');
   const select=async selector=>p.locator('#edit-frame').evaluate((frame,s)=>window.__PAGE_EDITOR.select(frame.contentDocument.querySelector(s).getAttribute('data-pb-id')),selector);
   await select('h1');await p.locator('[data-content=text]').fill('My unsaved copy');await select('#photo');
-  await p.getByRole('button',{name:'Regenerate with branding',exact:true}).click();const dialog=p.getByRole('dialog',{name:'Edit media'});await dialog.getByLabel('Edit suggestions',{exact:true}).waitFor();
+  await p.getByRole('button',{name:'Regenerate / edit',exact:true}).click();const dialog=p.getByRole('dialog',{name:'Edit media'});await dialog.getByLabel('Edit suggestions',{exact:true}).waitFor();
   assert.equal(await dialog.getByLabel('Edit suggestions',{exact:true}).evaluate(el=>el===document.activeElement),true);
-  await dialog.locator('[name=logoUpload]').setInputFiles(join(dir,'logo.svg'));await dialog.getByText('Logo saved in Logos.',{exact:true}).waitFor();
+  assert.equal(await dialog.getByLabel('Edit goal').inputValue(),'variation');
+  assert.equal(await dialog.getByRole('button',{name:'Choose logo asset',exact:true}).isVisible(),false);
+  await dialog.getByLabel('Edit goal').selectOption('rebrand');
+  await dialog.getByRole('button',{name:'Choose logo asset',exact:true}).click();
+  assert.ok(await dialog.locator('.em-picker-grid button').count()>0,'Logo chooser shows existing images even without logo categorization');
+  await dialog.locator('.em-picker-grid button').first().click();
+  const chooserPromise=p.waitForEvent('filechooser');await dialog.getByRole('button',{name:'Upload logo',exact:true}).click();await (await chooserPromise).setFiles(join(dir,'logo.svg')); await dialog.getByText('Logo saved in Logos.',{exact:true}).waitFor();
   await dialog.getByRole('button',{name:'Choose reference image',exact:true}).click();await dialog.locator('.em-picker-grid img').first().locator('..').click();
   await dialog.getByLabel('Edit suggestions',{exact:true}).fill('Place the desired logo on the bottle. Use reference 1 for color and lighting.');
   await dialog.getByLabel('Keep unchanged',{exact:true}).fill('Keep the bottle shape and factual label text.');await dialog.getByLabel('Edit goal').selectOption('custom');
@@ -96,7 +107,7 @@ await test('media rebrand browser workflows',async t=>{
   const {ctx,p}=await context();await p.goto(origin+'/admin/pages/'+fixture.id+'/edit?storeId='+store.id);await p.locator('.canvas-block').first().click();await p.getByRole('button',{name:'Upload / choose asset',exact:true}).click();const dialog=p.getByRole('dialog',{name:'Edit media'});await dialog.getByLabel('Apply replacement to').selectOption('page');await dialog.locator('[name=replacementUpload]').setInputFiles(join(dir,'logo.png'));await dialog.waitFor({state:'hidden'});
   await p.locator('.canvas-block').nth(2).click();assert.equal(await p.locator('[data-k=src]').inputValue(),source+'?size=2','All matching replacements leave separate variants intact');await p.locator('.canvas-block').first().click();
   assert.equal(getPage(db,store.id,fixture.id).blocks[0].settings.src,source);assert.notEqual(await p.locator('[data-k=src]').inputValue(),source);await p.locator('#undo').click();assert.equal(await p.locator('[data-k=src]').inputValue(),source);
-  await p.locator('.canvas-block').nth(1).click();assert.equal(await p.getByRole('button',{name:'Regenerate with branding',exact:true}).count(),2);
+  await p.locator('.canvas-block').nth(1).click();assert.equal(await p.getByRole('button',{name:'Regenerate / edit',exact:true}).count(),2);
   await ctx.close();
  });
  await t.test('video regeneration has audio controls, creates a real overlay and replaces only the selected video',async()=>{

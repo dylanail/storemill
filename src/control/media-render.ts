@@ -9,7 +9,7 @@ import { readUpload, saveMediaUpload, MAX_VIDEO_BYTES, MAX_UPLOAD_BYTES, sniffIm
 import { assertPublicNetworkUrl } from '../pages/public-network.ts'
 import { imageModels, renderSvg } from '../agent/images.ts'
 
-export type RebrandSpec = { brandName: string; logo: string; oldBrand: string; direction: string; method: 'ai' | 'overlay'; provider: 'openai' | 'google'; position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center'; width: number; frame: number; intent?: 'rebrand'|'custom'|'cleanup'|'background'|'enhance'|'restyle'; references?: string[]; preserve?: string; shape?: 'original'|'square'|'landscape'|'portrait'; audio?: 'keep'|'mute' }
+export type RebrandSpec = { brandName: string; logo: string; oldBrand: string; direction: string; method: 'ai' | 'overlay'; provider: 'openai' | 'google'; position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center'; width: number; frame: number; intent?: 'rebrand'|'variation'|'text'|'custom'|'cleanup'|'background'|'enhance'|'restyle'; references?: string[]; preserve?: string; shape?: 'original'|'square'|'landscape'|'portrait'; audio?: 'keep'|'mute' }
 export type MediaFile = { data: Buffer; type: string }
 export type MediaTransport = (url: string, init: RequestInit) => Promise<Response>
 let testTransport: MediaTransport | null = null
@@ -93,9 +93,9 @@ async function raster(file: MediaFile, dir: string, name: string, signal: AbortS
   return { data: await readFile(output), type: 'image/png' }
 }
 export function rebrandPrompt(spec: RebrandSpec): string {
-  const goals={rebrand:'Replace the existing commercial branding with the desired brand.',custom:'Make the changes described in the merchant direction.',cleanup:'Remove distracting objects or unwanted text as directed, keeping the subject intact.',background:'Replace the background as directed; use a clean studio backdrop when unspecified.',enhance:'Improve clarity, lighting and color while preserving the original subject and factual detail.',restyle:'Restyle the scene as directed while preserving product identity and factual detail.'}
+  const goals={variation:'Generate a slightly different version of image 1 with a similar pose, setting, framing and mood. Keep the subject and existing branding. Introduce subtle natural variation; do not replace logos or words.',text:'Change only the words specified in the merchant direction. Match the original typography and placement and preserve all other logos, objects, composition and styling.',rebrand:'Replace the existing commercial branding with the desired brand.',custom:'Make the changes described in the merchant direction.',cleanup:'Remove distracting objects or unwanted text as directed, keeping the subject intact.',background:'Replace the background as directed; use a clean studio backdrop when unspecified.',enhance:'Improve clarity, lighting and color while preserving the original subject and factual detail.',restyle:'Restyle the scene as directed while preserving product identity and factual detail.'}
   const intent=spec.intent||'rebrand'
-  return `Edit image 1 for the merchant brand ${JSON.stringify(spec.brandName)}. ${goals[intent]} ${spec.logo ? 'Image 2 is the exact desired logo: match its lettering, symbol and colors when branding is requested.' : 'When branding is requested, use the supplied brand name.'} ${(spec.references?.length||0)?'The remaining images are merchant references for the requested style, composition or product details; follow the merchant direction about their role.':''} ${spec.oldBrand?'Brand to replace: '+JSON.stringify(spec.oldBrand)+'.':''} Preserve product identity, people, factual information and all unrequested details. ${spec.shape&&spec.shape!=='original'?'Compose the result in '+spec.shape+' format.':'Preserve the original composition and dimensions unless the direction explicitly asks for a change.'} Keep unchanged: ${JSON.stringify(spec.preserve||'Product details and anything not explicitly requested to change.')}. Do not invent claims, badges or reviews. Merchant direction: ${JSON.stringify(spec.direction||'Keep the original design and change only the requested details.')}`
+  return `Edit image 1${intent==='rebrand'||intent==='custom'?' for the merchant brand '+JSON.stringify(spec.brandName):''}. ${goals[intent]} ${spec.logo && (intent==='rebrand'||intent==='custom') ? 'Image 2 is the exact desired logo: match its lettering, symbol and colors when branding is requested.' : intent==='rebrand'?'Use the supplied brand name.':'Do not apply merchant branding unless explicitly requested.'} ${(spec.references?.length||0)?'The remaining images are merchant references for the requested style, composition or product details; follow the merchant direction about their role.':''} ${spec.oldBrand&&(intent==='rebrand'||intent==='custom')?'Brand to replace: '+JSON.stringify(spec.oldBrand)+'.':''} Preserve product identity, people, factual information and all unrequested details. ${spec.shape&&spec.shape!=='original'?'Compose the result in '+spec.shape+' format.':'Preserve the original composition and dimensions unless the direction explicitly asks for a change.'} Keep unchanged: ${JSON.stringify(spec.preserve||'Product details and anything not explicitly requested to change.')}. Do not invent claims, badges or reviews. Merchant direction: ${JSON.stringify(spec.direction||'Keep the original design and change only the requested details.')}`
 }
 
 async function imageEdit(source: MediaFile, logo: MediaFile | null, spec: RebrandSpec, signal: AbortSignal, references: MediaFile[]=[]): Promise<MediaFile> {
@@ -114,7 +114,7 @@ async function imageEdit(source: MediaFile, logo: MediaFile | null, spec: Rebran
   const payload = await response.json() as any
   let data = payload.data?.[0]?.b64_json, type = 'image/png'
   if (!data) for (const c of payload.candidates ?? []) for (const p of c.content?.parts ?? []) { const i = p.inlineData ?? p.inline_data; if (i?.data) { data = i.data; type = i.mimeType ?? i.mime_type ?? type } }
-  if (!data) throw new Error('The image provider returned no edited image. Try a clearer branding instruction.')
+  if (!data) throw new Error('The image provider returned no edited image. Try a clearer editing instruction.')
   const bytes = Buffer.from(data, 'base64')
   if (bytes.length > MAX_UPLOAD_BYTES || !sniffImageType(bytes)) throw new Error('The provider returned an invalid or oversized image')
   return { data: bytes, type }
@@ -144,7 +144,7 @@ export async function renderRebrand(input: { storeId: string; source: string; ki
   try {
     const source = await loadMedia(input.source, storeId, kind, signal), sourcePath = join(dir, 'source'), output = join(dir, kind === 'video' ? 'result.mp4' : 'result.png')
     await writeFile(sourcePath, source.data)
-    const logo = spec.logo ? await raster(await loadMedia(spec.logo, storeId, 'image', signal), dir, 'logo', signal) : null
+    const logo = spec.logo && (spec.method==='overlay'||!spec.intent||['rebrand','custom'].includes(spec.intent)) ? await raster(await loadMedia(spec.logo, storeId, 'image', signal), dir, 'logo', signal) : null
     const references: MediaFile[]=[]
     for(const [index,url] of (spec.references||[]).entries())references.push(await raster(await loadMedia(url,storeId,'image',signal),dir,'reference-'+index,signal))
     const sourceImage = kind === 'image' ? await raster(source, dir, 'source-image', signal) : null
@@ -160,7 +160,7 @@ export async function renderRebrand(input: { storeId: string; source: string; ki
       const x = spec.position==='center'?'(W-w)/2':spec.position.endsWith('right') ? `W-w-${margin}` : String(margin), y = spec.position==='center'?'(H-h)/2':spec.position.startsWith('bottom') ? `H-h-${margin}` : String(margin)
       await command(['-protocol_whitelist', 'file,pipe', '-i', sourcePath, '-i', join(dir, 'logo.png'), '-filter_complex', `[1:v]scale=${logoWidth}:-1[logo];[0:v][logo]overlay=${x}:${y}:format=auto${kind === 'video' ? ',pad=ceil(iw/2)*2:ceil(ih/2)*2' : ''}[v]`, '-map', '[v]', ...(kind === 'video' ? [...(spec.audio==='mute'?['-an']:['-map','0:a?']), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart'] : ['-frames:v', '1']), output], signal)
     } else if (kind === 'image') {
-      phase('Replacing image branding')
+      phase(spec.intent==='rebrand'||!spec.intent?'Replacing image branding':'Creating your image variation')
       const edited = await imageEdit(sourceImage!, logo, spec, signal,references)
       await writeFile(join(dir, 'edited.png'), edited.data)
       // Preserve source dimensions by default, or crop without distortion to the requested format.
@@ -193,7 +193,7 @@ export async function renderRebrand(input: { storeId: string; source: string; ki
         if (state.status === 'SUCCEEDED') {
           if (!state.output?.[0]) throw new Error('The video provider returned no edited clip')
           finished = await downloadMedia(state.output[0], MAX_VIDEO_BYTES, signal)
-        } else { phase(state.status === 'RUNNING' ? 'Replacing branding throughout the video' : 'Waiting for the video provider'); await pause(signal) }
+        } else { phase(state.status === 'RUNNING' ? 'Applying the edit throughout the video' : 'Waiting for the video provider'); await pause(signal) }
       }
       if (!finished.type.startsWith('video/')) throw new Error('The provider output is not a video')
       phase('Restoring the original audio')

@@ -46,7 +46,7 @@ export async function drainImports(db: Db, run=importAssetFromUrl): Promise<void
       signal.throwIfAborted();db.update('asset_import_jobs',job.id,{progress,updated_at:now()})
     }})
     const result:ImportResult={storeId:imported.store.id,pageId:imported.page.id,pages:imported.pages.length,products:imported.products.length,complete:imported.report.complete}
-    db.update('asset_import_jobs',job.id,{status:'done',result,updated_at:now()})
+    db.update('asset_import_jobs',job.id,{status:'done',result,progress:{...json<Partial<ImportProgress>>(getImport(db,job.owner_id,job.id).progress,{}),percent:100,task:result.complete?'Clone complete':'Clone complete — review copy report'},updated_at:now()})
     recordAudit(db,{storeId:imported.store.id,actorType:'user',actorId:job.owner_id,action:'clone_asset',target:imported.clone.sourceUrl,diff:{jobId:job.id,pages:result.pages,products:result.products,complete:result.complete}})
   }catch(error){
     if(getImport(db,job.owner_id,job.id).status!=='cancelled')db.update('asset_import_jobs',job.id,{status:'failed',error:error instanceof Error?error.message:'Could not clone this site',updated_at:now()})

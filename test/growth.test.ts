@@ -45,7 +45,7 @@ test('image models: the newest of each family by default, overridable, and the v
   delete process.env.AMBORAS_IMAGE_MODEL
   try {
     const models = imageModels()
-    assert.equal(models.find((model) => model.id === 'openai')?.model, 'gpt-image-2')
+    assert.equal(models.find((model) => model.id === 'openai')?.model, 'gpt-image-2.5-sunburst')
     assert.equal(models.find((model) => model.id === 'google')?.model, 'gemini-3-pro-image-preview')
     assert.equal(defaultProvider(), 'svg', 'nothing configured → the stage')
     process.env.GEMINI_API_KEY = 'test'
@@ -88,7 +88,7 @@ test('both providers are called with the reference photo and their output is sav
     assert.match(fromOpenai, /^\/_uploads\/store_img\/up_[a-z0-9]+\.png$/, 'model output becomes an upload, not a data URI in the row')
     assert.equal(calls[0]?.url, 'https://api.openai.com/v1/images/edits', 'a reference means an edit, not a generation')
     assert.ok(calls[0]?.body instanceof FormData)
-    assert.equal((calls[0]?.body as FormData).get('model'), 'gpt-image-2')
+    assert.equal((calls[0]?.body as FormData).get('model'), 'gpt-image-2.5-sunburst')
     assert.match(String((calls[0]?.body as FormData).get('prompt')), /on marble/)
 
     const fromGoogle = await generate({ subject: 'Glove', provider: 'google', reference, direction: 'dark stone', storeId: 'store_img' })

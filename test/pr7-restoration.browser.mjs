@@ -58,7 +58,7 @@ test('qualification saves displayed currency amounts, product HTML uses product 
  try{
   await page.goto(origin+'/admin/products/'+product.id);await page.locator('[name=aovAmount]').fill('80');await page.getByRole('button',{name:'Save qualification',exact:true}).click();assert.equal(getProduct(db,store.id,product.id).metadata.qualify.includes('8000'),true);assert.equal(await page.locator('[name=aovAmount]').inputValue(),'80.00');
   await page.goto(origin+'/s/'+store.slug+'/products/'+product.handle+'?version='+copied.id);assert.match(await page.locator('link[rel=canonical]').getAttribute('href'),new RegExp('/products/'+product.handle+'$'));assert.match(await page.title(),/Everyday bag/);
-  await page.goto(origin+'/admin/speed');assert.match(await page.locator('#health').textContent(),/published pages and live theme/);await page.getByRole('link',{name:'Draft',exact:true}).click();assert.match(await page.locator('#health').textContent(),/saved pages and draft theme/);
+  await page.goto(origin+'/admin/speed');assert.match(await page.locator('#health').textContent(),/published pages and live theme/);await page.getByRole('link',{name:'Draft repairs',exact:true}).click();assert.match(await page.locator('#health').textContent(),/saved pages and draft theme/);
   await page.goto(origin+'/preview/'+store.slug+'/products/'+product.handle);assert.equal(await page.locator('[data-cart-events]').count(),0);assert.deepEqual(errors,[]);
  }finally{await ctx.close();}
 });

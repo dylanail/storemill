@@ -20,7 +20,7 @@ export function getRebrand(db: Db, storeId: string, jobId: string): RebrandJob {
 }
 export function rebrandDefaults(db: Db, storeId: string): RebrandSpec {
   const store = getStore(db, storeId)!, draft = environment(db, storeId, 'draft')
-  const last = db.one<{ spec: string }>('SELECT spec FROM media_rebrands WHERE store_id=? ORDER BY created_at DESC LIMIT 1', storeId)
+  const last = listRebrands(db, storeId).find(job => { const saved=json<Partial<RebrandSpec>>(job.spec, {}); return saved.method==='overlay'||['rebrand','custom'].includes(saved.intent||'rebrand') })
   const preferred = json<Partial<RebrandSpec>>(last?.spec, {})
   return { brandName: preferred.brandName || draft.brand.name || store.brand.name || store.name, logo: preferred.logo ?? (draft.brand.logoSvg || store.brand.logoSvg || ''), oldBrand: '', direction: '', method: 'ai', provider: process.env.OPENAI_API_KEY ? 'openai' : 'google', position: 'bottom-right', width: 18, frame: 0, intent:'rebrand',references:[],preserve:'',shape:'original',audio:'keep' }
 }
@@ -32,12 +32,14 @@ export function startRebrand(db: Db, storeId: string, actorId: string, source: s
   if (!media || media.kind === 'embed') throw new Error('Choose an image or direct video file from this asset’s Media library. Embedded players need the original video file.')
   const defaults = rebrandDefaults(db, storeId), spec = { ...defaults, ...input }
   for (const key of ['brandName', 'logo', 'oldBrand', 'direction', 'preserve'] as const) spec[key] = String(spec[key] ?? '').trim()
+  if (!spec.brandName && spec.method==='ai' && spec.intent && !['rebrand','custom'].includes(spec.intent)) spec.brandName=defaults.brandName
   if (!spec.brandName || spec.brandName.length > 100 || spec.oldBrand.length > 100 || spec.direction.length > 6000 || (spec.preserve?.length||0) > 1500 || spec.logo.length > 100_000) throw new Error('Enter a brand name up to 100 characters and directions up to 6,000 characters')
   if (!['ai', 'overlay'].includes(spec.method) || !['openai', 'google'].includes(spec.provider) || !['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'].includes(spec.position)) throw new Error('Choose one of the available editing options')
   if (!Number.isFinite(spec.width) || spec.width < 5 || spec.width > 40 || !Number.isFinite(spec.frame) || spec.frame < 0 || spec.frame > 29.9) throw new Error('Logo width must be 5–40%; video reference time must be between 0 and 29.9 seconds')
+  if(spec.method==='ai'&&spec.intent&&!['rebrand','custom'].includes(spec.intent)){spec.logo='';spec.oldBrand=''}
   if (spec.logo && spec.logo !== defaults.logo && !listStoreMedia(db, storeId).some(item => item.url === spec.logo && item.kind === 'image')) throw new Error('Upload the desired logo to this asset’s Media library first')
-  if(!['rebrand','custom','cleanup','background','enhance','restyle'].includes(spec.intent||'rebrand')||!['original','square','landscape','portrait'].includes(spec.shape||'original')||!['keep','mute'].includes(spec.audio||'keep'))throw new Error('Choose supported output and editing options')
-  if(spec.method==='ai'&&spec.intent==='custom'&&!spec.direction)throw new Error('Describe what you want to change')
+  if(!['rebrand','variation','text','custom','cleanup','background','enhance','restyle'].includes(spec.intent||'rebrand')||!['original','square','landscape','portrait'].includes(spec.shape||'original')||!['keep','mute'].includes(spec.audio||'keep'))throw new Error('Choose supported output and editing options')
+  if(spec.method==='ai'&&['custom','text'].includes(spec.intent||'')&&!spec.direction)throw new Error('Describe what you want to change')
   if(!Array.isArray(spec.references)||spec.references.length>3||spec.references.some(url=>typeof url!=='string'||!listStoreMedia(db,storeId).some(item=>item.url===url&&item.kind==='image')))throw new Error('Choose up to three reference images from this asset')
   if(media.kind==='video'&&spec.shape!=='original')throw new Error('Video edits keep the original frame shape')
   const available = mediaEditingAvailability()

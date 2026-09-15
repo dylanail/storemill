@@ -3,6 +3,33 @@ import { json } from '../lib/db.ts'
 import type { ImportJob, ImportResult } from '../control/asset-import-jobs.ts'
 import type { ImportProgress } from '../control/assets.ts'
 
+export function recentImports(jobs: ImportJob[]): string {
+  if (!jobs.length) return ''
+  // Active work stays visible even when more recent jobs have already finished.
+  const shown = [...jobs.filter(job => ['queued','working'].includes(job.status)), ...jobs.filter(job => !['queued','working'].includes(job.status)).slice(0, 6)]
+  return `<section class="card" aria-label="Recent site clones"><h2>Recent site clones</h2><p class="muted">Estimated completion updates while your clones run.</p>${shown.map(job => {
+    const progress = json<Partial<ImportProgress>>(job.progress, {}), input = json<{name?:string;url?:string}>(job.input, {})
+    const percent = job.status === 'done' ? 100 : Math.max(0, Math.min(99, Number(progress.percent) || 0))
+    let title = input.name || input.url || 'Site clone'
+    if (!input.name && input.url) { try { title = new URL(input.url).hostname } catch {} }
+    return `<article data-import-job="${e(job.id)}" data-status="${job.status}" style="padding:12px 0;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between"><a data-import-link href="/admin/imports/${e(job.id)}">${e(title)}</a><strong data-import-percent>${percent}%</strong></div><progress data-import-progress aria-label="Estimated clone progress" value="${percent}" max="100" style="width:100%;accent-color:#315be8"></progress><p><span data-import-status>${e(job.status)}</span> · <span data-import-count>${progress.copied || 0} pages</span> · <span data-import-task>${e(job.error || progress.task || '')}</span></p><p data-import-connection class="muted" role="status"></p></article>`
+  }).join('')}<script>(()=>{
+    let stopped=false;addEventListener('pagehide',()=>stopped=true);
+    const active=row=>['queued','working'].includes(row.dataset.status);
+    async function poll(row){if(stopped||!active(row))return;let delay=1500;try{
+      const response=await fetch('/admin/imports/'+encodeURIComponent(row.dataset.importJob)+'/status',{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'},signal:AbortSignal.timeout(10000)});
+      if(!response.ok||response.redirected)throw Error();const job=await response.json(),p=job.progress||{};
+      const percent=job.status==='done'?100:Math.max(0,Math.min(99,Number(p.percent)||0));row.dataset.status=job.status;
+      row.querySelector('[data-import-percent]').textContent=percent+'%';row.querySelector('progress').value=percent;
+      row.querySelector('[data-import-status]').textContent=job.status;row.querySelector('[data-import-count]').textContent=(p.copied||0)+' pages';
+      row.querySelector('[data-import-task]').textContent=job.error||p.task||'';row.querySelector('[data-import-connection]').textContent='';
+      if(job.status==='done')row.querySelector('[data-import-link]').href='/admin/imports/'+encodeURIComponent(job.id)+'/open';
+    }catch{delay=4000;row.querySelector('[data-import-connection]').textContent='Reconnecting… Your clone continues on the server.'}
+    if(!stopped&&active(row))setTimeout(()=>poll(row),delay)}
+    document.querySelectorAll('[data-import-job]').forEach(row=>{if(active(row))poll(row)});
+  })()</script></section>`
+}
+
 export function importJobPage(job: ImportJob): string {
   const progress=json<Partial<ImportProgress>>(job.progress,{}),result=json<Partial<ImportResult>>(job.result,{})
   const running=['queued','working'].includes(job.status)

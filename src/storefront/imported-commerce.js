@@ -162,9 +162,9 @@
   async function add(node, buyNow) {
     if (busy) return;
     // Funnel offers are confirmed on checkout; stores keep their copied drawer.
-    buyNow=buyNow||config.assetKind==='funnel';
+    buyNow=buyNow||config.assetKind==='funnel'||isCheckoutDestination(node);
     if(config.assetKind==='funnel'&&config.role!=='checkout'){
-      const declared=node.getAttribute('href')||node.dataset.copyHref||'';
+      const declared=destination(node);
       location.href=declared.startsWith(config.base+'/pages/')?declared:config.base+'/checkout';return;
     }
     if(one('.subOfferButton.activeOfferType')){announce('Subscriptions are not available in this checkout yet. Choose One time purchase to place an order.');return;}
@@ -185,6 +185,12 @@
     finally { busy=false;node.removeAttribute('aria-busy'); }
   }
   function destination(node) { return node.getAttribute('data-copy-href') || node.getAttribute('href') || node.getAttribute('action') || ''; }
+  function isCheckoutDestination(node) {
+    const route=destination(node);
+    // CheckoutChamp uses an action attribute on anchors, including a /route redirect.
+    // This is navigation to the linked checkout, even for a funnel cloned as a store.
+    return /\/(?:checkout|checkouts)(?:[/?#]|$)/i.test(route) || (node.matches('a[action]')&& /\/(?:route|of)(?:[?#]|$)/i.test(route)) || (config.checkoutPaths||[]).some(path=>route.split(/[?#]/)[0]===config.base+path);
+  }
   function kind(node) {
     if (node.closest('[data-owned-checkout],[data-owned-offer]')) return '';
     if(node.dataset.copyAction)return node.dataset.copyAction;
@@ -257,23 +263,36 @@
     const original=one('form.fk-card-payment-container') || one('form[action*="checkout"],form[action*="payment"],form[data-copy-original-action*="checkout"],form[data-copy-original-action*="payment"],form#checkout,form.checkout');
     const holder=document.createElement('div');holder.dataset.ownedCheckout='';holder.innerHTML=(config.checkout.error ? '<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.express+config.checkout.form;
     const funnelColumn=one('.basic-information-section');
+    let paymentRegion=original;
     if(funnelColumn){
-      // Script-driven funnel checkouts scatter payment/contact controls across hidden forms.
-      // Keep their branded two-column shell, and replace those regions as a unit.
       const layout=funnelColumn.parentElement;layout.dataset.ownedCheckoutLayout='';
-      const packages=all('.product-list',funnelColumn).filter(root=>one('[data-copy-variant-id]',root));
-      let summary=one('.sidebar',layout);if(!summary){summary=document.createElement('aside');layout.append(summary);}
-      funnelColumn.dataset.ownedCheckoutColumn='form';funnelColumn.replaceChildren(...packages,holder);
-      summary.dataset.ownedCheckoutColumn='summary';summary.dataset.ownedCheckoutSummary='';
-      const summaryTemplate=document.createElement('template');summaryTemplate.innerHTML=config.checkout.summary;const total=text(summaryTemplate.content.querySelector('.grand span:last-child'));
-      summary.innerHTML='<details data-owned-summary-details'+(innerWidth>740?' open':'')+'><summary>Order summary <b data-pay-total>'+escape(total)+'</b></summary>'+config.checkout.summary+'</details>';
-      return;
+      funnelColumn.dataset.ownedCheckoutColumn='form';
+      const sidebar=one('.sidebar',layout);if(sidebar)sidebar.dataset.ownedCheckoutColumn='summary';
+      // Retain source contact/address markup, legal copy and reviews. Only the payment
+      // region and changing order amounts are owned controls.
+      let candidate=original;
+      while(candidate?.parentElement&&candidate.parentElement!==funnelColumn){
+        if(candidate.querySelector('#paypal-radio')&&candidate.querySelector('#card-radio')){paymentRegion=candidate.parentElement&&!candidate.parentElement.querySelector('[name=shipAddress1],[name=emailAddress]')?candidate.parentElement:candidate;break;}
+        candidate=candidate.parentElement;
+      }
+      const sourcePayment=original?.closest('.fk-payment-option-wrapper');
+      if(sourcePayment&&!sourcePayment.querySelector('[name=shipAddress1],[name=emailAddress]'))paymentRegion=sourcePayment;
+      const hiddenPayment=paymentRegion?.closest('.fk-payment-options-hide-on-load');
+      if(hiddenPayment&&!hiddenPayment.querySelector('[name=shipAddress1],[name=emailAddress]'))paymentRegion=hiddenPayment;
+      all('.btnPayPal2,.btn-paypal2-styles,button[name=paypal]',funnelColumn).forEach(node=>{node.hidden=true;node.disabled=true;node.dataset.copyHidden='';});
+      const express=all('div,section',funnelColumn).find(node=>/express checkout/i.test(text(node))&&node.querySelector('button')&&!node.querySelector('input'));
+      if(express){express.innerHTML=config.checkout.express;holder.innerHTML=(config.checkout.error?'<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.form;}
+      all('button,a[action]',funnelColumn).filter(node=>/^(pay now|complete order)$/i.test(text(node))).forEach(node=>{const style=getComputedStyle(node),pay=one('#pay',holder);if(pay){pay.style.setProperty('background',style.backgroundColor,'important');pay.style.setProperty('color',style.color,'important');pay.style.setProperty('border-radius',style.borderRadius,'important');}node.hidden=true;node.dataset.copyHidden='';});
+      // Captured zero-price placeholders and source marketing opt-ins are not orders.
+      all('.product-list,.productBox',funnelColumn).filter(node=>!one('[data-copy-variant-id]',node)).forEach(node=>node.remove());
+      all('.sub_details',funnelColumn).forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
+      all('input[type=checkbox]',funnelColumn).forEach(node=>{node.checked=false;node.disabled=true;});
     }
     const aliases={emailAddress:'email',shipCountry:'country',shipFirstName:'firstName',shipLastName:'lastName',shipAddress1:'line1',shipAddress2:'line2',shipCity:'city',shipState:'state',shipPostalCode:'postal',phoneNumber:'phone'};
     const canonicalFields=new Map(all('input,select,textarea',holder).map(field=>[field.name,field]));
     const externalFields=new Map();all('input,select,textarea').forEach(field=>{const name=aliases[field.name];if(name&&(!original||!original.contains(field)))externalFields.set(name,field);});
     const useGroup=names=>names.every(name=>externalFields.has(name));
-    const bind=names=>names.forEach(name=>{const field=externalFields.get(name);if(!field)return;field.name=name;const canonical=canonicalFields.get(name);if(canonical)field.value=canonical.value;field.setAttribute('form','checkout-form');field.dataset.copyCheckoutField='';field.required=!['line2','state','phone'].includes(name);field.removeAttribute('aria-invalid');if(name==='email'){field.type='email';field.inputMode='email';field.removeAttribute('pattern');}});
+    const bind=names=>names.forEach(name=>{let field=externalFields.get(name);if(!field)return;const canonical=canonicalFields.get(name);if(name==='state'&&field.tagName==='SELECT'&&canonical){const input=document.createElement('input');for(const attribute of field.attributes)input.setAttribute(attribute.name,attribute.value);input.type='text';input.placeholder='State / province';input.autocomplete='address-level1';if(field.parentElement.matches('.select-wrap'))field.parentElement.dataset.copyTextField='';field.replaceWith(input);field=input;externalFields.set(name,field);}field.name=name;if(canonical){if(name==='country'&&field.tagName==='SELECT')field.innerHTML=canonical.innerHTML;field.value=canonical.value;field.setAttribute('aria-label',canonical.getAttribute('aria-label')||canonical.labels?.[0]?.textContent||name);}field.setAttribute('form','checkout-form');field.dataset.copyCheckoutField='';field.required=!['line2','state','phone'].includes(name);field.removeAttribute('aria-invalid');if(name==='email'){field.type='email';field.inputMode='email';field.removeAttribute('pattern');}});
     if(useGroup(['email'])){one('input[name=email]',holder)?.closest('.co-block')?.remove();bind(['email']);}
     if(useGroup(['country','firstName','lastName','line1','city','postal'])){
       const delivery=one('input[name=line1]',holder)?.closest('.co-block');
@@ -281,11 +300,11 @@
       if(missingOptional.length)delivery?.replaceChildren(...missingOptional);else delivery?.remove();
       bind(['country','firstName','lastName','line1','line2','city','state','postal','phone']);
     }
-    if(original)original.replaceWith(holder);
+    if(paymentRegion)paymentRegion.replaceWith(holder);
     else {const shell=one('[data-checkout-form],.checkout-form,#checkout-form,.checkout-main,main')||document.body;shell.prepend(holder);}
     // Remove source payment fields and frames outside the replaced form too.
     all('iframe[src*="stripe"],iframe[src*="paypal"],input[autocomplete^="cc-"],input[name=cardNumber],input[name=cardDate],input[name=cardSecurityCode],input[name=credit_card],input[name=card_number],input[name=cvv]').filter(node=>!holder.contains(node)).forEach(node=>node.remove());
-    const summaries=all('[data-order-summary],.order-summary__sections,.order-summary,.checkout-summary,[data-checkout-summary]').filter((node,i,nodes)=>!nodes.some(other=>other!==node&&other.contains(node)));
+    const summaries=all('.sidebar .cc-cart-wrapper,[data-order-summary],.order-summary__sections,.order-summary,.checkout-summary,[data-checkout-summary]').filter((node,i,nodes)=>!nodes.some(other=>other!==node&&other.contains(node)));
     if(!summaries.length){const summary=document.createElement('aside');holder.after(summary);summaries.push(summary);}
     summaries.forEach(node=>{node.dataset.ownedCheckoutSummary='';node.innerHTML=config.checkout.summary;});
   }
@@ -432,7 +451,7 @@
     };
     oneOffer.parentElement.setAttribute('role','tablist');
     [oneOffer,subOffer].forEach((button,index)=>{button.setAttribute('role','tab');button.tabIndex=0;button.addEventListener('click',()=>activate(index===1));button.addEventListener('keydown',event=>{if(['Enter',' ','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();const target=event.key.startsWith('Arrow')?(index===0?subOffer:oneOffer):button;activate(target===subOffer);target.focus();}});});
-    activate(subOffer.classList.contains('activeOfferType'));
+    activate(false);
     all('.khOfferBox').forEach(box=>{box.setAttribute('role','radio');box.tabIndex=0;const choose=async()=>{const panel=box.closest('.khOneOffer,.khSubOffer');if(!panel)return;if(config.assetKind==='funnel'&&config.role==='checkout'&&window.__selectFunnelPackage){if(panel.matches('.khSubOffer')){announce('Subscriptions are not available in this checkout yet. Choose One time purchase to place an order.');return;}if(!box.dataset.copyVariantId||!await window.__selectFunnelPackage(box.dataset.copyVariantId,1))return;}panel.setAttribute('role','radiogroup');all('.khOfferBox',panel).forEach(other=>{other.classList.toggle('of_selected_box',other===box);other.setAttribute('aria-checked',String(other===box));});};box.setAttribute('aria-checked',String(box.classList.contains('of_selected_box')));box.addEventListener('click',choose);box.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();choose();}});});
   }
   all('details.fk-collapsible-list-details').forEach(details=>{

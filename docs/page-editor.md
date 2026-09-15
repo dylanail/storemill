@@ -65,7 +65,7 @@ The supplied specification was treated as design input rather than a binding mig
 
 ## Media editing and branding
 
-Select image, background, video or poster content to use **Regenerate with branding** or **Upload / choose asset**. Supply edit suggestions, a logo and reference images, preview the result, then apply it to the selected placement or all matching placements on the page. Undo and Save work normally; preview creation does not save the page. Native block media fields use the same dialog. See [Media editing](media-rebranding.md) for goals, formats, video/audio controls, logo categorization and provider limits.
+Select image, background, video or poster content to use **Regenerate / edit** or **Upload / choose asset**. Supply edit suggestions, a logo and reference images, preview the result, then apply it to the selected placement or all matching placements on the page. Undo and Save work normally; preview creation does not save the page. Native block media fields use the same dialog. See [Media editing](media-rebranding.md) for goals, formats, video/audio controls, logo categorization and provider limits.
 
 Editor canvas, product data, preview, save and history requests keep the page's explicit store context, including when another store is selected in a different tab. Keyboard actions inside the media dialog cannot delete or change canvas components. The section insertion control uses a centered SVG plus glyph.
 

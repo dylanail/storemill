@@ -1,6 +1,6 @@
 # Store Speed
 
-Open **Store Speed** in the store navigation. Each finding shows the problem, a suggested repair, and **Fix with AI**. Repairs run in the background and appear in Recent fixes; the page resumes watching unfinished work after navigation. Failed requests can be retried. Configure a model for the `pages` task in Settings first.
+Open **Performance** under Online store / Funnel. **Draft repairs** audits the draft theme and saved pages and provides **Fix with AI**. **Live-site audit** audits the live theme and published pages and links back to draft repairs. Both views show findings and suggested repairs; live audit does not run repair jobs. Repairs run in the background and appear in Recent fixes; the page resumes watching unfinished work after navigation. Failed requests can be retried. Configure a model for the `pages` task in Settings first.
 
 The audit parses actual HTML. It recognizes wrapped labels, ARIA names and main landmarks, link names, async/deferred scripts, module scripts, and JSON-LD. It checks the actual custom homepage, every saved page, and up to three published product pages using the draft theme. It does not treat a placeholder as an input label or JSON/script content as visible page copy. Imported HTML does not inherit unrelated theme contrast warnings.
 

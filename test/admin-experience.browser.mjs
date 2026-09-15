@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {chromium} from 'playwright';
 const dir=mkdtempSync(join(tmpdir(),'admin-experience-'));
 Object.assign(process.env,{AMBORAS_DB:join(dir,'test.db'),PORT:'0',AMBORAS_LOG_LEVEL:'error',AMBORAS_STOREFRONT_HOST:'',AMBORAS_PUBLIC_ORIGIN:'',AMBORAS_ADMIN_HOST:'',OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',STRIPE_SECRET_KEY:''});
-const fetchOriginal=globalThis.fetch;globalThis.fetch=(url,init)=>String(url).includes('graph.facebook.com')?Promise.resolve(new Response('{"events_received":1}',{status:200})):fetchOriginal(url,init);
+const fetchOriginal=globalThis.fetch;globalThis.fetch=(url,init)=>(/graph.facebook.com|business-api.tiktok.com/.test(String(url)))?Promise.resolve(new Response('{"events_received":1}',{status:200})):fetchOriginal(url,init);
 const {server}=await import('../src/main.ts');
 const {getDb}=await import('../src/lib/db.ts');const {register}=await import('../src/control/auth.ts');
 const {createBlankAsset}=await import('../src/control/assets.ts');const {publish}=await import('../src/control/stores.ts');
@@ -53,6 +53,21 @@ await test('admin controls and tracking browser workflows',async t=>{
   const order=db.one('SELECT id FROM orders WHERE store_id=? ORDER BY created_at DESC LIMIT 1',store.id);assert.ok(order);await p.goto(origin+base+'/orders/'+order.id);await p.waitForFunction(()=>window.__META?.some(e=>e[2]==='Purchase'));const purchase=await p.evaluate(()=>window.__META.find(e=>e[2]==='Purchase'));assert.equal(purchase[4].eventID,order.id);const serverPurchase=JSON.parse(db.one("SELECT payload FROM server_event_deliveries WHERE event_id=? AND provider='meta'",order.id).payload);assert.equal(serverPurchase.event_name,'Purchase');assert.equal(serverPurchase.custom_data.value,purchase[3].value);assert.equal(serverPurchase.custom_data.currency,purchase[3].currency);
   await p.reload();await p.waitForFunction(()=>window.__META?.some(e=>e[2]==='PageView'));assert.equal(await p.evaluate(()=>window.__META.filter(e=>e[2]==='Purchase').length),0,'Refreshing the receipt does not send another browser purchase');await ctx.close();
  });
+ await t.test('GA4 and TikTok receive native and copied add-to-cart once with Meta deduplicated',async()=>{
+  install(db,store.id,'ga4',{measurementId:'G-TEST1234'});install(db,store.id,'tiktok-pixel',{pixelId:'TEST1234567890',accessToken:'fixture-tiktok-token'});
+  const {ctx,p,events}=await context(),base='/s/'+store.slug,cartEvents=[];
+  await ctx.exposeBinding('reportCart',(_source,event)=>cartEvents.push(event));
+  await ctx.addInitScript(()=>{for(const [key,provider] of [['dataLayer','ga4'],['ttq','tiktok']]){const queue=[];queue.push=function(...entries){for(const entry of entries){const args=Array.from(entry);if(args[1]==='add_to_cart'||args[1]==='AddToCart')window.reportCart({provider,args});}return Array.prototype.push.apply(this,entries)};window[key]=queue;}});
+  for(const route of ['/products/'+product.handle,'']){
+   const start=cartEvents.length,metaStart=events.filter(e=>e[2]==='AddToCart').length;
+   await p.goto(origin+base+route);if(!route)await p.waitForFunction(()=>window.__COPY_COMMERCE_READY);
+   await (route?p.locator('#pdp-cta'):p.getByRole('button',{name:'Add to cart',exact:true})).click();await p.waitForURL('**/cart');
+   const sent=cartEvents.slice(start);assert.equal(sent.filter(e=>e.provider==='ga4').length,1);assert.equal(sent.filter(e=>e.provider==='tiktok').length,1);
+   const ga=sent.find(e=>e.provider==='ga4'),tk=sent.find(e=>e.provider==='tiktok'),meta=events.filter(e=>e[2]==='AddToCart').slice(metaStart);assert.equal(meta.length,1);assert.equal(ga.args[2].value,54.95);assert.equal(tk.args[3].event_id,meta[0][4].eventID);
+   const delivery=JSON.parse(db.one("SELECT payload FROM server_event_deliveries WHERE provider='tiktok' AND event_id=?",tk.args[3].event_id).payload);assert.equal(delivery.event_id,tk.args[3].event_id);
+  }
+  await ctx.close();
+ });
  await t.test('deletion has a deliberate confirmation page and server-side password guard',async()=>{
   const disposable=createBlankAsset(db,user.id,{name:'Autumn offer test',kind:'funnel',currency:'USD'});const {ctx,p}=await context(true);await p.goto(origin+'/admin/stores/'+disposable.id+'/delete');const button=p.getByRole('button',{name:'Permanently delete funnel'});assert.equal(await button.isEnabled(),false);await p.locator('[name=name]').fill(disposable.name);await p.locator('[name=password]').fill('wrong-password');await p.locator('[name=acknowledged]').check();assert.equal(await button.isEnabled(),true);
   const token=await p.locator('[name=token]').inputValue();const rejected=await ctx.request.post(origin+'/admin/stores/'+disposable.id+'/delete',{form:{name:disposable.name,password:'wrong-password',acknowledged:'yes',token},maxRedirects:0});assert.equal(rejected.status(),401);assert.ok(db.one('SELECT id FROM stores WHERE id=?',disposable.id));
@@ -81,6 +96,15 @@ await test('admin controls and tracking browser workflows',async t=>{
    await p.waitForURL('**/admin/stores?flash=Clone%20completed');
    assert.equal(await p.locator('#clone-asset-progress').isVisible(),false);assert.equal(await p.getByRole('button',{name:'Copy selected scope',exact:true}).isVisible(),true);
   } finally {for(const route of pending)await route.abort().catch(()=>{});await ctx.close();}
+ });
+ await t.test('recent clone percentages update without reloading and recover from a lost connection',async()=>{
+  const {ctx,p}=await context(true),jobId='copy_progress_test';db.insert('asset_import_jobs',{id:jobId,owner_id:user.id,input:{url:'https://example.com',kind:'store'},status:'working',progress:{percent:12,copied:1,task:'Copying pages'},created_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+  let calls=0,finished=false;await ctx.route('**/admin/imports/'+jobId+'/status',route=>{calls++;if(calls===1)return route.abort();return route.fulfill({contentType:'application/json',body:JSON.stringify({id:jobId,status:finished?'done':'working',progress:{percent:finished?100:73,copied:8,task:finished?'Clone complete':'Connecting products'}})});});
+  await p.goto(origin+'/admin/stores');const row=p.locator('[data-import-job="'+jobId+'"]');await row.getByText('Reconnecting… Your clone continues on the server.',{exact:true}).waitFor();await row.getByText('73%',{exact:true}).waitFor();finished=true;await row.getByText('100%',{exact:true}).waitFor();assert.equal(await row.locator('[data-import-link]').getAttribute('href'),'/admin/imports/'+jobId+'/open');db.run('DELETE FROM asset_import_jobs WHERE id=?',jobId);await ctx.close();
+ });
+ await t.test('qualification saves currency amounts and live audits expose draft repair navigation',async()=>{
+  const {ctx,p}=await context(true);await p.goto(origin+'/admin/products/'+product.id);await p.getByLabel('Order value after bundles (USD)',{exact:true}).fill('60.95');await p.getByRole('button',{name:'Save qualification',exact:true}).click();assert.equal(JSON.parse(JSON.parse(db.one('SELECT metadata FROM products WHERE id=?',product.id).metadata).qualify).aovCents,6095);assert.equal(await p.getByLabel('Order value after bundles (USD)',{exact:true}).inputValue(),'60.95');
+  const draft=createPage(db,store.id,{title:'Draft-only audit marker',rawHtml:'<html><body><img src="x"></body></html>',status:'draft'});await p.goto(origin+'/admin/speed?environment=live');assert.equal(await p.getByRole('link',{name:'Live-site audit',exact:true}).getAttribute('aria-current'),'page');assert.equal(await p.locator('[data-health-fix]').count(),0);assert.equal(await p.getByText(draft.title,{exact:true}).count(),0);await p.getByRole('link',{name:'Draft repairs',exact:true}).click();assert.ok(await p.getByText(draft.title,{exact:true}).count());await ctx.close();
  });
  for(const failure of ['network','server','unexpected response']) await t.test('clone '+failure+' failure returns to a usable form',async()=>{
   const {ctx,p}=await context(true);

@@ -136,6 +136,12 @@ await test('media rebranding', async t => {
   assert.equal(ready.status, 'review', ready.error); assert.equal(calls, 1); assert.ok(readUpload(ready.result_url))
   useMediaTransport(null)
  })
+ for(const intent of ['variation','text'] as const)await t.test(intent+' edits use GPT Image 2.5 without a logo or brand name', async () => {
+  const f=fixture();let calls=0
+  useMediaTransport(async (url,init)=>{calls++;assert.equal(url,'https://api.openai.com/v1/images/edits');const form=init.body as FormData;assert.equal(form.get('model'),'gpt-image-2.5-sunburst');assert.equal(form.getAll('image[]').length,1);assert.doesNotMatch(String(form.get('prompt')),/Desired Brand|Old brand|Image 2 is the exact desired logo/);return Response.json({data:[{b64_json:png.toString('base64')}]})})
+  const job=startRebrand(db,f.store.id,user.id,f.source,{method:'ai',provider:'openai',intent,brandName:'',logo:f.logo,oldBrand:'Old brand',direction:intent==='text'?'Change DAILY to EVERYDAY':'Keep a similar pose and setting'})
+  await drainRebrands(db);const ready=getRebrand(db,f.store.id,job.id);assert.equal(ready.status,'review',ready.error);assert.equal(calls,1);assert.equal(JSON.parse(ready.spec).logo,'');useMediaTransport(null)
+ })
  await t.test('AI video persists task ID, polls output, and restores source audio', async () => {
   const f = fixture(); const requests: string[] = []
   useMediaTransport(async (url, init) => {

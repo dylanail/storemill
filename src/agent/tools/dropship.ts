@@ -99,7 +99,7 @@ export const dropshipTools: Tool[] = defineTools([
       productId: { type: 'string', required: true },
       trend: { type: 'string', enum: TRENDS as unknown as string[], help: 'Google Trends, US, five years, on the niche keyword.' },
       weightGrams: { type: 'number', integer: true, min: 0 },
-      aovCents: { type: 'number', integer: true, min: 0, help: 'Order value after bundles and add-ons, if it is higher than the unit price.' },
+      aovCents: { type: 'number', integer: true, min: 0, help: 'Order value in integer currency minor units: USD 60.00 = 6000 cents; JPY 6000 = 6000. After bundles and add-ons.' },
       seasonal: { type: 'boolean' },
       tech: { type: 'boolean', help: 'Electronics or anything with a battery.' },
       patented: { type: 'boolean' },
@@ -113,7 +113,7 @@ export const dropshipTools: Tool[] = defineTools([
       const { productId: _productId, ...given } = args as Record<string, unknown>
       const notes = { ...readQualifyNotes(product.metadata), ...Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined && value !== '')) }
       updateProduct(ctx.db, ctx.storeId, product.id, { metadata: { qualify: writeQualifyNotes(notes) } })
-      const result = qualifyCatalogProduct(product, notes)
+      const result = qualifyCatalogProduct(product, {...notes,currency:getStore(ctx.db,ctx.storeId)?.currency||'USD'})
       return {
         summary: `${product.title}: ${result.decision === 'run' ? 'run it' : result.decision === 'work' ? 'work on it first' : 'skip it'}. ${result.summary}`,
         data: result,

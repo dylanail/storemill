@@ -88,7 +88,7 @@ import { createRegion, deleteRegion, deleteShippingOption, getRegion, setShippin
 import { listFlows, runFlow, updateFlow } from '../email/flows.ts'
 import { createBlankAsset, fontFamilyName, importAssetFromUrl } from '../control/assets.ts'
 import { createArticle, createBlog, deleteArticle, deleteBlog, listBlogs, updateArticle } from '../domain/content.ts'
-import { qualifyCatalogProduct, TRENDS, writeQualifyNotes } from '../domain/qualify.ts'
+import { parseQualificationAmount, qualifyCatalogProduct, TRENDS, writeQualifyNotes } from '../domain/qualify.ts'
 import { deletePageTemplate, getPageTemplate, listPageTemplates, savePageTemplate, templateBlocks, templateHtml, usePageTemplate } from '../pages/library.ts'
 import { templateLibraryPage } from './library-page.ts'
 
@@ -572,7 +572,7 @@ export function adminRouter(): Router {
       const logo = files.logoFile?.data.length ? saveUpload(files.logoFile, current.store.id).url : String(body.logo || '')
       if(files.logoFile?.data.length)setMediaDetails(db(),current.store.id,logo,'logo',files.logoFile.name)
       const job = startRebrand(db(), current.store.id, current.user.id, String(body.source || ''), {
-        brandName: String(body.brandName || ''), logo, oldBrand: String(body.oldBrand || ''), direction: String(body.direction || ''),
+        intent: String(body.intent || 'rebrand') as RebrandSpec['intent'], brandName: String(body.brandName || ''), logo, oldBrand: String(body.oldBrand || ''), direction: String(body.direction || ''),
         method: String(body.method || 'ai') as RebrandSpec['method'], provider: String(body.provider || (process.env.OPENAI_API_KEY ? 'openai' : 'google')) as RebrandSpec['provider'],
         position: String(body.position || 'bottom-right') as RebrandSpec['position'], width: Number(body.width ?? 18), frame: Number(body.frame ?? 0),
       }, String(body.requestKey || ''))
@@ -683,20 +683,19 @@ export function adminRouter(): Router {
     if (!product) return back(ctx, '!No such product')
     const trend = String(body.trend ?? 'unknown')
     const number = (key: string) => Math.max(0, Math.round(Number(body[key] ?? 0)) || 0)
-    const amount = body.aovAmount === undefined ? undefined : String(body.aovAmount).trim()
-    const aov = amount === undefined ? number('aovCents') : amount === '' ? 0 : Math.round(Number(amount) * 10 ** minorDigits(current.store.currency))
-    if (!Number.isSafeInteger(aov) || aov < 0) return back(ctx, '!Enter a valid order value in ' + current.store.currency + '.')
+    let aovCents: number
+    try { aovCents = (body.aovAmount ?? body.aov) !== undefined ? parseQualificationAmount(String(body.aovAmount ?? body.aov), current.store.currency) : number('aovCents') } catch(error) { return back(ctx, '!'+(error instanceof Error?error.message:'Enter a valid order value')) }
     const notes = {
       ...(TRENDS.includes(trend as (typeof TRENDS)[number]) ? { trend: trend as (typeof TRENDS)[number] } : {}),
       ...(number('weightGrams') ? { weightGrams: number('weightGrams') } : {}),
-      ...(aov ? { aovCents: aov } : {}),
+      ...(aovCents ? { aovCents } : {}),
       ...(body.seasonal === 'true' ? { seasonal: true } : {}), ...(body.tech === 'true' ? { tech: true } : {}),
       ...(body.patented === 'true' ? { patented: true } : {}), ...(body.bigBrand === 'true' ? { bigBrand: true } : {}),
       ...(body.printOnDemand === 'true' ? { printOnDemand: true } : {}),
       ...(String(body.standOut ?? '').trim() ? { standOut: String(body.standOut).trim() } : {}),
     }
     updateProduct(db(), current.store.id, product.id, { metadata: { qualify: writeQualifyNotes(notes) } })
-    const result = qualifyCatalogProduct(getProduct(db(), current.store.id, product.id) as typeof product, notes)
+    const result = qualifyCatalogProduct(getProduct(db(), current.store.id, product.id) as typeof product, {...notes,currency:current.store.currency})
     return back(ctx, result.decision === 'skip' ? `!${result.summary}` : result.summary)
   })
 

@@ -162,6 +162,7 @@ export function domainsPage(ctx: Ctx): string {
   const publicUrl = ctx.storeUrl.startsWith('http') ? ctx.storeUrl : `${process.env.AMBORAS_PUBLIC_ORIGIN ?? ''}${ctx.storeUrl}`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Domains</h1>
     <p class="muted" style="margin:.25rem 0 0">Each store has its own. This one answers at <a href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">${escapeHtml(ctx.storeUrl)}</a> whatever happens here.</p></div></div>
+  <details class="card"><summary>Custom domain checklist (optional)</summary><p>Your hosted Storemill address works without a custom domain.</p><ol><li>Add a domain you own below.</li><li>Copy the shown DNS records or forwarding destination into your registrar.</li><li>Run Check and wait for verification.</li><li>Open the verified address to check your site.</li></ol></details>
   <div class="grid2"><div>
     ${domains.length ? domains.map((domain) => {
       const plan = dnsPlan(domain.hostname, domain.mode, domain.registrar, domain.verificationToken, publicUrl)

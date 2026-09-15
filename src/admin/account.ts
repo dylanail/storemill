@@ -49,13 +49,13 @@ ${brandHead}<style>${brandStyles}${adminCss('#315be8')}
 </style></head><body class="account-shell">
 <div class="top">
   <a class="logo" href="/admin/stores" aria-label="storemill home">${brandLogo(true)}</a>
-  <a class="chip" href="/admin/stores">Your stores</a>
+  <a class="chip" href="/admin/stores" aria-current="page">Stores &amp; funnels</a>
   <a class="chip" href="/admin/stores?new=1#new">+ New store or funnel</a>
   <div class="spacer"></div>
   <span class="muted" style="font-size:12px">${escapeHtml(input.userName)}</span>
   <form method="post" action="/logout"><button class="chip" type="submit">Sign out</button></form>
 </div>
-<main class="account">${input.body}</main>
+<main class="account" id="main">${input.body}</main>
 <script>${readFileSync(new URL('./usability.js', import.meta.url), 'utf8')}</script>
 </body></html>`
 }

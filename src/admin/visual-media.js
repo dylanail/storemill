@@ -30,7 +30,7 @@ function mediaDescriptors(n) {
   }
   return entries;
 }
-function mediaControls(n){return mediaDescriptors(n).map((entry,index)=>'<div class="em-native-actions"><strong style="width:100%">'+esc(entry.label)+'</strong><button class="btn" type="button" data-edit-media="'+index+'">Regenerate with branding</button><button class="btn" type="button" data-replace-media="'+index+'">Upload / choose asset</button></div>').join('');}
+function mediaControls(n){return mediaDescriptors(n).map((entry,index)=>'<div class="em-native-actions"><strong style="width:100%">'+esc(entry.label)+'</strong><button class="btn" type="button" data-edit-media="'+index+'">Regenerate / edit</button><button class="btn" type="button" data-replace-media="'+index+'">Upload / choose asset</button></div>').join('');}
 function mountVisualMedia(n){
   props.querySelectorAll('[data-edit-media],[data-replace-media]').forEach(button=>button.onclick=()=>{
     const entry=mediaDescriptors(n)[Number(button.dataset.editMedia??button.dataset.replaceMedia)];if(!entry)return;
