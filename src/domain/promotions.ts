@@ -92,6 +92,13 @@ function eligibleItems(promotion: Promotion, items: LineItem[], collectionsByPro
 export type PromotionOutcome = {
   discountCents: number
   freeShipping: boolean
+  /**
+   * `kind` rides along because the checkout has to know which of these paid
+   * for the shipping. It decided that by matching the promotion's *title*
+   * against /shipping/i, so "Shipping protection bundle" zeroed the delivery
+   * charge and a free-shipping promotion someone had named "Delivery on us"
+   * did not.
+   */
   applied: Array<{ id: string; title: string; code: string; amountCents: number; kind: Promotion['kind'] }>
 }
 
@@ -199,6 +206,11 @@ export function applyPromotions(
       }
     }
 
+    // Each promotion can only take what is still there. Every one used to be
+    // computed against the full subtotal and only the sum was clamped, so two
+    // automatic 60%-off promotions on a $100 cart produced a $120 discount
+    // clamped to $100 with two $60 lines beside it: a totals block whose
+    // numbers did not add up, and a cart that could go to zero.
     const takeable = Math.max(0, opts.subtotalCents - outcome.discountCents)
     amount = Math.min(amount, takeable)
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {

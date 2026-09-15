@@ -63,12 +63,19 @@ export function install(db: Db, storeId: string, pluginId: string, settings: Rec
 
   const schema = plugin.manifest.admin?.settingsSchema ?? {}
   const existing = getInstalled(db, storeId, pluginId)
-  const merged = { ...(existing?.settings ?? {}), ...settings }
+  const secretFields = plugin.manifest.admin?.secretFields ?? []
+  // A sealed secret is not in store_plugins.settings, so the settings form
+  // posts it back empty and the validator saw a required field missing:
+  // saving any Stripe or Klaviyo setting after install always failed, with no
+  // way to re-supply the key short of uninstalling. What is already sealed
+  // counts as present, and a blank field leaves it alone.
+  const kept = readCredentials(db, storeId, pluginId)
+  const supplied = Object.fromEntries(Object.entries(settings).filter(([key, value]) => !(secretFields.includes(key) && value === '')))
+  const merged = { ...(existing?.settings ?? {}), ...kept, ...supplied }
   const result = check(schema, merged)
   if (!result.ok) throw badRequest(`${plugin.name} settings are not valid`, result.issues)
 
-  const secretFields = plugin.manifest.admin?.secretFields ?? []
-  const currentSecrets = readCredentials(db, storeId, pluginId)
+  const currentSecrets = kept
   const secrets: Record<string, unknown> = {}
   const publicSettings: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(result.value)) {

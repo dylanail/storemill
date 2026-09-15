@@ -140,6 +140,7 @@ ${brandHead}<style>${brandStyles}${css(brand.primary ?? '#7a4a2b')}${readFileSyn
   <form method="post" action="/admin/publish">
     <button class="publish" type="submit" ${input.publish.ready ? '' : 'disabled'} title="${escapeHtml(input.publish.reason)}">${escapeHtml(input.publish.label)}</button>
   </form>
+  <form method="post" action="/logout"><button class="chip" type="submit">Sign out</button></form>
 </div>
 <div class="frame">
   <nav class="rail" id="admin-navigation" aria-label="Sections">
@@ -205,6 +206,8 @@ export function renderArtifact(artifact: Artifact): string {
       return ''
   }
 }
+
+export { css as adminCss }
 
 function css(accent: string): string {
   return `

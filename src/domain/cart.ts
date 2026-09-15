@@ -1,4 +1,6 @@
 import { json, now, type Db, type Row } from '../lib/db.ts'
+import { getInstalled } from '../control/plugins.ts'
+import { badRequest } from '../lib/http.ts'
 import { id } from '../lib/ids.ts'
 import { bundleFor, tierFor } from './bundles.ts'
 import { getProduct, getVariant } from './catalog.ts'
@@ -74,22 +76,36 @@ export function setCartRegion(db: Db, storeId: string, cartId: string, regionId:
 }
 
 /** A trusted server-side price override is used by configured order bumps. */
-export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number): Cart {
+export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number, engraving = ''): Cart {
   const cart = getCart(db, storeId, cartId) ?? createCart(db, storeId)
   const variant = getVariant(db, storeId, variantId)
   if (!variant) throw new Error(`No variant ${variantId}`)
   const product = getProduct(db, storeId, variant.productId)
   if (!product || product.status !== 'published' && !(cart.checkout.preview && product.status === 'draft')) throw new Error('That product is not available')
 
+  engraving = engraving.trim()
+  if (engraving) {
+    const plugin = getInstalled(db, storeId, 'engraving')
+    if (!plugin?.enabled) throw badRequest('Engraving is not available on this store')
+    const limit = Number(plugin.settings.maxCharacters) || 12
+    if (engraving.length > limit) throw badRequest(`Engraving is limited to ${limit} characters`)
+  }
   const items = [...cart.items]
+  // A gift line for the same variant is not the line being added to: it is
+  // derived, priced at zero, and rebuilt by reconcileGifts on every change,
+  // so incrementing it drops the paid units on the floor and the customer
+  // cannot buy the product at all. setQuantity has always made this
+  // distinction; adding did not.
   const existing = items.find((item) => item.variantId === variantId && !item.giftOf)
+  if (existing && (existing.engraving || '') !== engraving) throw badRequest('This variant is already in your cart with different engraving. Remove it before choosing new text.')
   if (existing) existing.quantity += quantity
   else {
     items.push({
       variantId,
       productId: product.id,
       title: product.title,
-      variantTitle: variant.title,
+      variantTitle: engraving ? `${variant.title} · Engraving: ${engraving}` : variant.title,
+      ...(engraving ? { engraving } : {}),
       image: variant.image || product.heroImage,
       unitCents: unitCents ?? variant.priceCents,
       quantity,

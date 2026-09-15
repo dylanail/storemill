@@ -85,6 +85,8 @@ export type LineItem = {
   quantity: number
   /** Set when the line was added by a bundle, upsell or cross-sell component. */
   source?: string
+  /** Customer text retained through checkout and fulfillment. */
+  engraving?: string
   /** A gift line: added by a bundle tier, priced at zero, removed if the tier is lost. */
   giftOf?: string
 }

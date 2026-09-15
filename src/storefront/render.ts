@@ -120,6 +120,7 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
   <div><div class="eyebrow" style="color:inherit;opacity:.6">${t(view, 'help', 'Help')}</div>
     <a href="${view.base}/pages/shipping">Shipping &amp; returns</a>
     <a href="${view.base}/pages/about">About</a>
+    <a href="${view.base}/pages/contact">Contact</a>
     <a href="${view.base}/pages/privacy">Privacy</a>
     <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
@@ -292,7 +293,20 @@ export function home(view: StoreView, input: { featured: Product[]; collections:
              )
              .join('')}</div></section>`
         : '',
-    reviews: () => '',
+    reviews: () => {
+      // Registered, on by default, offered by the store designer and by
+      // edit_storefront — and it rendered an empty string, so asking for
+      // reviews on the home page reported success and produced nothing.
+      const shown = listReviews(view.db, store.id, { status: 'approved', minRating: 4, limit: 3 })
+      if (!shown.length) return ''
+      return `<section class="wrap">
+        <div class="section-head"><h2>What people say</h2></div>
+        <div class="reviews">${shown
+          .map(
+            (review) => `<article class="review"><div class="stars">${stars(review.rating)}</div>${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`,
+          )
+          .join('')}</div></section>`
+    },
     newsletter: () => `<section class="wrap" style="text-align:center">
       <div class="eyebrow">Stay in touch</div><h2 style="margin:.6rem 0 1rem">One email when there is something to say</h2>
       <form method="post" action="${view.base}/subscribe" style="display:flex;gap:.6rem;max-width:26rem;margin-inline:auto">
@@ -366,8 +380,14 @@ export function productPage(
     })
     .join('')
 
-  // The build-option cards are the platform's variant/upsell hybrid: the same
-  // product, two ways to buy it, with the difference priced honestly.
+  // There used to be a pair of "build option" radios here — Stock build and
+  // "Custom stitched · Your initials, 21 days" at +13% — rendered outside the
+  // add-to-cart form with no `form=` attribute and read by nothing. A customer
+  // could choose the custom build, press the button and receive the stock
+  // variant at the stock price, with no record that they had asked. It was
+  // also the demo store's copy, offered on every product of every store: a
+  // service and a price the merchant had never agreed to. Real per-product
+  // choices are the variant options rendered above.
   const bundle = bundleFor(view.db, view.store.id, product.id)
   const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.region?.currency ?? view.store.currency, {
     variantPriceCents: convertCents(cheapest.priceCents, view.region, view.store.currency), locale: view.region?.locale, currencyRate: convertCents(100, view.region, view.store.currency) / 100,
@@ -405,7 +425,19 @@ export function productPage(
     ${content.guarantee ? `<div class="guarantee"><span class="badge">${promises.guaranteeDays}</span><div><strong>${promises.guaranteeDays}-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
     ${promises.payments.length ? `<div class="payicons small">${promises.payments.map((method) => `<i>${escapeHtml(method)}</i>`).join('')}</div>` : ''}
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
-    ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
+    ${renderSlot(
+      view.db,
+      view.store.id,
+      'pdpBelowAddToCart',
+      {
+        productId: product.id,
+        base: view.base,
+        reviews: { average: stats.average, count: stats.count },
+        reviewList: reviews.slice(0, 3).map((review) => ({ rating: review.rating, title: review.title, body: review.body, author: review.author, verified: review.verified })),
+        companions: companions.map((entry) => ({ handle: entry.handle, title: entry.title, image: entry.heroImage, price: money(Math.min(...entry.variants.map((variant) => variant.priceCents)), view) })),
+      },
+      { preview: view.preview },
+    )}
     ${companions.length ? upsellWidget(view, companions) : ''}
   </div>
 </div>
@@ -697,8 +729,15 @@ export function cartPage(view: StoreView, totals: Totals): string {
       )
       .join('')}</table>
     <div>
-      ${gap !== null && gap > 0 ? `<div class="notice" style="margin-bottom:1rem"><div class="gap"><span>${money(gap, view)} to free shipping</span></div>
-        <div class="gap" style="margin-top:.5rem"><span class="track"><span class="fill" style="width:${Math.min(100, (1 - gap / 20000) * 100)}%"></span></span></div></div>` : ''}
+      ${gap !== null && gap > 0 ? (() => {
+        // The threshold is subtotal + gap. Dividing by a literal 20000 was the
+        // seed's own $200: on a $75 threshold the bar read nearly full at
+        // two-thirds, and on a $300 one it emitted a negative width.
+        const threshold = Math.max(0, totals.subtotalCents - totals.discountCents) + gap
+        const filled = threshold > 0 ? Math.max(0, Math.min(100, ((threshold - gap) / threshold) * 100)) : 0
+        return `<div class="notice" style="margin-bottom:1rem"><div class="gap"><span>${money(gap, view)} to free shipping</span></div>
+        <div class="gap" style="margin-top:.5rem"><span class="track"><span class="fill" style="width:${filled.toFixed(1)}%"></span></span></div></div>`
+      })() : ''}
       <form method="post" action="${view.base}/cart/code" style="display:flex;gap:.5rem;margin-bottom:1.2rem">
         <input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code">
         <button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
@@ -750,6 +789,10 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const draft = cart?.checkout ?? {}
   const items = cart?.items ?? []
   const shipping = (region?.shipping ?? []).map((option) => {
+    // Which promotion paid for the shipping is a property of the promotion, not
+    // of what someone typed in its title: matching /shipping/i meant "Shipping
+    // protection bundle" zeroed the delivery charge, while a real free-shipping
+    // promotion named "Delivery on us" left the customer paying for it.
     const free = totals.appliedPromotions.some((promotion) => promotion.kind === 'free_shipping') && option.position === 0
     const clears = option.freeAboveCents !== null && totals.subtotalCents - totals.discountCents >= option.freeAboveCents
     const amount = free || clears ? 0 : option.amountCents

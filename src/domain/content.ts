@@ -88,6 +88,11 @@ export function getArticle(db: Db, storeId: string, articleId: string): Article 
   return row ? rowToArticle(row) : null
 }
 
+/**
+ * Articles were write-only: the assistant could publish one and the storefront
+ * served it, and the merchant had no way to change a word of it, unpublish it
+ * or take it down.
+ */
 export function updateArticle(
   db: Db,
   storeId: string,

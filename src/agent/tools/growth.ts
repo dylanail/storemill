@@ -1,4 +1,4 @@
-import { listProducts } from '../../domain/catalog.ts'
+import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { createArticle, createBlog, listBlogs } from '../../domain/content.ts'
 import { listCustomers } from '../../domain/customers.ts'
 import { listOrders } from '../../domain/orders.ts'
@@ -16,6 +16,7 @@ import { readBrief } from '../copy.ts'
 import { authorCampaign } from '../brand.ts'
 import { modelFor } from '../models.ts'
 import { latestResearch } from '../research.ts'
+import { publicStoreUrl } from '../../lib/urls.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const TEMPLATE_KEYS = TEMPLATES.map((template) => template.key)
@@ -90,11 +91,16 @@ export const growthTools: Tool[] = defineTools([
     schema: { limit: { type: 'number', integer: true, min: 1, max: 50, default: 10 }, code: { type: 'string', help: 'Optional discount code to include.' } },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
+      const storeUrl = store ? publicStoreUrl(ctx.db, store) : ''
       const orders = listOrders(ctx.db, ctx.storeId, { status: 'completed', limit: args.limit as number })
       let sent = 0
       for (const order of orders) {
         const product = order.items[0]
         if (!product) continue
+        // The link has to be the product's public address: it used to be
+        // https://<internal slug>/products/<internal id>, which resolves to
+        // nothing, in an email sent to a real customer.
+        const productHandle = getProduct(ctx.db, ctx.storeId, product.productId)?.handle ?? ''
         await sendEmail(ctx.db, ctx.storeId, {
           template: 'review_request',
           to: order.email,
@@ -102,7 +108,7 @@ export const growthTools: Tool[] = defineTools([
             product: { title: product.title },
             code: (args.code as string) ?? '',
             discount: '10%',
-            reviewUrl: `https://${store?.slug}/products/${product.productId}#review`,
+            reviewUrl: `${storeUrl}/products/${productHandle}#review`,
           },
         })
         sent++
@@ -125,7 +131,7 @@ export const growthTools: Tool[] = defineTools([
       const result = await sendEmail(ctx.db, ctx.storeId, {
         template: args.template as TemplateKey,
         to: args.to as string,
-        context: { storeUrl: `https://${store?.slug}`, ...((args.context as Record<string, unknown>) ?? {}) },
+        context: { storeUrl: store ? publicStoreUrl(ctx.db, store) : '', ...((args.context as Record<string, unknown>) ?? {}) },
       })
       return { summary: `"${result.subject}" ${result.status} to ${args.to}.`, data: result }
     },
@@ -217,7 +223,7 @@ export const growthTools: Tool[] = defineTools([
       })
       return {
         summary: `${article.status === 'published' ? 'Published' : article.status === 'scheduled' ? `Scheduled for ${article.publishedAt}` : 'Drafted'} "${article.title}" in ${blog.title}.`,
-        artifacts: [{ type: 'link', href: `/blogs/${blog.handle}/${article.handle}`, label: article.title }],
+        artifacts: [{ type: 'link', href: `${publicStoreUrl(ctx.db, { slug: getStore(ctx.db, ctx.storeId)?.slug ?? '', id: ctx.storeId })}/blogs/${blog.handle}/${article.handle}`, label: article.title }],
       }
     },
   },

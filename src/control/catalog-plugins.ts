@@ -83,8 +83,40 @@ export const FIRST_PARTY: Plugin[] = [
       },
       storefront: {
         components: [
-          { id: 'ReviewBadge', slot: 'pdpBelowAddToCart', placement: 'fixed' },
-          { id: 'ReviewWall', placement: 'merchant_choice', validSlots: ['pdpBelowAddToCart', 'accountOverview'], defaultSlot: 'pdpBelowAddToCart' },
+          // These four components (and FrequentlyBoughtTogether, ContactForm and
+          // EngravingButton below) used to carry no render function at all. The
+          // idea was that the theme would draw them from slotComponentIds() —
+          // which is called from nowhere — so renderSlot emitted an HTML comment
+          // and four of the eleven first-party plugins installed, showed as
+          // enabled, and did nothing. Each draws itself now, from the same
+          // context the slot already passes.
+          {
+            id: 'ReviewBadge',
+            slot: 'pdpBelowAddToCart',
+            placement: 'fixed',
+            render: ({ context }) => {
+              const stats = context.reviews as { average: number; count: number } | undefined
+              if (!stats?.count) return ''
+              return `<div class="plg-badge"><span aria-hidden="true">${'★'.repeat(Math.round(stats.average))}${'☆'.repeat(5 - Math.round(stats.average))}</span> <strong>${stats.average}</strong> from ${stats.count} review${stats.count === 1 ? '' : 's'}</div>`
+            },
+          },
+          {
+            id: 'ReviewWall',
+            placement: 'merchant_choice',
+            validSlots: ['pdpBelowAddToCart', 'accountOverview'],
+            defaultSlot: 'pdpBelowAddToCart',
+            render: ({ context }) => {
+              const list = (context.reviewList as Array<{ rating: number; title: string; body: string; author: string; verified: boolean }> | undefined) ?? []
+              if (!list.length) return ''
+              return `<div class="plg-wall">${list
+                .slice(0, 3)
+                .map(
+                  (review) =>
+                    `<article><div class="plg-stars" aria-label="${review.rating} out of 5">${'★'.repeat(review.rating)}</div>${review.title ? `<h4>${escapeHtml(review.title)}</h4>` : ''}<p>${escapeHtml(review.body)}</p><span class="plg-who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</span></article>`,
+                )
+                .join('')}</div>`
+            },
+          },
         ],
       },
     },
@@ -286,7 +318,27 @@ document.addEventListener('mouseout',function(e){if(e.clientY<=0&&!d.open){sessi
         },
         aiTools: [{ name: 'configure_upsells', description: 'Set where the upsell widget appears and what it says.', schema: { placement: { type: 'string', enum: ['pdpBelowAddToCart', 'cartDrawer'] }, headline: { type: 'string' } }, example: "configure_upsells({ placement: 'cartDrawer' })" }],
       },
-      storefront: { components: [{ id: 'FrequentlyBoughtTogether', placement: 'merchant_choice', validSlots: ['pdpBelowAddToCart', 'cartDrawer'], defaultSlot: 'pdpBelowAddToCart' }] },
+      storefront: {
+        components: [
+          {
+            id: 'FrequentlyBoughtTogether',
+            placement: 'merchant_choice',
+            validSlots: ['pdpBelowAddToCart', 'cartDrawer'],
+            defaultSlot: 'pdpBelowAddToCart',
+            render: ({ context }) => {
+              const companions = (context.companions as Array<{ handle: string; title: string; image: string; price: string }> | undefined) ?? []
+              if (!companions.length) return ''
+              return `<div class="plg-fbt"><div class="plg-fbt-head">Bought together</div>${companions
+                .slice(0, 2)
+                .map(
+                  (item) =>
+                    `<a class="plg-fbt-item" href="${escapeHtml(String(context.base ?? ''))}/products/${escapeHtml(item.handle)}">${item.image ? `<img src="${escapeHtml(item.image)}" alt="" loading="lazy">` : ''}<span>${escapeHtml(item.title)}</span><b>${escapeHtml(item.price)}</b></a>`,
+                )
+                .join('')}</div>`
+            },
+          },
+        ],
+      },
     },
   },
   {
@@ -305,7 +357,21 @@ document.addEventListener('mouseout',function(e){if(e.clientY<=0&&!d.open){sessi
         settingsRoute: '/plugins/contact-form/settings',
         settingsSchema: { forwardTo: { type: 'string', label: 'Forward submissions to', help: 'Leave empty to keep them in the admin only.' } },
       },
-      storefront: { components: [{ id: 'ContactForm', placement: 'merchant_choice', validSlots: ['accountOverview'], defaultSlot: 'accountOverview' }] },
+      storefront: {
+        components: [
+          {
+            id: 'ContactForm',
+            placement: 'merchant_choice',
+            validSlots: ['accountOverview'],
+            defaultSlot: 'accountOverview',
+            render: ({ context }) => `<form class="plg-contact" method="post" action="${escapeHtml(String(context.base ?? ''))}/contact">
+  <div class="plg-row"><label>Name<input name="name" autocomplete="name"></label><label>Email<input name="email" type="email" required autocomplete="email"></label></div>
+  <label>Message<textarea name="message" rows="5" required></textarea></label>
+  <button class="btn" type="submit">Send it</button>
+</form>`,
+          },
+        ],
+      },
     },
   },
   {
@@ -351,7 +417,20 @@ document.addEventListener('mouseout',function(e){if(e.clientY<=0&&!d.open){sessi
           maxCharacters: { type: 'number', label: 'Max characters', integer: true, min: 1, max: 40, default: 12 },
         },
       },
-      storefront: { components: [{ id: 'EngravingButton', placement: 'merchant_choice', validSlots: ['pdpBelowAddToCart'], defaultSlot: 'pdpBelowAddToCart' }] },
+      storefront: {
+        components: [
+          {
+            id: 'EngravingButton',
+            placement: 'merchant_choice',
+            validSlots: ['pdpBelowAddToCart'],
+            defaultSlot: 'pdpBelowAddToCart',
+            render: ({ settings }) => {
+              const limit = Number(settings.maxCharacters ?? 12) || 12
+              return `<label class="plg-engrave"><span>Add engraving <em>— up to ${limit} characters</em></span><input form="pdp-form" name="engraving" maxlength="${limit}" placeholder="Initials or a date"></label>`
+            },
+          },
+        ],
+      },
     },
   },
 ]
@@ -379,13 +458,28 @@ const DIRECTORY_CATEGORIES: Array<[string, number, string[]]> = [
 const NOUNS = ['Flow', 'Desk', 'Hub', 'Loop', 'Bridge', 'Sync', 'Pilot', 'Ledger', 'Signal', 'Atlas', 'Beacon', 'Forge', 'Relay', 'Vault', 'Compass', 'Anchor', 'Prism']
 const PREFIXES = ['Ship', 'Order', 'Stock', 'Track', 'Bright', 'Clear', 'North', 'Swift', 'Iron', 'Open', 'True', 'Bold', 'Quick', 'Sun', 'Blue', 'Ever', 'Fair']
 
-/** Directory-only listings. Discoverable, honestly marked, never installable. */
+/**
+ * Directory-only listings. Discoverable, honestly marked, never installable.
+ *
+ * The two word lists have seventeen entries each and the names were drawn at
+ * (7i, 5i) mod 17, which repeats after seventeen — so Shipping & Fulfillment,
+ * with thirty-three entries, listed sixteen names twice. Two rows with the
+ * same name in a category also produce the same id, and the second of each
+ * pair was unreachable: opening it showed the first. Walking the prefixes
+ * across and the nouns down gives 289 distinct pairs per category, and a
+ * seen-set catches anything a longer list would collide on anyway.
+ */
 export function directoryEntries(): Plugin[] {
   const out: Plugin[] = []
+  const seen = new Set<string>()
   for (const [category, count, regions] of DIRECTORY_CATEGORIES) {
+    const shift = category.length
     for (let index = 0; index < count; index++) {
-      const name = `${PREFIXES[(index * 7 + category.length) % PREFIXES.length]}${NOUNS[(index * 5 + category.length) % NOUNS.length]}`
-      const slug = `${name.toLowerCase()}-${category.toLowerCase().replace(/[^a-z]+/g, '')}`.slice(0, 40)
+      const name = `${PREFIXES[(index + shift) % PREFIXES.length]}${NOUNS[(Math.floor(index / PREFIXES.length) + shift) % NOUNS.length]}`
+      const base = `${name.toLowerCase()}-${category.toLowerCase().replace(/[^a-z]+/g, '')}`.slice(0, 40)
+      let slug = base
+      for (let attempt = 2; seen.has(slug); attempt++) slug = `${base}-${attempt}`.slice(0, 44)
+      seen.add(slug)
       out.push({
         id: slug,
         name,

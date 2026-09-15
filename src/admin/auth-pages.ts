@@ -100,7 +100,7 @@ export function buildingPage(ticket: { id: string; stage: string; storeName: str
 
 export function onboardingPage(name: string, error: string | null, hasStores = false): string {
   return frame('Build an asset', `
-    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">← Back to all assets</a></p>' : ''}
+    <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${hasStores ? '← Stores & funnels' : '← Your account'}</a></p>
     <h1>What are you selling?</h1>
     <p class="lead">Choose a full store or a focused funnel, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Then one sentence builds the brand, products, pages and imagery.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}

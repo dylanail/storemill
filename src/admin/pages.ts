@@ -5,14 +5,14 @@ import { mediaRebrandStyle, rebrandHistory } from './media-rebrand-page.ts'
 import { themeEditorPage } from './theme-page.ts'
 import { roleOptions } from './library-page.ts'
 import { escapeHtml } from '../lib/http.ts'
-import { publicStoreUrl } from '../lib/urls.ts'
 import { format, minorDigits } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
 import { listCollections, listProducts, lowStock } from '../domain/catalog.ts'
 import { listCustomers, segment } from '../domain/customers.ts'
-import { listOrders, getOrder } from '../domain/orders.ts'
+import { listOrders, getOrder, salesSummary } from '../domain/orders.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions, type Region } from '../domain/regions.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
 import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit, listTodos } from '../control/todos.ts'
@@ -28,12 +28,11 @@ import { listRuns } from '../agent/runtime.ts'
 import { latestResearch } from '../agent/research.ts'
 import { listPages, type Page, PAGE_TEMPLATES } from '../pages/store.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
-import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
+import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport, type ProfitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
 import { listExperiments, type Experiment } from '../analytics/experiments.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
-import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact, uiIcon, type IconName } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
@@ -183,9 +182,11 @@ export function productsPage(ctx: Ctx, status: string, search: string): string {
       <input type="hidden" name="status" value="${escapeHtml(status)}"><button class="btn" type="submit">Search</button></form></div>
   <form method="post" action="/admin/products/import" class="card row" style="align-items:flex-end">
     <div class="field" style="flex:2;margin:0"><label>Import a product from a URL — any Shopify store's product page, or a supplier page with Open Graph tags</label><input name="url" type="url" required placeholder="https://some-store.com/products/the-thing"></div>
-    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="2.5"></div>
+    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="3"></div>
+    <div class="field" style="width:150px;margin:0"><label>Their shipping (minor units)</label><input name="supplierShippingCents" value="0" title="Part of the landed cost the markup is taken on, not something the margin absorbs."></div>
     <label class="row" style="font-size:12px;margin:0 .5rem .6rem"><input type="checkbox" name="asSupplier" value="true" checked> Their price is my cost</label>
     <button class="btn primary" type="submit">Import</button></form>
+  <p class="muted" style="font-size:11.5px;margin:-.6rem 0 1rem">The markup is on the landed cost — their price plus their shipping. At least 3×; 5× is the ideal band.</p>
   <div class="tabs">${['all', 'published', 'draft', 'archived']
     .map((option) => `<a class="${option === status ? 'on' : ''}" href="/admin/products?status=${option}">${option[0]?.toUpperCase()}${option.slice(1)}</a>`)
     .join('')}</div>
@@ -288,7 +289,9 @@ function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
     <table class="data" style="margin-top:.8rem"><tr><td>Price</td><td style="text-align:right">${format(margin.priceCents, currency)}</td></tr>
       <tr><td>Cost</td><td style="text-align:right">−${format(margin.costCents, currency)}</td></tr><tr><td>Supplier shipping</td><td style="text-align:right">−${format(margin.shippingCents, currency)}</td></tr>
       <tr><td>Card fees</td><td style="text-align:right">−${format(margin.feesCents, currency)}</td></tr>
-      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr></table>
+      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr>
+      <tr><td>Breakeven ROAS <span class="muted" style="font-size:11px">1 ÷ margin</span></td><td style="text-align:right">${margin.breakevenRoas === null ? '<span class="muted">set a cost</span>' : `${margin.breakevenRoas}×`}</td></tr>
+      <tr><td>Target ROAS <span class="muted" style="font-size:11px">breakeven + 1, the line to scale above</span></td><td style="text-align:right">${margin.targetRoas === null ? '<span class="muted">—</span>' : `<strong>${margin.targetRoas}×</strong>`}</td></tr></table>
     <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
 }
 
@@ -305,13 +308,18 @@ function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
   const stats = versionStats(ctx.db, ctx.store.id, product.id)
   const advertorials = versionsFor(ctx.db, ctx.store.id, product.id).filter((page) => page.role === 'advertorial')
   const currency = ctx.store.currency
+  // The leader is the one earning most per visit, and only once there is
+  // enough traffic to mean anything.
+  const best = [...stats].filter((row) => row.views >= 20).sort((a, b) => b.revenuePerSessionCents - a.revenuePerSessionCents)[0]
   return `<div class="card"><h2>Versions &amp; split test</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a durable visitor assignment stays sticky across sessions and network changes. Weight 0 keeps it out.</p>
-    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th></th></tr></thead><tbody>
+    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th>Rev / session</th><th></th></tr></thead><tbody>
       ${stats.map((row) => `<tr><td><a href="/admin/pages/${escapeHtml(row.pageId)}/edit">${escapeHtml(row.title.replace(`${product.title} — `, ''))}</a><div class="muted" style="font-size:11px">${escapeHtml(row.format)} · ${row.status}</div></td>
         <td><form method="post" action="/admin/versions/${escapeHtml(row.pageId)}/weight" class="row" style="gap:.3rem"><input name="weight" value="${row.weight}" style="width:52px"><button class="btn" type="submit">Set</button></form></td>
-        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td>${(row.conversion * 100).toFixed(1)}%</td>
-        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
+        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td class="muted">${(row.conversion * 100).toFixed(1)}%</td>
+        <td><strong>${format(row.revenuePerSessionCents, currency)}</strong>${best && row.pageId === best.pageId && best.revenuePerSessionCents > 0 ? ' <span class="tag ok">leading</span>' : ''}</td>
+        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>
+      <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Decided on revenue per session — average order value × conversion — not conversion alone: a page that converts less at a higher order value is the better page. Compare it against your cost per click on the Profit page.</p>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
     ${advertorials.length ? `<p class="muted" style="font-size:12px;margin-top:.6rem">Advertorials: ${advertorials.map((page) => `<a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.format)}</a>`).join(' · ')}</p>` : ''}
     <form method="post" action="/admin/products/${escapeHtml(product.id)}/versions" style="margin-top:1rem;border-top:1px solid var(--line);padding-top:.8rem">
       <div class="eyebrow" style="margin-bottom:.5rem">Generate versions</div>
@@ -632,6 +640,13 @@ export function settingsPage(ctx: Ctx): string {
   const domains = domainsFor(ctx.db, ctx.store.id)
   const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
+  // Contact-form submissions were written into the audit log's diff column and
+  // read back by nothing: a visitor was told "a person will read that and
+  // reply" and no person could.
+  const messages = ctx.db.all<{ target: string; diff: string; created_at: string }>(
+    "SELECT target, diff, created_at FROM audit_log WHERE store_id = ? AND action = 'contact_form' ORDER BY created_at DESC LIMIT 20",
+    ctx.store.id,
+  )
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     <div class="card" id="profile"><div class="row" style="justify-content:space-between"><div><h2>Your profile</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">The name shown in your dashboard and the email used to sign in.</p></div><span class="avatar" aria-hidden="true">${escapeHtml(ctx.userName.slice(0, 1).toUpperCase())}</span></div>
@@ -651,6 +666,21 @@ export function settingsPage(ctx: Ctx): string {
   </div>
   <div>
     ${domains.length ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Existing domains</h2><a class="btn" href="/admin/domains">Manage</a></div>${domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span></div>`).join('')}</div>` : ''}
+    <div class="card"><h2>Messages</h2>
+      <p class="muted" style="font-size:11.5px">What visitors sent through the contact form.</p>
+      ${messages.length
+        ? messages.map((message) => {
+            let text = ''
+            try {
+              text = String((JSON.parse(message.diff || '{}') as { message?: string }).message ?? '')
+            } catch {
+              text = ''
+            }
+            return `<div style="border-top:1px solid var(--line);padding:.5rem 0">
+              <div class="row" style="justify-content:space-between"><a href="mailto:${escapeHtml(message.target)}">${escapeHtml(message.target || 'no address given')}</a><span class="muted" style="font-size:11px">${escapeHtml(message.created_at.slice(0, 16).replace('T', ' '))}</span></div>
+              <p style="margin:.3rem 0 0;font-size:12.5px;white-space:pre-wrap">${escapeHtml(text)}</p></div>`
+          }).join('')
+        : '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
@@ -688,6 +718,40 @@ function modelsCard(ctx: Ctx): string {
 
 /* --------------------------------------------------------------- profit */
 
+/**
+ * Breakeven and target ROAS, and what the course does at each side of them.
+ *
+ * The inputs were all on file already; the report stopped at "ROAS 2.1x" and
+ * left the operator to work out whether that was a scale, a hold or a cut.
+ */
+function roasCard(report: ProfitReport, currency: string): string {
+  if (report.breakevenRoas === null || report.targetRoas === null) {
+    const why = !report.revenueCents
+      ? 'No sales in this window, so there is no gross margin to divide into.'
+      : 'Every sale in this window cost more than it made. Set supplier cost and shipping on each product, or the price is wrong.'
+    return `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--warn)"><strong>No line to scale on.</strong> ${why} Breakeven ROAS is 1 ÷ gross margin; target is that plus one.</div>`
+  }
+  const verdict = {
+    scale: ['ok', 'Scale.', 'Above target. Raise budget 20%, and expect ROAS to fall 5–25% as it settles.'],
+    hold: ['warn', 'Hold.', 'Between breakeven and target: profitable, not yet worth more budget.'],
+    cut: ['bad', 'Scale down.', 'Below breakeven, so every sale loses money. Cut 20%, never below your minimum daily spend.'],
+  }[report.verdict ?? 'hold'] as [string, string, string]
+  const tile = (label: string, value: string, note = '') =>
+    `<div class="kpi"><div class="label">${label}</div><div class="value">${escapeHtml(value)}</div>${note ? `<div class="delta">${escapeHtml(note)}</div>` : ''}</div>`
+  return `<div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+    ${tile('Gross margin', `${report.marginPercent}%`, 'revenue less COGS, shipping, fees')}
+    ${tile('Breakeven ROAS', `${report.breakevenRoas}×`, '1 ÷ margin')}
+    ${tile('Target ROAS', `${report.targetRoas}×`, 'breakeven + 1')}
+    ${tile('Cost per click', report.cpcCents === null ? '—' : format(report.cpcCents, currency), report.clicks ? `${report.clicks} clicks, on the spend logged with them` : 'log clicks with spend')}
+  </div>
+  ${report.roas === null
+    ? `<div class="notice" style="margin-bottom:1rem">No ad spend logged for this window, so there is nothing to hold against those lines.</div>`
+    : `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--${verdict[0] === 'ok' ? 'ok' : verdict[0] === 'bad' ? 'bad' : 'warn'})">
+        <strong>${escapeHtml(verdict[1])}</strong> ${report.roas}× against a ${report.breakevenRoas}× breakeven and a ${report.targetRoas}× target. ${escapeHtml(verdict[2])}
+        ${report.spendDays < 3 ? ` <span class="muted">Only ${report.spendDays} day${report.spendDays === 1 ? '' : 's'} of spend on file — never act on fewer than three.</span>` : ''}
+      </div>`}`
+}
+
 export function profitPage(ctx: Ctx, days: number): string {
   const report = profitReport(ctx.db, ctx.store.id, days)
   const spend = listAdSpend(ctx.db, ctx.store.id, days)
@@ -697,14 +761,18 @@ export function profitPage(ctx: Ctx, days: number): string {
     <form method="get"><select aria-label="Reporting period" name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
   <div class="kpis"><div class="kpi"><div class="label">Revenue</div><div class="value">${format(report.revenueCents, currency)}</div><div class="delta">${report.orders} orders</div></div>
     <div class="kpi"><div class="label">COGS + supplier shipping</div><div class="value">−${format(report.cogsCents + report.supplierShippingCents, currency)}</div></div>
-    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
+    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta ${report.verdict === 'cut' ? 'neg' : ''}">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
     <div class="kpi"><div class="label">Fees + refunds</div><div class="value">−${format(report.feesCents + report.refundsCents, currency)}</div></div>
     <div class="kpi"><div class="label">Net profit</div><div class="value" style="color:${report.profitCents >= 0 ? 'var(--ok)' : 'var(--bad)'}">${format(report.profitCents, currency)}</div><div class="delta ${report.profitCents < 0 ? 'neg' : ''}">${report.revenueCents ? Math.round((report.profitCents / report.revenueCents) * 100) : 0}% margin</div></div></div>
+  ${roasCard(report, currency)}
   <div class="grid2"><div class="card"><h2>Profit by day</h2><div class="spark" style="margin-top:.7rem;height:64px">${report.perDay.map((day) => `<i style="height:${Math.max(2, (Math.abs(day.profit) / peak) * 64)}px;background:${day.profit >= 0 ? 'var(--ok)' : 'var(--bad)'}" title="${day.day}: ${format(day.profit, currency)} (rev ${format(day.revenue, currency)}, spend ${format(day.spend, currency)})"></i>`).join('') || '<span class="muted">No orders in the window.</span>'}</div></div>
-  <div><form method="post" action="/admin/profit/spend" class="card"><h2>Log ad spend</h2>
-    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div></div>
-    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div><button class="btn primary" type="submit">Log</button></form>
-    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
+  <div><form method="post" action="/admin/profit/spend" class="card" id="spend"><h2>Log ad spend</h2>
+    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div>
+      <div class="field" style="flex:1"><label>Clicks</label><input name="clicks" placeholder="420"></div></div>
+    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div>
+    <p class="muted" style="font-size:11.5px;margin:-.2rem 0 .6rem">Clicks are optional, but without them there is no cost per click to judge revenue per session against.</p>
+    <button class="btn primary" type="submit">Log</button></form>
+    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Clicks</th><th>CPC</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td>${row.clicks || '—'}</td><td>${row.clicks ? format(Math.round(row.amount_cents / row.clicks), currency) : '—'}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
 }
 
 /* --------------------------------------------------------------- funnels */
@@ -866,13 +934,16 @@ export function storesPage(ctx: Ctx, stores: Store[]): string {
     const todayRevenue = ctx.db.one<{ revenue: number | null }>("SELECT SUM(COALESCE(base_total_cents, total_cents)) revenue FROM orders WHERE store_id = ? AND created_at >= ? AND status != 'cancelled'", store.id, todayStart.toISOString())?.revenue ?? 0
     const month = salesSummary(ctx.db, store.id, 30)
     const cover = storeCoverImage(ctx.db, store.id)
-    const storefrontUrl = store.status === 'live' ? `/s/${store.slug}` : `/preview/${store.slug}`
+    const publicUrl = publicStoreUrl(ctx.db, store)
+    const storefrontUrl = store.status === 'live' ? publicUrl : `/preview/${store.slug}`
+    const publishedAt = environment(ctx.db, store.id, 'live').publishedAt
     return `<article class="asset-card" data-kind="${store.kind}">
       <a class="asset-cover" aria-label="Open ${escapeHtml(store.name)}" href="/admin/switch?storeId=${escapeHtml(store.id)}"><span aria-hidden="true">${uiIcon(store.kind === 'funnel' ? 'funnel' : 'store', 30)}</span>${cover ? `<img src="${escapeHtml(cover)}" alt="${escapeHtml(store.name)} homepage hero" loading="lazy" decoding="async" onerror="this.hidden=true">` : ''}<em>${store.kind}</em></a>
       <div class="asset-body"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2>${escapeHtml(store.name)}</h2><p>${escapeHtml(store.brand.slogan || store.prompt.slice(0, 90) || `Blank ${store.kind}`)}</p></div><span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status[0]?.toUpperCase()}${store.status.slice(1)}</span></div>
+        <p class="muted" style="font-size:12px;overflow-wrap:anywhere">${escapeHtml(publicUrl)} · ${publishedAt ? `Published ${escapeHtml(publishedAt.slice(0, 10))}` : 'Not published yet'}</p>
         <div class="asset-facts"><span>${products} product${products === 1 ? '' : 's'}</span><span>${pages} page${pages === 1 ? '' : 's'}</span></div>
         <div class="asset-metrics"><div><small>Today revenue</small><strong>${format(todayRevenue, store.currency)}</strong></div><div><small>30 days / 30d revenue</small><strong>${format(month.revenueCents, store.currency)}</strong><em>${month.orders} order${month.orders === 1 ? '' : 's'} / 30d</em></div></div>
-        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${store.status === 'live' ? 'View' : 'Preview'} ↗</a><form method="post" action="/admin/stores/${escapeHtml(store.id)}/duplicate"><button class="btn" type="submit">Duplicate ${store.kind === 'funnel' ? 'funnel' : 'store'}</button></form><form method="post" action="/admin/stores/${escapeHtml(store.id)}/status"><input type="hidden" name="status" value="${store.status === 'paused' ? 'live' : 'paused'}"><button class="btn" type="submit">${store.status === 'paused' ? 'Reopen' : 'Pause'}</button></form><details class="asset-more"><summary class="btn" aria-label="More actions for ${escapeHtml(store.name)}">•••</summary><a href="/admin/stores/${escapeHtml(store.id)}/delete" style="display:block;color:#b42318;padding:10px">Delete ${store.kind}…</a></details></div></div>
+        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="/admin/switch?storeId=${escapeHtml(store.id)}&amp;to=%2Fadmin%2Fbuild">Build</a><a class="btn" href="${escapeHtml(storefrontUrl)}" target="_blank" rel="noopener">${store.status === 'live' ? 'View' : 'Preview'} ↗</a><form method="post" action="/admin/stores/${escapeHtml(store.id)}/duplicate"><button class="btn" type="submit">Duplicate ${store.kind === 'funnel' ? 'funnel' : 'store'}</button></form><form method="post" action="/admin/stores/${escapeHtml(store.id)}/status"><input type="hidden" name="status" value="${store.status === 'paused' ? 'live' : 'paused'}"><button class="btn" type="submit">${store.status === 'paused' ? 'Reopen' : 'Pause'}</button></form><details class="asset-more"><summary class="btn" aria-label="More actions for ${escapeHtml(store.name)}">•••</summary><a href="/admin/stores/${escapeHtml(store.id)}/delete" style="display:block;color:#b42318;padding:10px">Delete ${store.kind}…</a></details></div></div>
     </article>`
   }).join('')}</div>
   ${listImports(ctx.db,ctx.userId||ctx.store.ownerId).length ? `<section class="card"><h2>Recent site clones</h2>${listImports(ctx.db,ctx.userId||ctx.store.ownerId).slice(0,6).map(job=>{const progress=JSON.parse(job.progress);return `<p><a href="/admin/imports/${escapeHtml(job.id)}">${escapeHtml(JSON.parse(job.input).name||new URL(JSON.parse(job.input).url).hostname)}</a> · ${escapeHtml(job.status)} · ${Number(progress.percent)||0}% · ${Number(progress.copied)||0} pages <span class="muted">${escapeHtml(progress.task||'')}</span></p>`}).join('')}</section>` : ''}
@@ -983,7 +1054,7 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
     <div class="card"><h2>Recent runs</h2>
       ${runs.map((run) => `<div style="border-top:1px solid var(--line);padding:.5rem 0">
         <div class="row" style="justify-content:space-between"><span style="font-size:12.5px">${escapeHtml(run.prompt.slice(0, 60))}</span>
-          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}</span></div>
+          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}${run.status === 'partial' && run.error ? ` · ${escapeHtml(run.error.split(';').length)} failed` : ''}</span></div>
         <div class="muted" style="font-size:11.5px">${run.steps.map((step) => `${escapeHtml(step.tool)}${step.status === 'failed' ? ' ✗' : ''}`).join(' · ')}</div></div>`).join('')
         || '<p class="muted" style="font-size:12px">No runs yet.</p>'}</div>
   </div></div>`

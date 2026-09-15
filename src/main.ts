@@ -1,5 +1,6 @@
-import { drainImports } from './control/asset-import-jobs.ts'
 import './lib/env.ts'
+import { sweepReviewRequests } from './email/reviews.ts'
+import { drainImports } from './control/asset-import-jobs.ts'
 import { recoverHealthFixes } from './storefront/health-fixes.ts'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
@@ -55,6 +56,11 @@ function resolveStorefront(ctx: Ctx): { store: Store; preview: boolean; rest: st
     if (!store) return null
     return { store, preview, rest: `/${rest.join('/')}` }
   }
+  // A custom domain is looked up whether or not a storefront root is
+  // configured. Returning early here meant that on a deployment without
+  // AMBORAS_STOREFRONT_HOST — which is what Railway's own instructions
+  // describe — a verified custom domain got a certificate from /_edge/tls-ask
+  // and then served the admin login page.
   const store = storeForHost(getDb(), ctx.hostname, ROOT_DOMAIN)
   return store ? { store, preview: false, rest: path } : null
 }
@@ -172,8 +178,10 @@ const server = createServer(async (req, res) => {
     }
     throw new HttpError(404, 'Nothing here')
   } catch (error) {
+    // Signing in with no store yet is an account with nothing in it, not a
+    // wizard: the hub says so and offers the one button that fixes it.
     if (error instanceof NoStores) {
-      await send(res, redirect('/onboarding'))
+      await send(res, redirect('/admin/stores'))
       return
     }
     if (error instanceof HttpError && error.status === 401 && wantsHtml) {
@@ -185,11 +193,15 @@ const server = createServer(async (req, res) => {
 })
 
 const db = getDb()
+// Re-queue what the last process was in the middle of, then actually run it:
+// a crash during onboarding used to leave a half-built store and a run marked
+// 'queued' that nothing would ever pick up.
 recoverRuns(db)
 resumeQueuedRuns(db)
 recoverAssistantQueue(db)
 recoverHealthFixes(db)
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
+setInterval(() => void sweepReviewRequests(db).catch(() => undefined), 60 * 60_000).unref()
 setInterval(() => void sweepMarketingFlows(db, { origin }).catch(() => undefined), 5 * 60_000).unref()
 setInterval(() => void dispatchServerEvents(db).catch(() => undefined), 15_000).unref()
 setInterval(() => void drainImports(db).catch(() => undefined), 1_000).unref()

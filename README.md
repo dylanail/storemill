@@ -167,7 +167,10 @@ See `.env.example` for everything. The ones that decide what runs:
 | `STOREMILL_17TRACK_API_KEY` | registers supplier tracking numbers and powers live carrier events on `/track` |
 
 On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
-`/preview/:slug` is the draft (untracked, pixels suppressed).
+`/preview/:slug` is the draft (untracked, pixels suppressed, and signed-in:
+the draft is only for the people who run the store). A storefront answers at
+its public address only once it has been published; before that, and while
+it is paused, the address shows a closed sign that no crawler is offered.
 
 ## Not built yet
 

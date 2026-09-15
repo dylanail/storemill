@@ -1,3 +1,5 @@
+import { format } from '../lib/money.ts'
+import { accountShell, storesHub } from './account.ts'
 import { saveDiscount, previewDiscount, changeDiscountStatus } from '../control/discounts.ts'
 import { minorDigits } from '../lib/money.ts'
 import { startImport, getImport, cancelImport } from '../control/asset-import-jobs.ts'
@@ -69,7 +71,7 @@ import { shell } from './shell.ts'
 import { authPage, buildingPage, forgotPage, onboardingPage, resetPage } from './auth-pages.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
-import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
+import { latestDoc, planRowRequest, type AdPlan, deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
 import { deleteQueueItem, getQueueItem, labelShot, PAGE_GOALS, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
@@ -101,6 +103,14 @@ function session(ctx: Ctx): Session {
   const stores = listStores(db, user.id)
   if (!stores.length) throw new NoStores()
   const wanted = ctx.query.get('storeId') ?? ctx.cookies[STORE_COOKIE]
+  // An id that is unknown, deleted, or someone else's used to fall through to
+  // whichever store happened to be newest — and /admin/switch then pinned the
+  // cookie to it. A stale bookmark quietly moved you into another store and
+  // kept you there. An unknown id from the URL is refused; a stale cookie just
+  // falls back, because that is a store that was deleted or handed over.
+  if (ctx.query.get('storeId') && !stores.some((entry) => entry.id === ctx.query.get('storeId'))) {
+    throw notFound('No store of yours with that id')
+  }
   const store = stores.find((entry) => entry.id === wanted) ?? (stores[0] as Store)
   requireRole(db, user.id, store.id)
   return { user, store, stores }
@@ -239,6 +249,7 @@ export function adminRouter(): Router {
       return redirect(`/admin?flash=${encodeURIComponent('Password changed. Every other signed-in device has been signed out.')}`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not change the password'
+      // A live token keeps its form; a dead one goes back to asking for another.
       return redirect(userForReset(db(), value) ? `/reset?token=${encodeURIComponent(value)}&error=${encodeURIComponent(message)}` : `/forgot?error=${encodeURIComponent(message)}`)
     }
   })
@@ -417,6 +428,12 @@ export function adminRouter(): Router {
   })
 
   router.get('/admin/stores', (ctx) => {
+    const user = requireUser(db(), ctx)
+    const stores = listStores(db(), user.id)
+    if (!stores.length) {
+      const userName = user.name || user.email.split('@')[0] || 'there'
+      return html(accountShell({ userName, title: 'Stores & funnels', body: storesHub({ db: db(), stores, userName, origin: process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin }) }))
+    }
     const current = session(ctx)
     return page(ctx, current, 'stores', 'Stores & funnels', pages.storesPage(ctxFor(current, ctx), current.stores))
   })
@@ -642,6 +659,8 @@ export function adminRouter(): Router {
     }
   })
 
+  /* Which brief an image satisfies. The Creative checklist reads these markers;
+     nothing could write one, so coverage never moved past the hero. */
   router.post('/admin/products/:id/media/label', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
@@ -1147,7 +1166,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
+      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 3), supplierShippingCents: Math.max(0, Math.round(Number(body.supplierShippingCents ?? 0)) || 0), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
       const productId = (result.data as { id?: string })?.id
       return redirect(productId ? `/admin/products/${productId}?flash=${encodeURIComponent(result.summary)}` : `/admin/products?flash=${encodeURIComponent(result.summary)}`)
     } catch (error) {
@@ -1204,7 +1223,7 @@ export function adminRouter(): Router {
   router.post('/admin/orders/:id/delivered', (ctx) => {
     const current = session(ctx)
     const order = markDelivered(db(), current.store.id, ctx.params.id as string)
-    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)) }).catch(() => undefined)
+    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, publicUrl(ctx, current.store)) }).catch(() => undefined)
     return back(ctx, 'Marked delivered. The review request goes out a week from now.')
   })
 
@@ -1216,7 +1235,13 @@ export function adminRouter(): Router {
   router.post('/admin/profit/spend', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    recordAdSpend(db(), current.store.id, { day: String(body.day ?? new Date().toISOString()), platform: String(body.platform ?? 'Other'), amountCents: Math.round(Number(body.amountCents ?? 0)), note: String(body.note ?? '') })
+    recordAdSpend(db(), current.store.id, {
+      day: String(body.day ?? new Date().toISOString()),
+      platform: String(body.platform ?? 'Other'),
+      amountCents: Math.round(Number(body.amountCents ?? 0)),
+      clicks: Math.round(Number(body.clicks ?? 0)) || 0,
+      note: String(body.note ?? ''),
+    })
     return back(ctx, 'Logged.')
   })
 
@@ -1240,7 +1265,9 @@ export function adminRouter(): Router {
       ...(body.upsellVariantId===undefined?{}:{upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') }}),
       ...(body.downsellVariantId===undefined?{}:{downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') }}),
       testGroup: String(body.testGroup ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
-      weight: Number(body.weight ?? 0) || 0,
+      // A funnel put into a test group with no weight is not in the test, and
+      // the entry URL then answers with nothing. Naming a group means running it.
+      weight: body.weight === undefined || String(body.weight).trim() === '' ? (String(body.testGroup ?? '').trim() ? 50 : 0) : Math.max(0, Number(body.weight) || 0),
     })
     return back(ctx, 'Funnel saved.')
   })
@@ -1296,7 +1323,7 @@ export function adminRouter(): Router {
     for (const alert of alerts) {
       const variant = getVariant(db(), current.store.id, alert.variant_id)
       if (!variant || (variant.inventory <= 0 && !variant.allowBackorder)) continue
-      await sendEmail(db(), current.store.id, { template: 'welcome', to: alert.email, context: { storeUrl: ctx.url.origin + storeUrl(ctx, current.store), heading: 'It is back in stock' } })
+      await sendEmail(db(), current.store.id, { template: 'back_in_stock', to: alert.email, context: { storeUrl: publicUrl(ctx, current.store), product: { title: variant.title } } })
       sent.push(alert.id)
     }
     markStockAlertsNotified(db(), sent)
@@ -1306,6 +1333,8 @@ export function adminRouter(): Router {
   router.get('/admin/switch', (ctx) => {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
+    // `to` lets the hub open a store straight onto a page — Build, say — but it
+    // is a path on this admin and nothing else.
     const to = ctx.query.get('to') ?? ''
     return redirect(/^\/admin(\/|$)/.test(to) && !to.startsWith('//') ? to : '/admin')
   })
@@ -1373,6 +1402,13 @@ export function adminRouter(): Router {
     const moved = await refundThroughProvider(db(), current.store.id, existing)
     if (!moved.ok) return back(ctx, `!${moved.message}`)
     const order = refundOrder(db(), current.store.id, existing.id, { reason: 'Refunded from the admin' })
+    // The template exists with the trigger 'order.refunded' and nothing sent
+    // it: the customer learned about their refund from their bank.
+    void sendEmail(db(), current.store.id, {
+      template: 'refund_issued',
+      to: order.email,
+      context: { ...orderContext(order, publicUrl(ctx, current.store)), amount: format(order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0), order.currency) },
+    }).catch(() => undefined)
     return back(ctx, `Refunded${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}. Payment is now ${order.paymentStatus}.`)
   })
 
@@ -2063,6 +2099,28 @@ export function adminRouter(): Router {
       return back(ctx, status === 'done' && !String(body.learnings ?? '').trim() ? 'Saved as learning: a row is not done until its learnings are written.' : 'Row saved.')
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
+    }
+  })
+
+  /* A plan row, run. The plan named the concept, the angle, the variations,
+     the format and the method, and then the owner retyped all of it into the
+     ad drafter by hand because nothing connected the two. */
+  router.post('/admin/market/plan/:index/ads', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const index = Number(ctx.params.index)
+    const doc = latestDoc<AdPlan>(db(), current.store.id, 'ad-plan')
+    const row = doc?.body.rows[index]
+    if (!row) return back(ctx, '!No such plan row')
+    const product = String(body.productId ?? '') || listProducts(db(), current.store.id, { status: 'published', limit: 1 })[0]?.id || ''
+    if (!product) return back(ctx, '!Publish a product first; an ad has to point at something.')
+    try {
+      const request = planRowRequest(row, listAvatars(db(), current.store.id))
+      const ads = await draftAds(db(), current.store, { productId: product, platform: String(body.platform ?? 'meta') as AdPlatform, ...request })
+      if (row.status === 'idea') updatePlanRow(db(), current.store.id, index, { status: 'working' })
+      return back(ctx, `${ads.length} ad${ads.length === 1 ? '' : 's'} drafted from "${row.concept}". The row is working now; write its learnings when the test is read.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not draft the ads'}`)
     }
   })
 

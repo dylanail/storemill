@@ -741,6 +741,7 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       status TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '{}', payment_intent_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
   { name:'027_bundle_pricing_modes', sql: `ALTER TABLE bundles ADD COLUMN pricing_mode TEXT NOT NULL DEFAULT 'bulk';` },
+  { name: '028_review_requested', sql: `ALTER TABLE orders ADD COLUMN review_requested_at TEXT;` },
 ]
 
 function migrate(db: Db) {

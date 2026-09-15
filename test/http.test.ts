@@ -874,6 +874,53 @@ test('the scheme a proxy forwards is the scheme the request is seen under', asyn
   assert.equal(fake({ 'x-forwarded-proto': 'ftp' }).url.origin, 'http://admin.example.com')
 })
 
+test('a signed-in account with no store lands on its own hub, not on a form it cannot leave', async () => {
+  // A second account, with its own cookie jar, so the first one's session is
+  // left alone: this is the moment the owner complained about.
+  const own = new Map<string, string>()
+  const mine = async (path: string, form?: Record<string, string>) => {
+    const response = await fetch(`${base}${path}`, {
+      method: form ? 'POST' : 'GET',
+      headers: {
+        accept: 'text/html',
+        cookie: [...own].map(([name, value]) => `${name}=${value}`).join('; '),
+        ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+      },
+      ...(form ? { body: new URLSearchParams(form).toString() } : {}),
+      redirect: 'manual',
+    })
+    for (const cookie of response.headers.getSetCookie()) {
+      const [pair] = cookie.split(';')
+      const [name, value = ''] = (pair ?? '').split('=')
+      if (name) own.set(name.trim(), decodeURIComponent(value))
+    }
+    return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+  }
+
+  await mine('/register', { email: 'greta@example.com', password: 'a-long-enough-password', name: 'Greta' })
+  await mine('/logout', {})
+
+  const signedIn = await mine('/login', { email: 'greta@example.com', password: 'a-long-enough-password' })
+  assert.equal(signedIn.location, '/admin')
+
+  const dash = await mine('/admin')
+  assert.equal(dash.location, '/admin/stores', 'no store yet means the account hub, never /onboarding')
+
+  const hub = await mine('/admin/stores')
+  assert.equal(hub.status, 200, 'the hub renders for an account with nothing in it')
+  assert.match(hub.text, /No stores yet, Greta/)
+  assert.match(hub.text, /Build your first store/)
+  assert.match(hub.text, /Sign out/)
+
+  // Any store-scoped page falls back to the same place rather than a wizard.
+  assert.equal((await mine('/admin/orders')).location, '/admin/stores')
+
+  // And onboarding always has a way back out of it.
+  const form = await mine('/onboarding')
+  assert.equal(form.status, 200)
+  assert.match(form.text, /href="\/admin\/stores"/, 'onboarding is escapable with no stores on the account')
+})
+
 test('an invited teammate can actually join the store', async () => {
   // The owner invites someone who has no account yet.
   const invited = await call('/admin/team', { form: { email: 'colleague@example.com', role: 'member' } })

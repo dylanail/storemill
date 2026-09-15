@@ -27,9 +27,15 @@ export const BEHAVIOUR_EVENTS: EventType[] = ['scroll', 'section.view', 'cta.cli
 /**
  * First-party analytics.
  *
- * No cookie, no pixel, no SDK. A visitor is identified by an HMAC of ip, user
- * agent and the current day — stable enough to count a session, useless as a
- * cross-site identifier, and it rotates itself at midnight.
+ * No pixel, no SDK, no third party. A session is one visitor for one day: the
+ * key is an HMAC of the storefront's own visitor id and the date where the
+ * browser sent one back, and of ip and user agent where it did not — a first
+ * request, or a client that keeps no cookies. Either way it rotates at
+ * midnight and is useless as a cross-site identifier.
+ *
+ * The visitor id matters beyond tidiness. Two people behind one office address
+ * on the same browser version were a single session; one person on a phone
+ * that changed network mid-visit was two.
  */
 export type Touch = {
   source?: string
@@ -268,6 +274,11 @@ export function funnel(db: Db, storeId: string, range: Range = '7d'): FunnelStag
   const from = since(range)
   const count = (type: EventType) =>
     db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = ? AND created_at >= ?', storeId, type, from)?.c ?? 0
+  // Sessions active in the window, not sessions that started in it. The stages
+  // below count any session that fired the event inside the window, so a
+  // visitor who arrived yesterday and bought this morning was counted at every
+  // stage but the first — and a funnel could report more add-to-carts than
+  // sessions, with a negative drop-off under it.
   const sessions = db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND created_at >= ?', storeId, from)?.c ?? 0
   const raw = [
     { stage: 'Sessions', count: sessions },
@@ -393,6 +404,10 @@ export type Behaviour = {
 export function behaviour(db: Db, storeId: string, range: Range = '7d'): Behaviour {
   const from = since(range)
   const depth = (percent: number) => db.one<{ c: number }>("SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'scroll' AND created_at >= ? AND CAST(json_extract(meta, '$.depth') AS INTEGER) >= ?", storeId, from, percent)?.c ?? 0
+  // Active in the window, for the same reason the funnel counts them that way:
+  // every number beside this one is a count of sessions that did something
+  // here, so counting only the ones that also started here made the shares
+  // read above 100%.
   const sessions = db.one<{ c: number }>('SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND created_at >= ?', storeId, from)?.c ?? 0
   const sections = db.all<{ path: string; blockType: string; blockId: string; views: number }>(
     "SELECT path, json_extract(meta, '$.blockType') blockType, json_extract(meta, '$.blockId') blockId, COUNT(DISTINCT session_id) views FROM analytics_events WHERE store_id = ? AND type = 'section.view' AND created_at >= ? GROUP BY path, blockType, blockId ORDER BY views DESC LIMIT 40",

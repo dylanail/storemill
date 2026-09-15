@@ -18,7 +18,9 @@ import { id as visitorId } from '../lib/ids.ts'
 import type { LineItem } from '../domain/types.ts'
 import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
-import { privacyHtml, termsHtml } from './legal.ts'
+import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
+import { renderSlot } from '../control/plugins.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
@@ -228,11 +230,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product) throw notFound('No such product')
     const body = await ctx.body()
+    // The button on this form says "Submit for moderation" and createReview
+    // defaults to 'approved' unless a thin heuristic objects — so anyone on
+    // the internet could put a one-star review on a product page and into its
+    // Google aggregateRating, instantly. Anything arriving from the storefront
+    // waits for the merchant, which is what the Reviews tab is for.
     createReview(current.db, current.store.id, {
       productId: product.id,
       rating: Number(body.rating ?? 5),
       body: String(body.body ?? ''),
       author: String(body.author ?? 'Anonymous'),
+      status: 'pending',
     })
     record(ctx, current, 'review.submit', { productId: product.id })
     return redirect(`${current.base}/products/${product.handle}#review`)
@@ -298,7 +306,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       if (!variant || !product || product.status !== 'published' && !(current.preview && product.status === 'draft') || !canReserve(current.db, id, 1)) throw badRequest('A selected cart add-on is not available')
     }
     const updated = current.db.tx(() => {
-      let result = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined)
+      let result = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined, undefined, String(body.engraving ?? ''))
       for (const id of extras) if (!result.items.some(item => item.variantId === id)) result = addToCart(current.db, current.store.id, cart.id, id, 1, 'cart-upsell')
       return result
     })
@@ -487,12 +495,15 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       about: `<p>${escapeHtml(current.store.brand.description ?? '')}</p><p>${escapeHtml(current.store.brand.voice ?? '')}</p>`,
       privacy: privacyHtml(current.db, current.store),
       terms: termsHtml(current.db, current.store),
-      shipping:
-        '<p>Everything is built to order. Stock builds ship in fourteen days; custom work takes about three weeks.</p>' +
-        '<p>Free shipping over 200. Returns are free for thirty days as long as the item has not been used in a fight.</p>',
+      shipping: shippingHtml(current.db, current.store),
+      // The support surface. Merchant-choice components on the accountOverview
+      // slot — the contact form among them — are drawn here; before this, that
+      // slot was rendered nowhere at all, so the Contact Form plugin installed
+      // and could never appear.
+      contact: `<p>Tell us what you need and a person will read it.</p>${renderSlot(current.db, current.store.id, 'accountOverview', { base: current.base }, { preview: current.preview })}`,
     }
     if (!copy[slug]) throw notFound('No such page')
-    const titles: Record<string, string> = { about: 'About', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
+    const titles: Record<string, string> = { about: 'About', contact: 'Contact', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
     return html(view.simplePage(current, titles[slug] ?? slug, copy[slug]))
   })
 
@@ -818,6 +829,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
+    // Checked before the card is charged, not after: the offer used to take
+    // the money and then append a line for stock that was not there.
     if (body.accept === 'yes' && offer && !canReserve(current.db, offer.variantId, 1)) {
       recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
       return redirect(`${current.base}/orders/${order.id}?offer=soldout`)
@@ -898,7 +911,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/llms.txt', (ctx) => {
     const current = open(ctx)
     const products = listProducts(current.db, current.store.id, { status: 'published', limit: 50 })
-    return new Raw(llmsTxt(current.store, products), 'text/plain; charset=utf-8')
+    return new Raw(llmsTxt(current.store, products, publicStoreUrl(current.db, current.store)), 'text/plain; charset=utf-8')
   })
 
   router.get('/store/integrations/active', (ctx) => {

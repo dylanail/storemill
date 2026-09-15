@@ -207,6 +207,10 @@ export function renderBundleWidget(bundle: Bundle, product: Product, currency: s
     }))
     const perks = [tier.freeShipping ? 'Free shipping' : '', tier.giftVariantId ? `+ ${tier.giftLabel || 'free gift'}` : ''].filter(Boolean)
     const checked = index === preselect ? 'checked' : ''
+    // The quantity and the discount ride on the input so the product page can
+    // re-price the tiers when the buyer picks a different variant. Rendered
+    // once from the cheapest variant, a three-pack of the large size showed
+    // the small size's price and the cart charged the large one.
     return `<label class="tier${tier.badge ? ' tier--hi' : ''}">
       <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" data-discount="${tier.discountPercent}" data-variant-prices="${escapeHtml(JSON.stringify(variantPrices))}" ${checked}>
       <span class="tier-main"><span class="tier-label">${escapeHtml(tier.label)}${tier.discountPercent ? ` <em>Save ${tier.discountPercent}%</em>` : ''}</span>
