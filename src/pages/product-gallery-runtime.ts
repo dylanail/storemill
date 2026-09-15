@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { mapMediaDocument, decodeMediaAttribute } from './clone-media.ts'
 import { escapeHtml } from '../lib/http.ts'
 import type { Media } from '../domain/types.ts'
-export const productGallerySource = readFileSync(new URL('./product-gallery.js', import.meta.url), 'utf8').replace('export function', 'function')
+const originalMediaSource = readFileSync(new URL('./original-media-source.js', import.meta.url), 'utf8').replace('export function', 'function')
+export const productGallerySource = originalMediaSource + '\n' + readFileSync(new URL('./product-gallery.js', import.meta.url), 'utf8').replace('export function', 'function')
 export const productGalleryRuntime = `${productGallerySource}\nproductGalleries(document).start(id => {const prefix=/^\\/(preview|s)\\//.test(location.pathname)?location.pathname.split('/').slice(0,3).join('/'):'';return fetch(prefix+'/api/page-products/'+encodeURIComponent(id),{cache:'no-store'}).then(r=>r.ok?r.json():null);});`
 
 

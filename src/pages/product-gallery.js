@@ -23,7 +23,11 @@ export function productGalleries(doc) {
   function read(root){
     const {main,thumbs,hero}=parts(root),nodes=main?[...main.children].filter(el=>!el.matches('[data-copy-gallery-continuation],.swiper-slide-duplicate')):thumbs?[...thumbs.children]:hero?[hero]:[];
     return nodes.map(node=>{
-      const media=node.matches('img,video')?node:node.querySelector('video,img'),url=media?.getAttribute('data-src')||media?.getAttribute('src')||media?.querySelector('source')?.getAttribute('src')||node.getAttribute('data-src')||'';
+      const media=node.matches('img,video')?node:node.querySelector('video')||node.querySelector('img');
+      const attributes=el=>Object.fromEntries([...(el?.attributes||[])].map(a=>[a.name,a.value]));
+      const link=media?.closest('a[href]')?.getAttribute('href')||'';
+      const sources=[...(media?.localName==='video'?media:media?.closest('picture'))?.querySelectorAll('source')||[]].map(attributes);
+      const url=originalMediaSource({...attributes(media),...(/\.(avif|gif|jpe?g|png|webp)([?#]|$)/i.test(link)?{'data-full':link}:{})},sources,media?.localName==='video'?'video':'image')||node.getAttribute('data-src')||'';
       return {url,alt:media?.getAttribute('alt')||media?.getAttribute('aria-label')||'',kind:media?.localName==='video'?'video':'image',...(media?.getAttribute('poster')?{poster:media.getAttribute('poster')}:{})};
     }).filter(item=>safe(item.url));
   }
@@ -74,7 +78,7 @@ export function productGalleries(doc) {
   }
   function render(root,input,items=input.items||[]){
     instances.get(root)?.abort();const controller=new doc.defaultView.AbortController();instances.set(root,controller);const signal=controller.signal;
-    const config={...input,items:items.filter(item=>safe(item.url)).slice(0,100)},settings=config.settings||{};
+    const config={...input,items:items.filter(item=>safe(item.url))},settings=config.settings||{};
     root.setAttribute(configAttr,JSON.stringify(config));ensureStyle();
     let {main,thumbs,hero}=parts(root);
     if(!main){main=doc.createElement('div');if(hero){const slide=doc.createElement('div');hero.replaceWith(main);slide.append(hero);main.append(slide);}else root.prepend(main);}

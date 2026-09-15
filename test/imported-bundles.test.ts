@@ -151,3 +151,13 @@ test('source comparison prices repair older imports without replacing merchant p
   assert.equal(db.one<{compare_at_cents:number}>('SELECT compare_at_cents FROM variants WHERE id=?',product.variants[0]!.id)?.compare_at_cents,10990)
   assert.equal(db.one<{n:number}>('SELECT COUNT(*) n FROM promotions WHERE store_id=?',store.id)?.n,1)
 })
+
+test('copied packs preserve odd-cent totals without inventing a rounded unit price',()=>{
+ const {db,store,product,original}=setup()
+ const plan=planImportedBundle(original.replaceAll('93.42','93.41'),'https://source.example/products/cushion')!
+ assert.equal(plan.tiers[1]!.totalCents,9341);assert.equal(plan.tiers[1]!.unitPriceCents,undefined)
+ const installed=installImportedBundle(db,store.id,product.id,plan)
+ assert.equal(installed.bundle.tiers[1]!.totalPriceCents,9341)
+ const cart=addToCart(db,store.id,createCart(db,store.id).id,product.variants[0]!.id,2),quote=totals(db,store.id,cart)
+ assert.equal(quote.subtotalCents-quote.discountCents,9341)
+})

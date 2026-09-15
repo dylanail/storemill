@@ -641,6 +641,25 @@ test('a product photo can be uploaded and staged from the product page', async (
   assert.equal(served.headers.get('x-content-type-options'), 'nosniff')
 })
 
+test('original photo uploads and hero changes preserve a gallery longer than eight slides', async()=>{
+  const products=await call('/admin/products'),productId=/prod_[a-z0-9]+/.exec(products.text)?.[0]||''
+  const before=await call(`/admin/products/${productId}`),beforeCount=(before.text.match(/data-product-media-item/g)||[]).length
+  const originals:string[]=[]
+  for(let i=0;i<10;i++){
+    const uploaded=await upload(`/admin/products/${productId}/photo`,{}, {field:'photo',name:'original.png',type:'image/png',data:PNG})
+    assert.match(flashOf(uploaded.location),/original photo.*without changes/)
+    const detail=await call(`/admin/products/${productId}`)
+    const urls=[...detail.text.matchAll(/<figure data-product-media-item[\s\S]*?<img src="([^"]+)"/g)].map(match=>match[1]!)
+    originals.push(urls.at(-1)!)
+    assert.equal((detail.text.match(/data-product-media-item/g)||[]).length,beforeCount+i+1)
+  }
+  const served=await fetch(base+originals[0]);assert.deepEqual(Buffer.from(await served.arrayBuffer()),PNG)
+  await call(`/admin/products/${productId}/use-image`,{form:{url:originals[9]!,as:'hero'}})
+  const detail=await call(`/admin/products/${productId}`)
+  assert.equal((detail.text.match(/data-product-media-item/g)||[]).length,beforeCount+10)
+  for(const url of originals)assert.ok(detail.text.includes(url))
+})
+
 test('ads are drafted, edited and exported from the Ads tab', async () => {
   const products = await call('/admin/products')
   const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''

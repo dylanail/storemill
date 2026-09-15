@@ -65,7 +65,7 @@
   });
   const remainingBlobs = [...document.querySelectorAll('img,source')].filter(node => ['src', 'srcset', 'data-src', 'data-srcset'].some(name => /blob:/i.test(node.getAttribute(name) || '')));
   if (remainingBlobs.length) issues.push(`${remainingBlobs.length} image source(s) still use browser-scoped blob URLs.`);
-  for (const canvas of document.querySelectorAll('canvas')) if (rendered(canvas)) issues.push(`Visible canvas needs an image snapshot: canvas${canvas.id ? '#' + canvas.id : ''}.`);
+  for (const canvas of document.querySelectorAll('canvas')) if (rendered(canvas)) issues.push(`Visible canvas needs its original media or interactive implementation; it was not replaced with a screenshot: canvas${canvas.id ? '#' + canvas.id : ''}.`);
   const imageUrls = new Set(images.filter(rendered).map(img => img.currentSrc || img.src).filter(url => /^(?:https?:|data:image)/.test(url)));
   const declaredImageUrls = new Set(images.map(img => absolute(img.getAttribute('src') || '')).filter(Boolean));
   for (const node of document.querySelectorAll('style,[style]')) {

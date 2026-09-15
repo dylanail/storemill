@@ -60,8 +60,8 @@ function navigation(kind: Store['kind'], active: string): string {
     products: [
       { key: 'reviews', href: '/admin/reviews', label: 'Reviews', icon: 'customers', area: 'products' },
       { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections', area: 'organization' },
-      { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle', area: 'promotions' },
     ],
+    promotions: [{ key: 'bundles', href: '/admin/bundles', label: 'Product offers', icon: 'bundle', area: 'promotions' }],
     marketing: [{ key: 'ads', href: '/admin/ads', label: 'Ad campaigns', icon: 'ads', area: 'ads' }],
     analytics: [
       { key: 'cro', href: '/admin/cro', label: 'A/B tests', icon: 'experiment', area: 'analytics' },

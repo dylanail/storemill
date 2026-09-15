@@ -47,8 +47,9 @@ test('bundle and cart totals keep the exact sale, comparison and unrelated add-o
   const ctx={db,store,storeUrl:'/preview/test'} as never
   const backend=bundlesPage(ctx)
   assert.match(backend,/Draft cushion/)
-  for(const amount of ['54.95','109.90','93.42','219.80','175.84','439.60']) assert.ok(backend.includes('value="'+amount+'"'))
-  const discounts=promotionsPage(ctx);assert.ok(discounts.includes('Buy 2: $93.42')&&discounts.includes('View bundle prices'))
+  const data=JSON.parse(backend.match(/<script type="application\/json" id="discount-data">([\s\S]*?)<\/script>/)![1]!)
+  assert.deepEqual(data.offers[0].tiers.map((tier:any)=>[tier.value,tier.compare]),[['54.95','109.90'],['93.42','219.80'],['175.84','439.60']])
+  const discounts=promotionsPage(ctx);assert.ok(discounts.includes('discount-data')&&discounts.includes('Product page offer'))
   assert.equal(listBundles(db,store.id).length,1)
 })
 

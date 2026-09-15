@@ -740,6 +740,7 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE, page_id TEXT NOT NULL,
       status TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '{}', payment_intent_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
+  { name:'027_bundle_pricing_modes', sql: `ALTER TABLE bundles ADD COLUMN pricing_mode TEXT NOT NULL DEFAULT 'bulk';` },
 ]
 
 function migrate(db: Db) {

@@ -180,7 +180,8 @@ export type Promotion = {
     requiredDistinctProducts?: number
     bundlePriceCents?: number
     bundleProductId?: string
-    tiers?: Array<{ quantity: number; percent: number; unitPriceCents?: number }>
+    tiers?: Array<{ quantity: number; percent: number; unitPriceCents?: number; totalPriceCents?: number }>
+    quantityMode?: 'bulk' | 'multiples'
     regionIds?: string[]
     firstOrderOnly?: boolean
     /** Minimum eligible units before the promotion pays out (bundle tiers). */
