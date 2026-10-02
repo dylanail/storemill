@@ -8,7 +8,7 @@ import type { Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { relocateUploads } from '../lib/uploads.ts'
 import { clonePage, localizeImageUrls, type CloneResult, type ImageLocalizationReport } from '../pages/clone.ts'
-import { mergeImageReports, saveCopyReport } from '../pages/clone-report.ts'
+import { mergeImageReports, readCopyReport, saveCopyReport } from '../pages/clone-report.ts'
 import { canonicalPageUrl, relatedSiteOrigin, copyUrlPriority, discoverPageLinks, inferCopiedPage, isCopyablePageUrl, isPaymentUrl, rewriteCopiedLinks, type CopyReport } from '../pages/site-copy.ts'
 import { bindImportedOfferProduct, planImportedOfferProduct } from '../pages/imported-offers.ts'
 import { installImportedBundle, planImportedBundle, repairImportedBundleHtml } from '../pages/imported-bundles.ts'
@@ -337,7 +337,7 @@ export async function importAssetFromUrl(
   db.update('stores', store.id, { reference_url: homeClone.sourceUrl })
   setTheme(db, store.id, clonedNavigation.length ? { nav: clonedNavigation } : {}, { build: `Cloned ${documents.length} pages and ${products.length} products from ${homeClone.sourceUrl}; ${stylesheets} stylesheets and ${imagesLocalized} images localized` })
   report.images=JSON.parse(rehome(JSON.stringify(report.images)))
-  saveCopyReport(db,store.id,page.id,{images:report.images,capture:homeClone.captureReport,notes:[...new Set(documents.flatMap(document=>document.notes))],site:report,pages:pages.map(p=>({id:p.id,title:p.title,role:p.role,source:p.sourceUrl,productId:p.productId}))})
+  for(const copiedPage of pages){const local=readCopyReport(db,store.id,copiedPage.id);saveCopyReport(db,store.id,copiedPage.id,{images:copiedPage.id===page.id?report.images:local?.images,capture:local?.capture||homeClone.captureReport,notes:local?.notes||[],site:report,pages:pages.map(p=>({id:p.id,title:p.title,role:p.role,source:p.sourceUrl,productId:p.productId}))})}
   emit({phase:'done',percent:100,task:report.complete?'Clone complete':'Clone complete — review the listed gaps',copied:pages.length,products:products.length,images:localizedImages.size})
   const freshPages = pages.map((created) => updatePage(db, store.id, created.id, {}))
   return {

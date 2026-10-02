@@ -48,6 +48,7 @@ test('whole-site clone resolves opaque checkout, follows branded subdomains, wir
   const result=await importAssetFromUrl(db,user.id,{url:origin+'/products/start',kind:'funnel',fetchImpl,onProgress:p=>progress.push(p)})
   assert.equal(result.pages.length,9)
   assert.equal(result.report.complete,true)
+  for(const copied of result.pages)assert.deepEqual(readCopyReport(db,result.store.id,copied.id)?.site?.commerce,result.report.commerce)
   assert.equal(result.products.length,6)
   assert.equal(result.report.commerce?.upsells,2)
   const main=result.products.find(p=>p.title==='Bottle')!
