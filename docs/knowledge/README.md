@@ -24,3 +24,33 @@ Two rules the writers hold to that the course does not spell out: nothing is
 invented (no review counts, statistics, studies or awards the merchant did not
 supply), and any synthetic "UGC" is a concept for a real shoot or a real
 customer to fulfil, never published as if it were a customer.
+
+## Runtime source retrieval
+
+`src/agent/course-corpus.ts` routes each requested topic to these canonical
+checked-in distillations, extracts paragraph passages with section names and
+SHA-256 source fingerprints, and ranks query matches (headings weighted higher).
+Budgets are bounded and divided across sources so checkout and reference-page
+material can both inform page decisions. `knowledge()` appends these excerpts
+to existing rules for every generator; the business assistant uses the same
+context, separately from current draft/live store state. The Docker image ships
+these source files. Merchant facts, configured offers and consent override
+course examples. No embeddings or remote retrieval provider is required.
+
+These files are distilled notes, not the original transcripts. The original
+Course → Module → Lesson hierarchy, timestamps, audio and raw transcripts are
+not present in this checkout. Do not treat document filenames or generated
+paragraph identifiers as recovered lesson IDs. Full transcript ingestion and
+semantic/vector retrieval remain blocked until those source files are located.
+
+### Canonical transcript import
+
+When the originals are available, run `node scripts/import-course.mjs course.json output-directory`.
+Input contains `courseId`, `title`, `modules` with `moduleId`, `title`, and
+`lessons` with `lessonId`, `title`, `transcript` and optional `timestamps`.
+Supply original stable IDs. The importer preserves exact raw JSON, emits
+bounded paragraph chunks with hierarchy IDs and transcript hashes, retains
+supplied timestamps, and refuses to overwrite an existing course. This is a
+local preparation path; imported chunks are not automatically trusted or
+connected to runtime retrieval. Review the corpus and its course map before
+connecting it. Current runtime retrieval uses only the checked-in distillations.

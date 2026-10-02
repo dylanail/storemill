@@ -31,7 +31,7 @@ export type Plan = {
 async function modelPlan(prompt: string, context: PlanContext, choice: ModelChoice): Promise<Plan | { error: string }> {
   try {
     const reply = await planWithTools(choice, {
-      system: systemPrompt(context),
+      system: systemPrompt(context, prompt),
       history: context.history ?? [],
       prompt,
       tools: toolDefinitions(),
@@ -48,13 +48,13 @@ async function modelPlan(prompt: string, context: PlanContext, choice: ModelChoi
   }
 }
 
-function systemPrompt(context: PlanContext): string {
+function systemPrompt(context: PlanContext, query = ''): string {
   const store = getStore(context.db, context.storeId)
   const products = listProducts(context.db, context.storeId, { limit: 20 })
   const promotions = listPromotions(context.db, context.storeId)
   return [
     `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on storemill, for its owner. You act by calling tools; you do not describe what the owner should click.`,
-    platformContext(context.db,context.storeId,context.page),
+    platformContext(context.db,context.storeId,context.page,query),
     store?.brand.voice ? `Store voice: ${store.brand.voice}` : '',
     context.page ? `The current area is ${context.page.split('|')[0]}; use its asset/page IDs from the captured context.` : '',
     `Currency is ${store?.currency ?? 'USD'} and every amount you pass is in minor units (cents).`,

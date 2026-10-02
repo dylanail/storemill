@@ -1,3 +1,4 @@
+import { courseContext } from './course-corpus.ts'
 /**
  * The knowledge base, in the form the writers read.
  *
@@ -37,8 +38,12 @@ const TOPICS: Record<Topic, string> = {
 
 /** The topics, joined, for a prompt. Order is kept so the most relevant reads first. */
 export function knowledge(...topics: Topic[]): string {
+  return knowledgeContext(topics)
+}
+
+export function knowledgeContext(topics: Topic[], query = ''): string {
   const picked = topics.length ? topics : (Object.keys(TOPICS) as Topic[])
-  return `What the platform knows about selling through paid social (from the owner's course material; how to think, not facts to print):\n\n${picked.map((topic) => TOPICS[topic]).join('\n\n')}`
+  return `What the platform knows about selling through paid social (from the owner's course material; how to think, not facts to print):\n\n${picked.map((topic) => TOPICS[topic]).join('\n\n')}${courseContext(picked, query)}`
 }
 
 export const TOPIC_NAMES = Object.keys(TOPICS) as Topic[]
