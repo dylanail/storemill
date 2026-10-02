@@ -71,6 +71,7 @@ function navigation(kind: Store['kind'], active: string): string {
   const core=NAV.map(item=>groups[item.key]?navGroup({...item,parent:item,children:groups[item.key]!},active):navLink(item,active)).join('')
   const content=navGroup({key:'content',label:'Content',icon:'pages',children:[
     {key:'media',href:'/admin/media',label:'Media & logos',icon:'image',area:'store'},
+    {key:'cro-review',href:'/admin/cro-review',label:'Course review',icon:'analytics',area:'store'},
     {key:'templates',href:'/admin/templates',label:'Page templates',icon:'pages',area:'store'},
   ]},active)
   const channel=navGroup({key:'channel-'+kind,label:kind==='funnel'?'Funnel':'Online store',icon:kind==='funnel'?'funnel':'store',children:[

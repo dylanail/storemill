@@ -1,3 +1,5 @@
+import { createReview as generateCroReview, applySuggestions, rejectSuggestions, undoReview } from '../control/cro-review.ts'
+import { croReviewPage } from './cro-review-page.ts'
 import { copyScope } from '../control/copy-scope.ts'
 import { format } from '../lib/money.ts'
 import { accountShell, storesHub } from './account.ts'
@@ -521,6 +523,12 @@ export function adminRouter(): Router {
     setCookie(ctx.res,STORE_COOKIE,result.storeId,{maxAge:60*60*24*365})
     return redirect(`/admin/pages/${result.pageId}/${ctx.url.searchParams.has('report')?'copy-report':'edit'}?storeId=${result.storeId}`)
   })
+
+  const croSession=(ctx:Ctx)=>{const current=session(ctx);requireRole(db(),current.user.id,current.store.id,'admin');if(ctx.req.headers.origin&&new URL(ctx.req.headers.origin).host!==ctx.url.host)throw forbidden('Open the course review in Storemill to accept changes');return current}
+  router.get('/admin/cro-review',(ctx)=>{const current=session(ctx);return page(ctx,current,'cro-review','Course review',croReviewPage(db(),current.store,'',ctx.query.get('flash')||''))})
+  router.get('/admin/cro-review/:id',(ctx)=>{const current=session(ctx);if(!db().one('SELECT id FROM cro_reviews WHERE id=? AND store_id=?',ctx.params.id||'',current.store.id))throw notFound('No review in this store');return page(ctx,current,'cro-review','Course review',croReviewPage(db(),current.store,ctx.params.id||'',ctx.query.get('flash')||''))})
+  router.post('/admin/cro-review/generate',async(ctx)=>{const current=croSession(ctx),body=await ctx.body();try{const review=await generateCroReview(db(),current.store.id,current.user.id,{pageId:String(body.pageId||'')||undefined,focus:String(body.focus||'')});return redirect('/admin/cro-review/'+review.id+'?storeId='+current.store.id)}catch(error){return redirect('/admin/cro-review?storeId='+current.store.id+'&flash='+encodeURIComponent('!'+(error instanceof Error?error.message:'Review failed; store unchanged')))}})
+  for(const action of ['accept','reject','undo'] as const)router.post('/admin/cro-review/:id/'+action,async(ctx)=>{const current=croSession(ctx),body=await ctx.body();let message='';try{const reviewId=ctx.params.id||'',token=String(body.token||'');if(action==='accept'){if(body.intent!=='accept_selected')throw new Error('Accept exact selected edits from the review screen');const selected=Object.keys(body).filter(k=>k.startsWith('accept_')&&body[k]==='on').map(k=>k.slice(7));applySuggestions(db(),current.store.id,current.user.id,reviewId,selected,token);message='Applied only your selected edits. Review the before/after and preview; undo is available.'}else if(action==='reject'){rejectSuggestions(db(),current.store.id,reviewId,[String(body.suggestionId||'')],token);message='Suggestion rejected. Merchant content was not changed.'}else{undoReview(db(),current.store.id,current.user.id,reviewId,token);message='Accepted edits restored to their original content.'}}catch(error){message='!'+(error instanceof Error?error.message:'Action failed; no edits applied')}return redirect('/admin/cro-review/'+encodeURIComponent(ctx.params.id||'')+'?storeId='+current.store.id+'&flash='+encodeURIComponent(message))})
 
   router.get('/admin/media', (ctx) => {
     const current = session(ctx)

@@ -1,3 +1,4 @@
+import { croReviewTools } from './cro-review.ts'
 import { commerceTools } from './commerce.ts'
 import { growthTools } from './growth.ts'
 import { pluginTools } from './plugin-tools.ts'
@@ -11,4 +12,4 @@ import { planTools } from './plan.ts'
 import { automationTools } from './automation.ts'
 
 /** Importing this module is what populates the registry. */
-export const ALL_TOOLS = [...productTools, ...researchTools, ...pageTools, ...dropshipTools, ...adTools, ...commerceTools, ...storefrontTools, ...growthTools, ...planTools, ...automationTools, ...pluginTools]
+export const ALL_TOOLS = [...croReviewTools, ...productTools, ...researchTools, ...pageTools, ...dropshipTools, ...adTools, ...commerceTools, ...storefrontTools, ...growthTools, ...planTools, ...automationTools, ...pluginTools]

@@ -742,6 +742,7 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(order_id,page_id));` },
   { name:'027_bundle_pricing_modes', sql: `ALTER TABLE bundles ADD COLUMN pricing_mode TEXT NOT NULL DEFAULT 'bulk';` },
   { name: '028_review_requested', sql: `ALTER TABLE orders ADD COLUMN review_requested_at TEXT;` },
+  { name:'029_cro_reviews',sql:`CREATE TABLE cro_reviews (id TEXT PRIMARY KEY,store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,user_id TEXT NOT NULL,base_revision TEXT NOT NULL,approval_token TEXT NOT NULL,status TEXT NOT NULL,suggestions TEXT NOT NULL DEFAULT '[]',snapshots TEXT NOT NULL DEFAULT '[]',applied_revision TEXT NOT NULL DEFAULT '',limitations TEXT NOT NULL DEFAULT '[]',created_at TEXT NOT NULL,model TEXT NOT NULL,error TEXT NOT NULL DEFAULT '');CREATE INDEX cro_reviews_store ON cro_reviews(store_id,created_at);` },
 ]
 
 function migrate(db: Db) {

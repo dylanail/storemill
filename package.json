@@ -22,7 +22,8 @@
     "test:capture": "node --disable-warning=ExperimentalWarning --test test/clone-capture*.browser.mjs",
     "test:browser": "node --disable-warning=ExperimentalWarning --test --test-concurrency=2 test/*.browser.mjs",
     "test:production": "node --disable-warning=ExperimentalWarning --test test/production.test.ts",
-    "test:all": "npm run typecheck && npm test && npm run test:browser"
+    "test:all": "npm run typecheck && npm test && npm run test:browser",
+    "test:cro": "node --disable-warning=ExperimentalWarning --test test/cro-review.browser.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",
