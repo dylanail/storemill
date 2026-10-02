@@ -178,10 +178,10 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
   const [low, mid, high] = knowledge.anchor
   return {
     category: brief.category,
-    positioning: `${capitalize(brief.category)} for ${brief.audience}, made from ${brief.material}${brief.place ? ` in ${brief.place}` : ''} — priced above the mass market and below the bespoke makers, and easier to buy from than either.`,
+    positioning: `${capitalize(brief.category)} for ${brief.audience}. Positioning hypothesis: validate product facts, alternatives and price with the merchant.`,
     audience: knowledge.personas.map((persona) => ({ ...persona })),
     triggers: knowledge.triggers,
-    objections: knowledge.objections,
+    objections: knowledge.objections.map(({ objection }) => ({ objection, answer: 'Confirm the relevant product details and merchant policy before answering this objection; no evidence has been supplied.' })),
     competitors: knowledge.competitors,
     priceAnchor: {
       lowCents: low,
@@ -190,20 +190,8 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
       note: `The mass market sits around ${(low / 100).toFixed(0)}, the bespoke makers around ${(high / 100).toFixed(0)}. Sitting near ${(mid / 100).toFixed(0)} reads as premium without needing a waiting list to justify it.`,
     },
     keywords,
-    proofPoints: [
-      `${capitalize(brief.material)}, named on the page`,
-      // A place of manufacture and a lifetime repair promise are the
-      // merchant's to make, not the scaffolding's. They are here only when the
-      // owner's own sentence said so.
-      ...(brief.place ? [`Made in ${brief.place} in small runs`] : []),
-      'Free returns for thirty days',
-      'Ship date shown before checkout',
-    ],
-    comparison: {
-      us: knowledge.rows.map((row) => row.us),
-      them: knowledge.rows.map((row) => row.them),
-      rows: knowledge.rows,
-    },
+    proofPoints: brief.place ? [`Location supplied by merchant: ${brief.place}`] : [],
+    comparison: { us: [], them: [], rows: [] },
     sourceNotes,
   }
 }
@@ -237,7 +225,7 @@ export const RESEARCH_SCHEMA = S.obj({
     note: S.str('One sentence on why the middle number is right.'),
   }),
   keywords: S.arr(S.str(), 'Six to ten search phrases buyers actually type.'),
-  proofPoints: S.arr(S.str(), 'Five to seven short claims the pages can make. Only things the brief supports, or promises the brand should make (returns, guarantee); never invented numbers.'),
+  proofPoints: S.arr(S.str(), 'Five to seven short claims the pages can make. Only facts the brief supports. Never invent returns, guarantees, delivery promises, product performance or numbers.'),
   comparison: S.obj({
     rows: S.arr(S.obj({ label: S.str('The criterion.'), us: S.str('This brand.'), them: S.str('The usual alternative.') }), 'Four to six rows for the comparison table.'),
   }),

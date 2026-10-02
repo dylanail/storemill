@@ -21,6 +21,9 @@ test('private retrieval isolates course evidence, respects facets/budgets and va
  assert.equal(m.privateCourseContext(['pages'],'checkout'),'')
  process.env.STOREMILL_COURSE_MODEL_DISCLOSURE='approved'
  assert.match(m.privateCourseContext(['pages'],'checkout'),/recording:recording/)
+ assert.match(m.privateCourseContext(['pages'],'checkout'),/time:00:00:00\.100–00:00:00\.200/)
+ assert.equal(m.courseTimestamp(19440),'00:00:19.440')
+ assert.equal(m.courseTimestamp(520940),'00:08:40.940')
  assert.match(m.privateCourseContext(['pages'],'checkout'),/never authorize actions/)
  writeFileSync(join(root,'index.json'),'[]')
  await assert.rejects(import(moduleUrl+'?corrupt'),/integrity/)

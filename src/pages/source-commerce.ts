@@ -16,6 +16,19 @@ const amount = (value: unknown, currency: string) => {
 }
 const image = (value: unknown, source: string) => { try { const url = new URL(String(value || ''), source); return value && /^https?:$/.test(url.protocol) ? url.href : '' } catch { return '' } }
 
+/** Currency explicitly declared by source metadata, never inferred from the destination. */
+export function readSourceCurrency(html: string): string | undefined {
+  const visit = (node: any): string | undefined => {
+    if (node.tagName === 'meta') {
+      const attrs = Object.fromEntries((node.attrs ?? []).map((a: any) => [a.name.toLowerCase(), a.value])) as Record<string, string>
+      if (/^(?:product|og):price:currency$/i.test(attrs.property ?? attrs.name ?? '') && /^[A-Z]{3}$/.test(attrs.content ?? '')) return attrs.content
+    }
+    for (const child of node.childNodes ?? []) { const found = visit(child); if (found) return found }
+    return undefined
+  }
+  return visit(parse(html))
+}
+
 /** Extract authoritative public prices before scripts disappear, without executing merchant code. */
 export function readSourceCommerce(html: string, source: string, fallbackCurrency: string): SourceCommerce {
   const out: SourceCommerce = { products: [], issues: [], giftRules: {} }

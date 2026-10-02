@@ -1,3 +1,4 @@
+import { minorDigits } from '../lib/money.ts'
 import { json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { createProduct, getProduct, listProducts } from './catalog.ts'
@@ -409,7 +410,7 @@ export type ImportedProduct = { title: string; description: string; images: stri
  * falls back to Open Graph and schema.org markup, which is enough for a
  * title, a price, a description and the pictures. The supplier link is kept.
  */
-export async function importProductFromUrl(url: string, fetchImpl: typeof fetch = fetch): Promise<ImportedProduct> {
+export async function importProductFromUrl(url: string, fetchImpl: typeof fetch = fetch, options: { sourceCurrency?: string } = {}): Promise<ImportedProduct> {
   const source = new URL(url)
   const shopifyMatch = /\/products\/([^/?#]+)/.exec(source.pathname)
   if (shopifyMatch) {
@@ -419,11 +420,15 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
       if (response.ok) {
         const payload = (await response.json()) as { product?: ShopifyProduct }
         if (payload.product) {
-          const imported = fromShopify(payload.product, url)
+          const imported = fromShopify(payload.product, url, options.sourceCurrency)
           // The Ajax product feed exposes ordered videos as well as original images.
           try {
             const mediaResponse = await fetchImpl(`${source.origin}/products/${shopifyMatch[1]}.js`, { headers: { accept: 'application/json', 'user-agent': 'storemillImport/1.0' } })
-            const feed = mediaResponse.ok ? await mediaResponse.json() as { media?: Array<{media_type?:string;src?:string;alt?:string;preview_image?:{src?:string};sources?:Array<{url:string;mime_type?:string;width?:number}>}> } : null
+            const feed = mediaResponse.ok ? await mediaResponse.json() as { variants?: Array<{ id: number; available?: boolean }>; media?: Array<{media_type?:string;src?:string;alt?:string;preview_image?:{src?:string};sources?:Array<{url:string;mime_type?:string;width?:number}>}> } : null
+            for (const variant of imported.variants) {
+              const availability = feed?.variants?.find(v => String(v.id) === variant.sourceId)?.available
+              if (availability === false) variant.inventory = 0
+            }
             if (Array.isArray(feed?.media) && feed.media.length) {
               const media: Media[] = []
               for (const item of feed.media) {
@@ -453,12 +458,14 @@ export async function importProductFromUrl(url: string, fetchImpl: typeof fetch 
 
 type ShopifyProduct = { title: string; body_html?: string; vendor?: string; images?: Array<{ id?: number; src: string; alt?: string; position?: number }>; options?: Array<{ name: string; values: string[] }>; variants?: Array<{ id?: number; option1?: string; option2?: string; option3?: string; title: string; price: string; compare_at_price?: string; sku?: string; image_id?: number | null; featured_image?: { src?: string } | null }> }
 
-function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
+function fromShopify(product: ShopifyProduct, url: string, sourceCurrency?: string): ImportedProduct {
+  const currency = sourceCurrency && /^[A-Z]{3}$/.test(sourceCurrency) ? sourceCurrency : 'USD'
+  const factor = 10 ** minorDigits(currency)
   const sourceImages = [...(product.images ?? [])].sort((a,b) => (a.position ?? 0) - (b.position ?? 0))
   const imagesById = new Map((product.images ?? []).flatMap((image) => image.id === undefined ? [] : [[image.id, image.src] as const]))
   const variants = (product.variants ?? []).map((variant) => {
     const image = variant.featured_image?.src || (variant.image_id === undefined || variant.image_id === null ? '' : imagesById.get(variant.image_id)) || ''
-    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * 100), ...(variant.compare_at_price && Number(variant.compare_at_price)>Number(variant.price)?{compareAtCents:Math.round(Number(variant.compare_at_price)*100)}:{}), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
+    return { title: variant.title, priceCents: Math.round(parseFloat(variant.price) * factor), ...(variant.compare_at_price && Number(variant.compare_at_price)>Number(variant.price)?{compareAtCents:Math.round(Number(variant.compare_at_price)*factor)}:{}), ...(variant.id ? { sourceId: String(variant.id) } : {}), optionValues: Object.fromEntries((product.options ?? []).map((option, index) => [option.name, [variant.option1, variant.option2, variant.option3][index] || ''])), ...(variant.sku ? { sku: variant.sku } : {}), ...(image ? { image } : {}) }
   })
   return {
     title: product.title,
@@ -466,7 +473,7 @@ function fromShopify(product: ShopifyProduct, url: string): ImportedProduct {
     images: sourceImages.map((image) => new URL(image.src, url).href),
     media: sourceImages.map(image => ({ url: new URL(image.src, url).href, alt: image.alt || '', kind: 'image' })),
     priceCents: variants[0]?.priceCents ?? null,
-    currency: 'USD',
+    currency,
     variants,
     options: (product.options ?? []).filter((option) => option.name.toLowerCase() !== 'title').map((option) => ({ title: option.name, values: option.values })),
     source: url,
@@ -482,7 +489,7 @@ function fromHtml(html: string, url: string): ImportedProduct {
   const currency = meta('product:price:currency') || meta('og:price:currency') || /"priceCurrency"\s*:\s*"([A-Z]{3})"/.exec(html)?.[1] || 'USD'
   const media = readProductImages(html, url)
   const images = media.filter(item => item.kind !== 'video').map(item => item.url)
-  const priceCents = priceRaw ? Math.round(parseFloat(priceRaw) * 100) : null
+  const priceCents = priceRaw ? Math.round(parseFloat(priceRaw) * 10 ** minorDigits(currency)) : null
   return { title: title.replace(/\s+[-|–].{0,60}$/, '').trim(), description, images, media, priceCents, currency, variants: priceCents ? [{ title: 'Default', priceCents }] : [], options: [], source: url }
 }
 

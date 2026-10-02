@@ -161,7 +161,7 @@ export function writeAd(input: AdInput): AdCopy {
   const cta = CTA[direction.tone]
   const proof = research.proofPoints.slice(0, 3)
   const objection = avatar?.objection ? { objection: avatar.objection, answer: avatar.answer } : research.objections[0]
-  const guarantee = product.content.guarantee || 'Free returns for thirty days.'
+  const guarantee = product.content.guarantee || 'Check the merchant’s confirmed return terms before purchase.'
   const audience = direction.audience || 'people who care about the details'
   const angle = direction.angle || (avatar?.angle ?? research.positioning.split('—')[0]?.trim() ?? '')
   const notes: string[] = []
@@ -230,7 +230,7 @@ export function writeAd(input: AdInput): AdCopy {
         ...proof,
         guarantee.split('.')[0] ?? '',
         `Ships in ${product.supplier.processingDays ?? 3} days`,
-        `${money(Math.min(...product.variants.map((variant) => variant.priceCents)), store.currency)} · free returns`,
+        `${money(Math.min(...product.variants.map((variant) => variant.priceCents)), store.currency)}`,
         `For ${audience}`,
         cta,
       ].map((line) => clip(line, 30)).filter((line) => line.length >= 5)
@@ -629,7 +629,7 @@ const PATTERNS: Array<{ name: string; hook: (product: string, category: string) 
   { name: 'The callout', hook: (_product, category) => `If you have bought ${category} twice this year, read this.`, angle: 'problem-solution' },
   { name: 'The contrast', hook: (product) => `Cheap ones last a season. ${product} is on year three.`, angle: 'comparison' },
   { name: 'The objection first', hook: (product) => `"${product} is expensive." Here is the maths.`, angle: 'comparison' },
-  { name: 'The guarantee', hook: (product) => `Use ${product} for 30 days. Hate it, send it back, keep the shipping.`, angle: 'risk-reversal' },
+  { name: 'The guarantee', hook: (product) => `Review the confirmed return terms for ${product} before ordering.`, angle: 'risk-reversal' },
   { name: 'The POV', hook: (product) => `POV: ${product.replace(/^the\s+/i, 'the ')} finally arrived.`, angle: 'social-proof' },
   { name: 'The mistake', hook: (_product, category) => `The mistake everyone makes with ${category} (and the fix).`, angle: 'problem-solution' },
   { name: 'The specific', hook: (product) => `${product}: one thing done properly.`, angle: 'premium' },

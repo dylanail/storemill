@@ -1,5 +1,5 @@
 import { copyScope, type CopyScope } from './copy-scope.ts'
-import { readSourceCommerce, bindSourceProducts, type SourceProduct } from '../pages/source-commerce.ts'
+import { readSourceCommerce, readSourceCurrency, bindSourceProducts, type SourceProduct } from '../pages/source-commerce.ts'
 import { createPromotion } from '../domain/promotions.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { sourceThemeFromHtml, fontFacesFromHtml } from '../pages/source-theme.ts'
@@ -160,7 +160,7 @@ export async function importAssetFromUrl(
     let found=data.products
     // Shopify's catalog endpoint has complete variant/compare-at data; schema remains a fallback.
     if(data.platform!=='funnelish'&&!offerPlan&&isProductUrl(source)){
-      try{const product=await importProductFromUrl(source,productFetch);if(!product.variants.length||product.variants.some(v=>!Number.isSafeInteger(v.priceCents)||v.priceCents<=0))throw Error('No explicit product price on this page');found=[{key:'product:'+source,product,purpose:'primary',sourceIds:[]}]}catch(error){stopIfAborted(input.signal);if(!found.length&&!offerPlan)unresolved.push({url:source,reason:error instanceof Error?error.message:'No explicit price'})}
+      try{const product=await importProductFromUrl(source,productFetch,{ sourceCurrency: readSourceCurrency(document.commerceHtml || document.html) });if(!product.variants.length||product.variants.some(v=>!Number.isSafeInteger(v.priceCents)||v.priceCents<=0))throw Error('No explicit product price on this page');found=[{key:'product:'+source,product,purpose:'primary',sourceIds:[]}]}catch(error){stopIfAborted(input.signal);if(!found.length&&!offerPlan)unresolved.push({url:source,reason:error instanceof Error?error.message:'No explicit price'})}
     }
     if(!found.length&&offerPlan){found=[{key:'offer:'+source,product:offerPlan.product,purpose:'primary',sourceIds:[]}];document.notes.push(...offerPlan.notes)}
     for(const entry of found){

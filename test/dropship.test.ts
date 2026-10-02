@@ -83,7 +83,7 @@ test('every advertorial and pdp format writes a complete page in every tone', ()
 
 test('a direction restyles the built-in product page without a new page', () => {
   const content = redirectContent({ benefits: [{ title: 'Lasts', body: 'Long.' }], guarantee: 'Thirty days, no questions.', trust: ['a', 'b', 'c'] }, readDirection('blunt, say "no logo tax", focus on durability'))
-  assert.equal(content.guarantee, 'Thirty days. Send it back, get your money.')
+  assert.equal(content.guarantee, 'Thirty days, no questions.', 'restyling preserves the supplied policy without rewriting its terms')
   assert.equal(content.benefits?.[0]?.title, 'Lasts — durability')
   assert.equal(content.trust?.[0], 'no logo tax')
 })

@@ -360,7 +360,7 @@ export async function answer(
   try {
     const text = await complete(choice, {
       task: 'planner',
-      system: `${systemPrompt(context)}\n\nYou have already run the tools. Answer the owner in plain words, using what came back. State numbers exactly as the tools gave them and never invent one they did not. If something failed, say so in a sentence. Do not name the tools, do not describe what you are about to do, and do not offer a list of things you could do instead — this is the answer.`,
+      system: `${systemPrompt(context, input.prompt)}\n\nYou have already run the tools. Answer the owner in plain words, using what came back. State numbers exactly as the tools gave them and never invent one they did not. If something failed, say so in a sentence. Do not name the tools, do not describe what you are about to do, and do not offer a list of things you could do instead — this is the answer.`,
       prompt: [
         `The owner asked: ${input.prompt}`,
         input.preamble.trim() ? `You said you would: ${input.preamble.trim()}` : '',

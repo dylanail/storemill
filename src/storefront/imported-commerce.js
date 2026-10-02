@@ -370,6 +370,10 @@
     const currentIndex=()=>slides.reduce((best,_slide,index)=>Math.abs(offset(index)-list.scrollLeft)<Math.abs(offset(best)-list.scrollLeft)?index:best,0);
     const select=index=>list.scrollTo({left:offset(gallery.dataset.copyGalleryLoop==='true'?(index%slides.length+slides.length)%slides.length:Math.max(0,Math.min(slides.length-1,index))),behavior:'smooth'});
     const move=step=>select(currentIndex()+step);
+    const updateCounters=()=>{controls('.slider-counter--current').forEach(node=>{const value=String(currentIndex()+1);if(node.textContent!==value)node.textContent=value;});controls('.slider-counter--total').forEach(node=>{const value=String(slides.length);if(node.textContent!==value)node.textContent=value;});};
+    updateCounters();
+    const invalidCounter=new MutationObserver(()=>{if(controls('.slider-counter--current,.slider-counter--total').some(node=>/NaN|Infinity/.test(node.textContent)))updateCounters();});controls('.slider-counter--current,.slider-counter--total').forEach(node=>invalidCounter.observe(node,{childList:true,characterData:true,subtree:true}));
+    if('ResizeObserver' in window)new ResizeObserver(updateCounters).observe(list);
     list.addEventListener('scroll',()=>{const index=currentIndex();slides.forEach((slide,i)=>{slide.classList.toggle('swiper-slide-active',i===index);slide.classList.toggle('is-active',i===index);});controls('.slider-counter--current').forEach(node=>node.textContent=String(index+1));controls('.slider-counter__link--dots').forEach((button,i)=>{button.classList.toggle('slider-counter__link--active',i===index);button.setAttribute('aria-current',String(i===index));});},{passive:true});
     const bindArrow=(node,step)=>{const activate=event=>{event.preventDefault();move(step*(Number(node.dataset.step)||1));};node.addEventListener('click',activate);if(!node.matches('button')){node.setAttribute('role','button');node.tabIndex=0;node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')activate(event);});}};
     controls('button[name=next],.slider-button--next,.swiper-button-next').forEach(node=>bindArrow(node,1));

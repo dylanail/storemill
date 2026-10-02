@@ -76,7 +76,7 @@ test('rules research is specific to the category and complete in every field', (
   assert.ok(boxing.priceAnchor.lowCents < boxing.priceAnchor.midCents && boxing.priceAnchor.midCents < boxing.priceAnchor.highCents)
 
   const unknown = rulesResearch(readBrief('artisanal umbrella repair kits'))
-  assert.ok(unknown.audience.length >= 3 && unknown.objections.length >= 3 && unknown.comparison.rows.length >= 3, 'an unknown category still gets a full record')
+  assert.ok(unknown.audience.length >= 3 && unknown.objections.length >= 3 && unknown.comparison.rows.length === 0, 'unknown comparisons remain unclaimed')
 })
 
 test('a product page is written from the research, never from thin air', () => {
@@ -89,7 +89,7 @@ test('a product page is written from the research, never from thin air', () => {
     assert.ok(content.faq?.some((faq) => faq.q === entry.objection), `the FAQ answers "${entry.objection}"`)
   }
   assert.ok(content.specs?.some((spec) => spec.label === 'Size' && spec.value === '30ml'))
-  assert.match(content.guarantee ?? '', /Thirty days/)
+  assert.match(content.guarantee ?? '', /confirmation/)
 })
 
 test('research is persisted per store and read back by the page writer tool', async () => {
@@ -118,7 +118,7 @@ test('onboarding researches first and every product ships with a full page', asy
   for (const product of listProducts(db, result.store.id, {})) {
     assert.ok((product.content.benefits?.length ?? 0) >= 3, `${product.title} has benefits`)
     assert.ok((product.content.faq?.length ?? 0) >= 4, `${product.title} has a FAQ`)
-    assert.ok(product.content.comparison?.rows.length, `${product.title} has a comparison`)
+    assert.equal(product.content.comparison?.rows.length, 0, `${product.title} does not fabricate a comparison`)
     assert.match(product.heroImage, /ref=%2F_uploads/, `${product.title} imagery is derived from the upload`)
   }
 })

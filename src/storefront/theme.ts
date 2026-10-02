@@ -132,6 +132,7 @@ section{padding-block:var(--section)}
 .benefits{list-style:none;margin:0;padding:0;display:grid;gap:.35rem;font-size:.9rem}
 .benefits li::before{content:'—';color:var(--primary);margin-right:.5rem}
 .guarantee{display:flex;gap:.8rem;align-items:flex-start;border:1px solid var(--line);border-radius:var(--radius);padding:.9rem 1rem;background:var(--raise)}
+.guarantee>div{min-width:0;overflow-wrap:anywhere}
 .guarantee .badge{flex:0 0 auto;width:40px;height:40px;border-radius:999px;display:grid;place-items:center;background:var(--primary);color:#fff;font:600 13px/1 var(--body)}
 .conv{padding-block:calc(var(--section) * .6);border-top:1px solid var(--line)}
 .benefit-grid{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
@@ -178,6 +179,7 @@ main:focus{outline:none}
 .stickybar .btn{padding:.8rem 1.2rem}
 .micro{font-size:.84rem;color:var(--muted)}
 .prose{max-width:var(--measure)}
+.review-layout{display:grid;gap:2rem;grid-template-columns:minmax(0,22rem) minmax(0,1fr);align-items:start}
 .reviews{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
 .review{border:1px solid var(--line);border-radius:var(--radius);padding:1.2rem;background:var(--raise)}
 .review .who{font-size:.8rem;color:var(--muted);margin-top:.7rem}
@@ -264,6 +266,7 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
   .pdp{padding-block:0 2rem;gap:1.4rem}.pills{gap:.4rem}.pill{padding:.55rem .85rem}
   .btn--wide{padding:1.05rem}
   .stickybar .t{font-size:.9rem}.stickybar{padding:.6rem .8rem}
+  .review-layout{grid-template-columns:minmax(0,1fr)}
   .reviews{grid-template-columns:1fr}
   table.compare th,table.compare td{padding:.6rem .5rem;font-size:.86rem}table.compare tbody th{width:6rem}
   .specs div{grid-template-columns:6rem 1fr}

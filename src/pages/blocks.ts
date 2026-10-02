@@ -169,7 +169,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Layout',
     icon: '▬',
     description: 'One line across the top: shipping promise, offer, deadline.',
-    schema: { text: { type: 'string', label: 'Lines (one per line rotate)', multiline: true, required: true, default: 'FREE SHIPPING OVER $200 · 30-DAY RETURNS' }, ...COMMON },
+    schema: { text: { type: 'string', label: 'Lines (one per line rotate)', multiline: true, required: true, default: '' }, ...COMMON },
     render: (settings, _context, block) => {
       const items = list(settings.text)
       if (items.length <= 1) return `<div class="announce" data-block="${e(block.id)}">${e(items[0] ?? settings.text)}</div>`
@@ -339,7 +339,7 @@ export const BLOCKS: BlockDefinition[] = [
     description: 'One to six adjustable columns of icon, heading and text. Features, benefits, pain points. An image URL in the icon cell becomes a picture.',
     schema: {
       headline: { type: 'string', label: 'Headline', default: '' },
-      columns: { type: 'string', label: 'Columns (icon or image URL|title|text per line)', multiline: true, required: true, default: '✦|Made properly|Named materials, one maker, small runs.\n✦|Repaired for life|Post it back; we fix it.\n✦|Free returns|Thirty days, no questions.' },
+      columns: { type: 'string', label: 'Columns (icon or image URL|title|text per line)', multiline: true, required: true, default: '' },
       perRow: { type: 'number', label: 'Columns per row', integer: true, min: 1, max: 6, default: 3 },
       columnWidths: { type: 'string', label: 'Column widths (%)', default: '' },
       tabletPerRow: { type: 'number', label: 'Tablet columns (0 = automatic)', integer: true, min: 0, max: 6, default: 0 },
@@ -377,7 +377,7 @@ export const BLOCKS: BlockDefinition[] = [
       offerLabel: { type: 'string', label: 'Offer label above the tiers', default: '' },
       shipLine: { type: 'string', label: 'Stock and ship line (empty uses the delivery estimate)', default: '' },
       cta: { type: 'string', label: 'Button label (the price is added)', default: '' },
-      chips: { type: 'string', label: 'Trust chips under the button (icon|text per line)', multiline: true, default: '🔒|Secure checkout\n↩|30-day money-back guarantee\n🚚|Free shipping' },
+      chips: { type: 'string', label: 'Trust chips under the button (icon|text per line)', multiline: true, default: '' },
       note: { type: 'string', label: 'Line after the button (the compliance line: renewal terms, results vary)', default: '' },
       guaranteeHeadline: { type: 'string', label: 'Guarantee headline', default: '' },
       guaranteeText: { type: 'string', label: 'Guarantee text', multiline: true, default: '' },
@@ -446,8 +446,8 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Commerce',
     icon: '✓',
     description: 'The risk reversal, with a badge.',
-    schema: { days: { type: 'number', label: 'Days', integer: true, min: 1, max: 365, default: 30 }, headline: { type: 'string', default: 'Thirty-day guarantee' }, text: { type: 'string', multiline: true, default: 'If it is not what you hoped, send it back and we refund the lot. We cover the return label.' }, note: { type: 'string', label: 'Line under it (e.g. how few people use it — only if true)', default: '' }, ...COMMON },
-    render: (settings, _context, block) => wrap(settings, block, `<div class="guarantee"><span class="badge">${Number(settings.days)}</span><div><strong>${e(settings.headline)}</strong><p class="micro" style="margin:.2rem 0 0">${e(settings.text)}</p></div></div>${settings.note ? `<p class="micro" style="margin:.6rem 0 0">${e(settings.note)}</p>` : ''}`),
+    schema: { days: { type: 'number', label: 'Days (0 until confirmed)', integer: true, min: 0, max: 365, default: 0 }, headline: { type: 'string', default: 'Return policy' }, text: { type: 'string', multiline: true, default: 'Return and refund terms require merchant confirmation before purchase.' }, note: { type: 'string', label: 'Line under it (e.g. how few people use it — only if true)', default: '' }, ...COMMON },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="guarantee">${Number(settings.days) > 0 ? `<span class="badge">${Number(settings.days)}</span>` : ''}<div><strong>${e(settings.headline)}</strong><p class="micro" style="margin:.2rem 0 0">${e(settings.text)}</p></div></div>${settings.note ? `<p class="micro" style="margin:.6rem 0 0">${e(settings.note)}</p>` : ''}`),
   },
   {
     type: 'comparison',
@@ -455,7 +455,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Commerce',
     icon: '⊞',
     description: 'Us against the usual, row by row.',
-    schema: { usLabel: { type: 'string', label: 'Our column', default: '' }, themLabel: { type: 'string', label: 'Their column', default: 'The usual' }, rows: { type: 'string', label: 'Rows (label|us|them per line)', multiline: true, required: true, default: 'Materials|Named, chosen one at a time|Unspecified\nMade|Small runs, by name|Factory line\nRepairs|In-house|None\nReturns|30 days, free|Varies' }, ...COMMON },
+    schema: { usLabel: { type: 'string', label: 'Our column', default: '' }, themLabel: { type: 'string', label: 'Their column', default: 'The usual' }, rows: { type: 'string', label: 'Rows (label|us|them per line)', multiline: true, required: true, default: '' }, ...COMMON },
     render: (settings, context, block) => wrap(settings, block, `<div class="tablewrap"><table class="compare"><thead><tr><th></th><th class="us">${e(settings.usLabel || context.storeName)}</th><th>${e(settings.themLabel)}</th></tr></thead><tbody>${list(settings.rows).map((entry) => { const [label = '', us = '', them = ''] = entry.split('|'); return `<tr><th>${e(label)}</th><td class="us">${e(us)}</td><td>${e(them)}</td></tr>` }).join('')}</tbody></table></div>`),
   },
 
@@ -466,7 +466,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '❝',
     description: 'Quotes you type in. For real product reviews use the review wall.',
-    schema: { headline: { type: 'string', default: '' }, quotes: { type: 'string', label: 'Quotes (stars|quote|name per line)', multiline: true, required: true, default: '5|Four months of sparring and the stitching has not moved.|Marisol A.\n5|My old gloves went soft inside a year. These have not.|Dev P.' }, ...COMMON },
+    schema: { headline: { type: 'string', default: '' }, quotes: { type: 'string', label: 'Quotes (stars|quote|name per line)', multiline: true, required: true, default: '' }, ...COMMON },
     render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="reviews">${list(settings.quotes).map((entry) => { const [rating = '5', quote = '', name = ''] = entry.split('|'); return `<article class="review">${stars(Number(rating))}<p style="margin:.5rem 0 0">${e(quote)}</p><div class="who">${e(name)}</div></article>` }).join('')}</div>`),
   },
   {
@@ -492,7 +492,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '◈',
     description: 'A strip of publication or partner names.',
-    schema: { label: { type: 'string', default: 'As seen in' }, names: { type: 'string', label: 'Names (one per line)', multiline: true, required: true, default: 'The Fight Journal\nRingside Weekly\nGym Quarterly' }, ...COMMON, align: { ...(COMMON.align as object), default: 'center' } as never },
+    schema: { label: { type: 'string', default: 'As seen in' }, names: { type: 'string', label: 'Names (one per line)', multiline: true, required: true, default: '' }, ...COMMON, align: { ...(COMMON.align as object), default: 'center' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="eyebrow">${e(settings.label)}</div><div class="logos">${list(settings.names).map((name) => `<span>${e(name)}</span>`).join('')}</div>`),
   },
   {
@@ -501,7 +501,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '⛨',
     description: 'Secure checkout, free returns, made-in — the row under the button.',
-    schema: { items: { type: 'string', label: 'Badges (icon|text per line)', multiline: true, required: true, default: '🔒|Secure checkout\n↩|Free 30-day returns\n🚚|Free shipping over $200\n✎|Repaired for life' }, ...COMMON, align: { ...(COMMON.align as object), default: 'center' } as never },
+    schema: { items: { type: 'string', label: 'Badges (icon|text per line)', multiline: true, required: true, default: '' }, ...COMMON, align: { ...(COMMON.align as object), default: 'center' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="badges">${list(settings.items).map((entry) => { const [icon = '', text = ''] = entry.split('|'); return `<span><i>${e(icon)}</i>${e(text)}</span>` }).join('')}</div>`),
   },
   {
@@ -510,7 +510,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '💬',
     description: 'A social-style comment thread. Label it honestly; the FTC does.',
-    schema: { comments: { type: 'string', label: 'Comments (name|time|text per line)', multiline: true, required: true, default: 'Priya N.|2h|Sizing runs true. 14oz for bags, 16oz for sparring.\nOwen B.|5h|Asked about a repair and got a real answer in two hours.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    schema: { comments: { type: 'string', label: 'Comments (name|time|text per line)', multiline: true, required: true, default: '' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="comments">${list(settings.comments).map((entry) => { const [name = '', time = '', text = ''] = entry.split('|'); return `<div class="comment"><span class="av">${e(name.slice(0, 1))}</span><div><div class="meta"><strong>${e(name)}</strong> · ${e(time)}</div><p>${e(text)}</p></div></div>` }).join('')}</div>`),
   },
 
@@ -530,7 +530,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Conversion',
     icon: '▰',
     description: '"73% claimed", "stock nearly gone": momentum you can see.',
-    schema: { label: { type: 'string', default: '73% of this batch claimed' }, percent: { type: 'number', integer: true, min: 1, max: 100, default: 73 }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    schema: { label: { type: 'string', default: '' }, percent: { type: 'number', integer: true, min: 0, max: 100, default: 0 }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="progress"><div class="meta">${e(settings.label)}</div><div class="track"><div class="fill" style="width:${Number(settings.percent)}%"></div></div></div>`),
   },
   {
@@ -557,7 +557,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Conversion',
     icon: '◘',
     description: 'The boxed offer: what they get, what it costs, the button. Points at the buy box or the checkout.',
-    schema: { headline: { type: 'string', required: true, default: 'Today only: 15% off + free shipping' }, bullets: { type: 'string', label: 'What they get (one per line)', multiline: true, default: 'Free shipping\n30-day returns\nRepaired for life' }, price: { type: 'string', label: 'Price line', default: '' }, cta: { type: 'string', default: 'Get the offer' }, href: { type: 'string', default: '#offer' }, ...COMMON },
+    schema: { headline: { type: 'string', required: true, default: 'Review the offer' }, bullets: { type: 'string', label: 'What they get (one per line)', multiline: true, default: '' }, price: { type: 'string', label: 'Price line', default: '' }, cta: { type: 'string', default: 'Get the offer' }, href: { type: 'string', default: '#offer' }, ...COMMON },
     render: (settings, _context, block) => wrap(settings, block, `<div class="offer"><h2>${e(settings.headline)}</h2><ul>${list(settings.bullets).map((line) => `<li>${e(line)}</li>`).join('')}</ul>${settings.price ? `<div class="price-lg">${e(settings.price)}</div>` : ''}<p>${button(settings.cta, settings.href, 'wide')}</p></div>`),
   },
   {
@@ -566,7 +566,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Conversion',
     icon: '⌄',
     description: 'Questions that open. Shopify calls it collapsible content.',
-    schema: { headline: { type: 'string', default: 'Questions' }, items: { type: 'string', label: 'Items (question|answer per line)', multiline: true, required: true, default: 'When will it ship?|Built to order; fourteen days.\nWhat if it is not right?|Send it back within thirty days.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    schema: { headline: { type: 'string', default: 'Questions' }, items: { type: 'string', label: 'Items (question|answer per line)', multiline: true, required: true, default: 'When will it ship?|Ask the merchant to confirm delivery timing.\nWhat are the return terms?|Ask the merchant to confirm the return and refund policy.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
     render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${list(settings.items).map((entry, index) => { const [q = '', a = ''] = entry.split('|'); return `<details class="faq" ${index === 0 ? 'open' : ''}><summary>${e(q)}</summary><p>${e(a)}</p></details>` }).join('')}`),
   },
 
@@ -786,8 +786,8 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Conversion',
     icon: '▬',
     description: 'How far the cart is from free shipping. Sits at the top like an announcement.',
-    schema: { thresholdCents: { type: 'number', label: 'Threshold (minor units)', integer: true, min: 0, default: 20000 }, text: { type: 'string', default: 'Free shipping on orders over {threshold}' } },
-    render: (settings, context, block) => `<div class="shipbar" data-block="${e(block.id)}" data-threshold="${Number(settings.thresholdCents)}" data-currency="${e(context.currency)}"><span data-text>${e(String(settings.text).replace('{threshold}', format(Number(settings.thresholdCents), context.currency)))}</span><i class="track"><i class="fill" style="width:0"></i></i></div>`,
+    schema: { thresholdCents: { type: 'number', label: 'Confirmed threshold (minor units)', integer: true, min: 0, default: 0 }, text: { type: 'string', default: 'Free shipping on orders over {threshold}' } },
+    render: (settings, context, block) => Number(settings.thresholdCents) <= 0 ? wrap(settings, block, 'Confirm the configured free-shipping offer before displaying a threshold.') : `<div class="shipbar" data-block="${e(block.id)}" data-threshold="${Number(settings.thresholdCents)}" data-currency="${e(context.currency)}"><span data-text>${e(String(settings.text).replace('{threshold}', format(Number(settings.thresholdCents), context.currency)))}</span><i class="track"><i class="fill" style="width:0"></i></i></div>`,
   },
   {
     type: 'payment-icons',
@@ -795,7 +795,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '💳',
     description: 'The row of card and wallet marks that says "this is a real shop".',
-    schema: { methods: { type: 'string', label: 'Methods (one per line)', multiline: true, default: 'VISA\nMastercard\nAMEX\nApple Pay\nGoogle Pay\nLink\nKlarna' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
+    schema: { methods: { type: 'string', label: 'Methods (one per line)', multiline: true, default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="payicons">${list(settings.methods).map((method) => `<i>${e(method)}</i>`).join('')}</div>`),
   },
   {
@@ -872,7 +872,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Commerce',
     icon: '📦',
     description: 'The gift stack next to the tiers: each free item with its value, then "N free gifts included". Also the "inside the box" list.',
-    schema: { headline: { type: 'string', default: 'What\'s included' }, items: { type: 'string', label: 'Items (item|value|image URL per line; a value marks it as a free gift)', multiline: true, required: true, default: 'The product||\n2 replacement filters|$19.98|\nThe 5-year warranty|Free|' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    schema: { headline: { type: 'string', default: 'What\'s included' }, items: { type: 'string', label: 'Items (item|value|image URL per line; a value marks it as a free gift)', multiline: true, required: true, default: '' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
     render: (settings, _context, block) => {
       const items = list(settings.items).map((entry) => { const [item = '', value = '', src = ''] = entry.split('|'); return { item, value, src } })
       const gifts = items.filter((entry) => entry.value).length
@@ -938,7 +938,7 @@ export const BLOCKS: BlockDefinition[] = [
     description: 'Survey results, counts, savings: three or four numbers with a caption each, and the line that says where they came from. Only numbers you can stand behind.',
     schema: {
       headline: { type: 'string', label: 'Headline', default: '' },
-      items: { type: 'string', label: 'Numbers (number|caption per line)', multiline: true, required: true, default: '76%|Said their hands felt fresher after a session\n14 days|Until the leather has moulded to your hand\n3 years|Of sparring before a restitch' },
+      items: { type: 'string', label: 'Numbers (number|caption per line)', multiline: true, required: true, default: '' },
       source: { type: 'string', label: 'Where the numbers come from', default: '' },
       perRow: { type: 'number', label: 'Per row', integer: true, min: 2, max: 4, default: 3 },
       ...COMMON,
@@ -989,11 +989,11 @@ export const BLOCKS: BlockDefinition[] = [
     schema: {
       eyebrow: { type: 'string', label: 'Eyebrow', default: 'Special offer' },
       headline: { type: 'string', label: 'Headline', default: 'Act now and you get' },
-      items: { type: 'string', label: 'What they get (item|value per line)', multiline: true, required: true, default: 'The gloves, built to order|$340\nRepairs for life|Included\nPriority shipping|$24\nThe wrap-and-lace guide|$19' },
+      items: { type: 'string', label: 'What they get (item|value per line)', multiline: true, required: true, default: '' },
       totalLabel: { type: 'string', label: 'Total label', default: 'Total value' },
-      total: { type: 'string', label: 'Total', default: '$383' },
-      priceLabel: { type: 'string', label: 'Price label', default: 'Today only' },
-      price: { type: 'string', label: 'Price', default: '$289' },
+      total: { type: 'string', label: 'Total', default: '' },
+      priceLabel: { type: 'string', label: 'Price label', default: 'Price' },
+      price: { type: 'string', label: 'Price', default: '' },
       cta: { type: 'string', label: 'Button', default: 'Claim this offer' },
       href: { type: 'string', label: 'Button link', default: '#offer' },
       note: { type: 'string', label: 'Line under the button', default: '' },
@@ -1042,11 +1042,11 @@ export const BLOCKS: BlockDefinition[] = [
     description: '"20x cheaper than the proper fix": what each alternative costs, the running total, and what this costs instead.',
     schema: {
       headline: { type: 'string', label: 'Headline', default: 'What the alternatives cost' },
-      rows: { type: 'string', label: 'Alternatives (what|cost per line)', multiline: true, required: true, default: 'Three cheap pairs that went soft|$210\nA restitch at the cobbler|$60\nTaping every session for a year|$90' },
+      rows: { type: 'string', label: 'Alternatives (what|cost per line)', multiline: true, required: true, default: '' },
       totalLabel: { type: 'string', label: 'Total label', default: 'Total' },
-      total: { type: 'string', label: 'Total', default: '$360+' },
-      usLabel: { type: 'string', label: 'This instead', default: 'One pair, repaired for life' },
-      us: { type: 'string', label: 'Our price', default: '$289' },
+      total: { type: 'string', label: 'Total', default: '' },
+      usLabel: { type: 'string', label: 'This instead', default: 'This product' },
+      us: { type: 'string', label: 'Our price', default: '' },
       ...COMMON,
       width: { ...(COMMON.width as object), default: 'narrow' } as never,
     },

@@ -98,12 +98,12 @@ export function readDirection(raw: string): Direction {
 /* --------------------------------------------------------------- writers */
 
 const TONE_VERBS: Record<Tone, { cta: string; opener: string; closer: string }> = {
-  plain: { cta: 'Get yours', opener: 'Here is what it is and what it is not.', closer: 'Built to order. Free returns for thirty days.' },
+  plain: { cta: 'Get yours', opener: 'Here is what it is and what it is not.', closer: 'Review the product details before ordering.' },
   urgent: { cta: 'Claim yours before this batch goes', opener: 'This run is small and it does not get restocked on a schedule.', closer: 'When the counter hits zero the price goes back up. That is not a trick; it is how small batches work.' },
-  premium: { cta: 'Order', opener: 'There is not much to say. The materials say it.', closer: 'Made to order. Delivered in fourteen days. Repaired for life.' },
+  premium: { cta: 'Order', opener: 'There is not much to say. The materials say it.', closer: 'Review the confirmed specifications and merchant policies.' },
   warm: { cta: 'Choose yours', opener: 'Whoever you are buying this for, you already know what they will say when they open it.', closer: 'It arrives boxed, with a card from the workshop if you want one.' },
   clinical: { cta: 'Order', opener: 'The specification is on this page. Every claim on it can be checked.', closer: 'Tolerances, materials and lead times are stated because they are measured.' },
-  playful: { cta: 'Yes, obviously', opener: 'You have read enough product pages. This one is short.', closer: 'Thirty days to change your mind. You will not.' },
+  playful: { cta: 'Yes, obviously', opener: 'You have read enough product pages. This one is short.', closer: 'Choose the option that fits your needs.' },
   blunt: { cta: 'Buy it', opener: 'No story. Here is the product and here is the price.', closer: 'If it fails, we fix it. If you hate it, send it back.' },
 }
 
@@ -217,7 +217,7 @@ export function writePdp(input: WriterInput): BlockInstance[] {
     comparison: [newBlock('header', {}), newBlock('headline', { level: 'h1', text: headline, sub: 'Row by row.', width: 'narrow' }), comparison, benefits, buy, reviews, faq, guarantee],
     premium: [newBlock('header', {}), hero, newBlock('rich-text', { text: tone.opener, align: 'center', width: 'narrow' }), buy, newBlock('image', { src: product.media[1]?.url ?? product.heroImage, width: 'wide' }), guarantee],
     offer: [newBlock('header', {}), newBlock('headline', { level: 'h1', text: headline, sub: 'The more you take, the less each one costs.', align: 'center' }), buy, benefits, reviews, faq, guarantee, trust],
-    urgency: [newBlock('announcement-bar', { text: 'THIS PRICE ENDS TONIGHT · FREE SHIPPING ON 2+' }), newBlock('header', {}), hero, ...urgency, buy, reviews, benefits, faq, guarantee, newBlock('sticky-cta', { label: tone.cta, href: '#offer' })],
+    urgency: [newBlock('announcement-bar', { text: 'REVIEW YOUR OPTIONS' }), newBlock('header', {}), hero, ...urgency, buy, reviews, benefits, faq, guarantee, newBlock('sticky-cta', { label: tone.cta, href: '#offer' })],
   }
   // The two formats the reference pages taught (docs/knowledge/reference-pages.md).
   const bullets = (content.benefits ?? []).slice(0, 5).map((benefit) => `${benefit.title}|${benefit.body.split('. ')[0]}`).join('\n')
@@ -256,7 +256,7 @@ export function redirectContent(content: ProductContent, direction: Direction): 
   return {
     ...content,
     benefits: content.benefits?.map((benefit, index) => (index === 0 && direction.angle ? { ...benefit, title: `${benefit.title} — ${direction.angle}` } : benefit)),
-    guarantee: direction.tone === 'blunt' ? 'Thirty days. Send it back, get your money.' : content.guarantee,
+    guarantee: content.guarantee,
     shipping: direction.urgency ? `${content.shipping ?? ''} Order in the next few hours to make this week's batch.`.trim() : content.shipping,
     trust: direction.mustSay.length ? [...direction.mustSay.slice(0, 2), ...(content.trust ?? [])].slice(0, 3) : content.trust,
     audience: direction.audience ? `Made for ${direction.audience}` : content.audience,

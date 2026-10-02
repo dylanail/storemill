@@ -1,0 +1,13 @@
+# Generation reliability and usage
+
+Text task settings accept documented `STOREMILL_*` environment variables before legacy `AMBORAS_*` aliases. Per-store task choices still take precedence. This release does not change default model IDs.
+
+Each SDK HTTP attempt writes a sanitized JSONL usage record beside the configured database (override with `STOREMILL_MODEL_USAGE_FILE`). Records contain requested/returned model, task, request/response IDs, HTTP and provider status, service tier, usage buckets, elapsed time and a cost estimate when a verified rate is known. They contain no prompts, outputs, API keys or course text. SDK retry limit remains two; retries appear as separate attempts. Transport failures have unknown usage and cost, never zero. An unwritable ledger emits an error. Image-provider usage is not yet recorded in this text ledger.
+
+GPT-5 standard-rate estimates use the official model price dated 2026-10-02: $1.25 per million uncached input, $0.125 cached input, $10 output including reasoning. They are estimates, not invoices. Other models, tiers, tool charges and unsupported cache-write rates remain unknown. OpenAI input includes cache reads/writes; subtract those buckets before charging ordinary input. Anthropic ordinary input excludes both cache buckets; charge writes and reads separately when verified rates exist. Reasoning is already included in output and must not be charged again.
+
+Incomplete provider responses are recorded before throwing an explicit error. Product-page fallback summaries show the failure reason. Product creation reports SVG illustrations as scaffolding rather than photographs. Main brand, product-copy and product-page retrieval uses the actual brief/product query, while many secondary generators still use topic-only retrieval. Retrieval has per-source character limits; there is no global token optimizer or embedding search.
+
+The product-page writer uses medium reasoning with a 16,000 output ceiling. Three bounded GPT-5 reruns returned complete pages (rather than the previous high-effort/8,000-token incomplete responses). This is evidence for those three briefs, not proof that this is optimal across models or tasks. No automatic model critic/revision loop has been enabled. Schema enforcement and deterministic product normalization are not factual verification.
+
+New fallback content and proof blocks omit unverified policies, testimonials and comparison claims. Return windows and guarantees require explicit merchant policy configuration. Existing saved merchant block settings are preserved. Generated copy and new product concepts still require merchant review; this release does not promise a comprehensive claim checker or production-quality product imagery.

@@ -2,7 +2,7 @@ import { logger } from '../lib/log.ts'
 import { format as money } from '../lib/money.ts'
 import type { Research } from './research.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
-import { knowledge } from './knowledge.ts'
+import { knowledge, knowledgeContext } from './knowledge.ts'
 import { announcement, brandDescription, brandName, brandVoice, collectionPlan, draftProducts, MOODS, slogan, type Brief, type DraftProduct } from './copy.ts'
 
 const log = logger('brand')
@@ -49,7 +49,7 @@ const KIT_SCHEMA = S.obj({
   slogan: S.str('Under eight words.'),
   description: S.str('Two or three sentences about the brand, for the About page and the footer.'),
   voice: S.str('A one-sentence brief for whoever writes for this brand: register, what to name, what to avoid.'),
-  announcement: S.str('The announcement bar: two or three short facts separated by " · ", uppercase, e.g. "FREE SHIPPING OVER $50 · 30-DAY RETURNS".'),
+  announcement: S.str('The announcement bar: two or three short facts separated by " · ", uppercase, only verified merchant facts; empty if none. Never infer free shipping or a returns policy.'),
   products: S.arr(
     S.obj({
       title: S.str('"The Sparring Glove" — a product name, not a category.'),
@@ -67,7 +67,7 @@ const KIT_SCHEMA = S.obj({
 
 type ModelKit = Omit<BrandKit, 'products' | 'source' | 'model'> & { products: Array<Omit<DraftProduct, 'options' | 'variantPlan'> & { options: Array<{ title: string; values: string[] }> }> }
 
-const KIT_SYSTEM = `You build direct-to-consumer brands for a dropshipper who sells through paid social and advertorials. Write a brand kit that a good operator would ship: a name people can say, a voice that is specific rather than generic, and three products with copy that names concrete details and admits who the product is not for. Never invent awards, review counts or statistics. Do not claim a place of manufacture or a material the brief does not give. Products are described by what they do for the buyer before what they are.\n\n${knowledge('product', 'desires', 'honesty')}`
+const KIT_SYSTEM = `You build direct-to-consumer brands for a dropshipper who sells through paid social and advertorials. Write a brand kit that a good operator would ship: a name people can say, a voice that is specific rather than generic, and three products with copy that names concrete details and admits who the product is not for. Never invent awards, review counts, statistics, return policies, guarantees, delivery promises, shipping offers or unverified performance. Do not claim a place of manufacture or a material the brief does not give. Products are described by what they do for the buyer before what they are.\n\n${knowledge('product', 'desires', 'honesty')}`
 
 export async function authorBrandKit(choice: ModelChoice | null, brief: Brief, research: Research, opts: { currency?: string } = {}): Promise<BrandKit> {
   const rules = rulesBrandKit(brief)
@@ -82,7 +82,7 @@ export async function authorBrandKit(choice: ModelChoice | null, brief: Brief, r
     `Customer research on file:\n${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, competitors: research.competitors, proofPoints: research.proofPoints, keywords: research.keywords })}`,
     'Write the kit. The product descriptions should read like a good DTC product page, not a catalog entry: benefits are answers to the triggers, and the last sentence says who should buy something else.',
   ].join('\n\n')
-  const parsed = await completeJson<ModelKit>(choice, { task: 'brand', system: KIT_SYSTEM, prompt, schema: KIT_SCHEMA, name: 'brand_kit' })
+  const parsed = await completeJson<ModelKit>(choice, { task: 'brand', system: KIT_SYSTEM.replace(knowledge('product', 'desires', 'honesty'), knowledgeContext(['product', 'desires', 'honesty'], brief.prompt)), prompt, schema: KIT_SCHEMA, name: 'brand_kit' })
   const products: DraftProduct[] = (parsed.products ?? []).slice(0, 3).map((product, index) => ({
     title: product.title?.trim() || rules.products[index]?.title || `Product ${index + 1}`,
     subtitle: product.subtitle ?? '',
@@ -135,7 +135,7 @@ export async function authorProductCopy(
     .join('\n\n')
   const parsed = await completeJson<{ subtitle: string; description: string }>(choice, {
     task: 'brand',
-    system: `You write product pages for direct-to-consumer brands. Specific, honest, in the store voice. Never invent statistics, reviews or certifications.\n\n${knowledge('product', 'honesty')}`,
+    system: `You write product pages for direct-to-consumer brands. Specific, honest, in the store voice. Never invent statistics, reviews or certifications.\n\n${knowledgeContext(['product', 'honesty'], `${input.store.prompt} ${input.product.title} ${input.angle || ''}`)}`,
     prompt,
     schema: COPY_SCHEMA,
     name: 'product_copy',

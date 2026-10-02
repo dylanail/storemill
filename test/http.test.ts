@@ -813,9 +813,9 @@ test('the storefront product page carries the conversion sections and the sticky
   const pdp = await call(`/s/${slug2}/products/${handle}`)
   assert.equal(pdp.status, 200)
   assert.match(pdp.text, /Why this one/)
-  assert.match(pdp.text, /table class="compare"/)
+  assert.doesNotMatch(pdp.text, /table class="compare"/, 'unverified competitor comparisons are omitted')
   assert.match(pdp.text, /details class="faq"/)
-  assert.match(pdp.text, /30-day guarantee/, 'the guarantee is the number in the legal card, not a hardcoded thirty')
+  assert.doesNotMatch(pdp.text, /30-day guarantee/, 'unconfigured policies cannot create a guarantee')
   assert.match(pdp.text, /id="stickybar"/)
   const hero = /id="pdp-main" src="([^"]+)"/.exec(pdp.text)?.[1]?.replace(/&amp;/g, '&') ?? ''
   assert.match(hero, /ref=%2F_uploads/)

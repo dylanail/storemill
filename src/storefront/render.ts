@@ -422,10 +422,10 @@ export function productPage(
     <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? `In stock. Returns within ${promises.returnsDays} days.` : 'Made to order.')}</p>
     ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
     ${(() => {
-      const lines = content.trust?.length ? content.trust : [product.tags[0] ?? '', promises.freeOver, `${promises.returnsDays}-day returns`].filter(Boolean)
+      const lines = content.trust?.length ? content.trust : [product.tags[0] ?? '', promises.freeOver, promises.returnsDays > 0 ? `${promises.returnsDays}-day returns` : ''].filter(Boolean)
       return lines.length ? `<div class="trust">${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>` : ''
     })()}
-    ${content.guarantee ? `<div class="guarantee"><span class="badge">${promises.guaranteeDays}</span><div><strong>${promises.guaranteeDays}-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
+    ${content.guarantee ? `<div class="guarantee">${promises.guaranteeDays > 0 ? `<span class="badge">${promises.guaranteeDays}</span>` : ''}<div><strong>${promises.guaranteeDays > 0 ? `${promises.guaranteeDays}-day guarantee` : 'Return policy'}</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
     ${promises.payments.length ? `<div class="payicons small">${promises.payments.map((method) => `<i>${escapeHtml(method)}</i>`).join('')}</div>` : ''}
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
     ${renderSlot(
@@ -679,7 +679,7 @@ function reviewsSection(view: StoreView, product: Product, stats: ReviewStats, r
   const total = Math.max(1, stats.count)
   return `<section class="wrap"><div class="section-head"><div><div class="eyebrow">Reviews</div>
     <h2>${stats.count ? `${stats.average} out of 5` : 'Be the first to review this'}</h2></div></div>
-  <div style="display:grid;gap:2rem;grid-template-columns:minmax(240px,22rem) 1fr;align-items:start">
+  <div class="review-layout">
     <div>
       <div class="bars">${[5, 4, 3, 2, 1]
         .map((rating) => {
@@ -856,9 +856,9 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
 ${readFileSync(new URL('./checkout.js', import.meta.url),'utf8')}</script>
 ${view.store.kind === 'funnel' ? `<script>window.__FUNNEL_CHECKOUT=${JSON.stringify({ base: view.base, preview: view.preview, hasSelection: items.length > 0, currency: totals.currency, minor: minorDigits(totals.currency) }).replace(/</g, '\\u003c')};\n${readFileSync(new URL('./funnel-checkout.js', import.meta.url), 'utf8')}</script>` : ''}
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
-  const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
+  const note = `🔒 Secure checkout ${legal.guaranteeDays > 0 ? `· ${legal.guaranteeDays}-day money-back guarantee` : ''} ${legal.returnsDays > 0 ? `· ${legal.returnsDays}-day returns` : ''}${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
   const proofHtml = `<div class="co-proof">
-      <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
+      <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays > 0 ? `${legal.guaranteeDays}-day money-back guarantee` : 'Return and refund terms'}</b><p class="micro">${legal.guaranteeDays > 0 ? `If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price.` : 'Confirm the merchant’s return and refund policy before ordering.'}${legal.returnsDays > 0 ? ` Returns within ${legal.returnsDays} days of delivery.` : ''}</p></div></div>
       ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
     </div>`
   return { summary, form, express, bump, script, note, proof: proofHtml, shippingHtml }

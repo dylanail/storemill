@@ -148,7 +148,7 @@ export function brandVoice(brief: Brief): string {
 }
 
 export function announcement(brief: Brief): string {
-  return brief.place ? `MADE IN ${brief.place.toUpperCase()} · FREE SHIPPING OVER $200` : 'FREE SHIPPING OVER $200'
+  return ''
 }
 
 /* --------------------------------------------------------------- the products */

@@ -3,7 +3,7 @@ import { logger } from '../lib/log.ts'
 import { readBrief, type Brief } from './copy.ts'
 import type { Research } from './research.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
-import { knowledge } from './knowledge.ts'
+import { knowledge, knowledgeContext } from './knowledge.ts'
 
 const log = logger('pages')
 
@@ -36,51 +36,34 @@ export function writeProductContent(
   // and on the same page as a different city in the shipping line. What is
   // left is what the platform actually knows: the options the merchant set.
   const specs: ProductContent['specs'] = [
-    { label: 'Material', value: capitalize(material) },
+    ...(brief.prompt.toLowerCase().includes(material.toLowerCase()) ? [{ label: 'Material', value: capitalize(material) }] : []),
     ...(brief.place ? [{ label: 'Made in', value: brief.place }] : []),
     ...(product.options ?? []).map((option) => ({ label: option.title, value: option.values.map((value) => value.value).join(' · ') })),
   ]
 
   const faq = [
-    ...research.objections.slice(0, isHero ? 4 : 3).map((entry) => ({ q: entry.objection, a: entry.answer })),
-    { q: 'When will it ship?', a: 'You see the delivery estimate before you pay, and the tracking number the moment it moves.' },
-    { q: 'What if it is not right?', a: 'Send it back within thirty days for a full refund or an exchange.' },
+    ...research.objections.slice(0, 4).map(({ objection }) => ({ q: objection, a: 'Ask the merchant to confirm the relevant product details and policy before ordering.' })),
+    { q: 'When will it ship?', a: 'Delivery times and available shipping options need merchant confirmation.' },
+    { q: 'What if it is not right?', a: 'Check the merchant-confirmed return and refund policy before ordering.' },
   ]
 
   return {
     benefits,
-    comparison: { rows: research.comparison.rows.slice(0, 5), themLabel: research.competitors[0]?.name ?? 'The usual' },
+    comparison: { rows: [], themLabel: 'Alternatives' },
     specs,
     faq,
-    guarantee: `Thirty days, no questions. If the ${product.title.replace(/^The /, '').toLowerCase()} is not what you hoped, send it back and we refund the lot.`,
-    shipping: `${brief.place ? `Made in ${brief.place}. ` : ''}The ship date is shown before you pay, and tracked the whole way.`,
+    guarantee: 'Returns and refund terms need merchant confirmation before purchase.',
+    shipping: 'Delivery times and shipping options need merchant confirmation.',
     audience: research.audience[0] ? `Made for ${research.audience[0].name.toLowerCase().replace(/^the /, '')}: ${research.audience[0].wants.toLowerCase()}` : '',
-    trust: research.proofPoints.slice(0, 3),
+    trust: [],
   }
 }
 
-function benefitTitle(trigger: string, material: string, index: number): string {
-  const titles = [
-    `Built for the moment ${trigger.toLowerCase().replace(/^(the|a|an) /, '')}`,
-    `${capitalize(material)} that gets better, not worse`,
-    'One person built it, and their name is on it',
-    'Repaired, never replaced',
-  ]
-  return titles[index] ?? capitalize(trigger)
+function benefitTitle(_trigger: string, _material: string, index: number): string {
+  return ['For your daily routine', 'Compare the details', 'Choose your fit', 'Before you order'][index] ?? 'Product details'
 }
-
-function benefitBody(trigger: string, material: string, brief: Brief, title: string): string {
-  const lower = trigger.toLowerCase()
-  if (/fail|broke|soft|wore|stale|reaction/.test(lower)) {
-    return `That is the failure we designed against. The ${title.replace(/^The /, '').toLowerCase()} is built where the load actually goes, from ${material}, so the part that gives out on the cheap version is the part that lasts here.`
-  }
-  if (/first|starting|new/.test(lower)) {
-    return `If this is your first, the sizing guide and the free exchange take the risk out of it. Most people get it right the first time; the rest swap it for free.`
-  }
-  if (/gift|occasion|holiday|birthday/.test(lower)) {
-    return `It arrives looking like something, in a box that does not need wrapping, with a card from the workshop in ${brief.place} if you want one.`
-  }
-  return `${capitalize(material)} takes on the shape of the person using it. Expect it to look better in a year than it does in the photographs.`
+function benefitBody(_trigger: string, _material: string, _brief: Brief, title: string): string {
+  return `Review the confirmed details and available options for ${title.replace(/^The /, '')} to decide whether it fits your needs. Ask the merchant to confirm any missing specification before ordering.`
 }
 
 /** Fills the page for a product that was created without research. */
@@ -121,7 +104,7 @@ export async function authorProductContent(
   brief: Brief,
   product: ProductInput,
   store: { name: string; voice?: string; currency?: string } = { name: 'the store' },
-): Promise<{ content: ProductContent; source: 'model' | 'rules' }> {
+): Promise<{ content: ProductContent; source: 'model' | 'rules'; warning?: string }> {
   const rules = writeProductContent(research, brief, product)
   if (!choice) return { content: rules, source: 'rules' }
   try {
@@ -130,7 +113,7 @@ export async function authorProductContent(
       `Product: ${product.title}${product.subtitle ? ` — ${product.subtitle}` : ''}. Price ${((product.priceCents || 0) / 100).toFixed(2)} ${store.currency ?? 'USD'}. Role: ${product.role ?? 'hero'}.`,
       product.description ? `Description: ${product.description.slice(0, 1500)}` : '',
       product.options?.length ? `Options: ${product.options.map((option) => `${option.title}: ${option.values.map((value) => value.value).join(', ')}`).join('; ')}` : 'No options.',
-      product.supplier?.shippingDaysMax ? `Shipping: ${product.supplier.processingDays ?? 1}-day handling, ${product.supplier.shippingDaysMin ?? '?'}–${product.supplier.shippingDaysMax} days in transit.` : 'Shipping times are not known; keep the shipping line general (tracked, a delivery estimate shown at checkout).',
+      product.supplier?.shippingDaysMax ? `Shipping: ${product.supplier.processingDays ?? 1}-day handling, ${product.supplier.shippingDaysMin ?? '?'}–${product.supplier.shippingDaysMax} days in transit.` : 'Shipping times, tracking and delivery commitments are not confirmed; state that the merchant must confirm them.',
       `Research:\n${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, competitors: research.competitors, proofPoints: research.proofPoints, comparison: research.comparison.rows })}`,
       'Write the page sections. Benefits answer the triggers in order; the FAQ answers the objections in the buyer\'s words; the comparison is against the first competitor. Claim nothing the research and the product do not support.',
     ]
@@ -138,11 +121,12 @@ export async function authorProductContent(
       .join('\n\n')
     const parsed = await completeJson<Required<ProductContent>>(choice, {
       task: 'pages',
-      system: `You write high-converting product pages for a direct-to-consumer dropshipping store. Every section is grounded in the customer research and the product facts you are given. Never invent statistics, reviews, certifications, materials or a place of manufacture. Benefits say what the product does for the buyer, at a sixth-grade reading level; the comparison shows the mechanism.\n\n${knowledge('pages', 'product', 'offers', 'honesty')}`,
+      system: `You write high-converting product pages for a direct-to-consumer dropshipping store. Every section is grounded in the customer research and the product facts you are given. Never invent statistics, reviews, certifications, materials, a place of manufacture, return policies, warranties, delivery promises, tracking availability or unverified performance. Unknown facts require merchant confirmation. Benefits say what the product does for the buyer, at a sixth-grade reading level; the comparison shows the mechanism.\n\n${knowledgeContext(['pages', 'product', 'offers', 'honesty'], `${brief.prompt} ${product.title}`)}`,
       prompt,
       schema: CONTENT_SCHEMA,
       name: 'product_page',
-      maxTokens: 8000,
+      maxTokens: 16000,
+      effort: 'medium',
     })
     const content: ProductContent = {
       benefits: parsed.benefits?.length ? parsed.benefits : rules.benefits,
@@ -157,12 +141,12 @@ export async function authorProductContent(
     return { content, source: 'model' }
   } catch (error) {
     log.warn(`${describe(choice)} could not write the page for ${product.title}; using the rules page: ${error instanceof Error ? error.message : String(error)}`)
-    return { content: rules, source: 'rules' }
+    return { content: rules, source: 'rules', warning: error instanceof Error ? error.message : 'Model generation failed; showing rules scaffolding.' }
   }
 }
 
 /** `contentFor`, authored: the async form the tools use. */
-export async function authorContentFor(choice: ModelChoice | null, research: Research, store: { name: string; prompt: string; voice?: string; currency?: string }, product: Product): Promise<{ content: ProductContent; source: 'model' | 'rules' }> {
+export async function authorContentFor(choice: ModelChoice | null, research: Research, store: { name: string; prompt: string; voice?: string; currency?: string }, product: Product): Promise<{ content: ProductContent; source: 'model' | 'rules'; warning?: string }> {
   return authorProductContent(
     choice,
     research,

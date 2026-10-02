@@ -37,8 +37,8 @@ export function legalFor(db: Db, store: Store): Legal {
     address: stored.address || '',
     email: stored.email || '',
     country: stored.country || (db.one<{ countries: string }>('SELECT countries FROM regions WHERE store_id = ? AND is_default = 1', store.id)?.countries ? (json<string[]>(db.one<{ countries: string }>('SELECT countries FROM regions WHERE store_id = ? AND is_default = 1', store.id)?.countries, [])[0] ?? '') : ''),
-    returnsDays: stored.returnsDays ?? 30,
-    guaranteeDays: stored.guaranteeDays ?? 30,
+    returnsDays: stored.returnsDays ?? 0,
+    guaranteeDays: stored.guaranteeDays ?? 0,
     privacyExtra: stored.privacyExtra ?? '',
     termsExtra: stored.termsExtra ?? '',
     updatedAt: stored.updatedAt ?? store.createdAt,
@@ -145,7 +145,7 @@ ${f.freeShippingAbove ? `<p>Orders over ${e(f.freeShippingAbove)} ship free.</p>
 <h3>How long it takes</h3>
 ${lead}
 <h3>Returns</h3>
-<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange, as long as it is in the condition you received it. Where a product page states a ${legal.guaranteeDays}-day money-back guarantee, that guarantee applies as written there.</p>
+${legal.returnsDays > 0 ? `<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange, as long as it is in the condition you received it. Where a product page states a confirmed money-back guarantee, that guarantee applies as written there.</p>` : '<p>Return and refund terms have not been confirmed by the merchant. Contact the merchant before ordering.</p>'}
 ${legal.email ? `<p>Start a return by emailing <a href="mailto:${e(legal.email)}">${e(legal.email)}</a>.</p>` : '<p>Start a return through the contact page.</p>'}
 <p class="micro">This page is generated from the store's own shipping rates, delivery windows and returns window, and updates when they change.</p>`
 }
@@ -200,7 +200,7 @@ export function termsHtml(db: Db, store: Store): string {
 <h3>Shipping</h3>
 <p>Delivery estimates are shown on the product page and at checkout from the supplier's processing and transit times.${f.freeShippingAbove ? ` Shipping is free on orders over ${e(f.freeShippingAbove)}.` : ''} Risk passes to you on delivery.</p>
 <h3>Returns and the guarantee</h3>
-<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange as long as it is in the condition you received it. Where a product page states a ${legal.guaranteeDays}-day money-back guarantee, that guarantee applies as written there: if it does not do what the page says, tell us within ${legal.guaranteeDays} days and we refund the price.</p>
+${legal.returnsDays > 0 ? `<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange as long as it is in the condition you received it. Where a product page states a confirmed money-back guarantee, that guarantee applies as written there: if it does not do what the page says, tell us within ${legal.guaranteeDays} days and we refund the price.</p>` : '<p>Return and refund terms have not been confirmed by the merchant. Contact the merchant before ordering.</p>'}
 ${f.hasSubscriptions ? '<h3>Subscriptions</h3><p>A subscription renews on the schedule you chose at the price shown when you subscribed, until you cancel from your order page or by email. Cancel before a renewal date and that delivery is not charged.</p>' : ''}
 <h3>Bundles, upsells and codes</h3>
 <p>Bundle prices, free gifts and post-purchase offers apply only as shown at the time of the order. A discount code applies to the items it says it applies to and cannot be combined with another code unless stated.</p>

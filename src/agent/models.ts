@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { meteredFetch } from './model-usage.ts'
 import OpenAI from 'openai'
 import { json, type Db } from '../lib/db.ts'
 import { logger } from '../lib/log.ts'
@@ -44,12 +45,12 @@ export type CatalogEntry = { provider: Provider; model: string; name: string; no
 
 /** The Anthropic model the platform reaches for unless told otherwise. */
 export function anthropicDefault(): string {
-  return process.env.AMBORAS_MODEL ?? 'claude-opus-5'
+  return process.env.STOREMILL_MODEL ?? process.env.AMBORAS_MODEL ?? 'claude-opus-5'
 }
 
 /** The OpenAI model; the id lives in configuration because it changes under us. */
 export function openaiDefault(): string {
-  return process.env.AMBORAS_OPENAI_MODEL ?? 'gpt-5'
+  return process.env.STOREMILL_OPENAI_MODEL ?? process.env.AMBORAS_OPENAI_MODEL ?? 'gpt-5'
 }
 
 export function keyFor(provider: Provider): string | undefined {
@@ -94,13 +95,13 @@ export function describe(choice: ModelChoice | null): string {
 
 /** The provider used when a task has no explicit choice: the configured one, else the first with a key. */
 export function defaultProvider(): Provider | null {
-  const wanted = process.env.AMBORAS_TEXT_PROVIDER as Provider | undefined
+  const wanted = (process.env.STOREMILL_TEXT_PROVIDER ?? process.env.AMBORAS_TEXT_PROVIDER) as Provider | undefined
   if (wanted && (wanted === 'anthropic' || wanted === 'openai') && available(wanted)) return wanted
   return (['anthropic', 'openai'] as Provider[]).find(available) ?? null
 }
 
 export function defaultChoice(task: Task): ModelChoice | null {
-  const fromEnv = parseChoice(process.env[`AMBORAS_MODEL_${task.toUpperCase()}`])
+  const fromEnv = parseChoice(process.env[`STOREMILL_MODEL_${task.toUpperCase()}`] ?? process.env[`AMBORAS_MODEL_${task.toUpperCase()}`])
   if (fromEnv && available(fromEnv.provider)) return fromEnv
   const provider = defaultProvider()
   if (!provider) return null
@@ -149,12 +150,12 @@ export class ModelError extends Error {
 
 const TIMEOUT_MS = 10 * 60 * 1000
 
-function anthropicClient(apiKey: string): Anthropic {
-  return new Anthropic({ apiKey, maxRetries: 2, timeout: TIMEOUT_MS, ...(transport ? { fetch: transport } : {}) })
+function anthropicClient(apiKey: string, model: string, task: Task): Anthropic {
+  return new Anthropic({ apiKey, maxRetries: 2, timeout: TIMEOUT_MS, fetch: meteredFetch('anthropic', model, task, (transport ?? fetch) as typeof fetch) })
 }
 
-function openaiClient(apiKey: string): OpenAI {
-  return new OpenAI({ apiKey, maxRetries: 2, timeout: TIMEOUT_MS, ...(transport ? { fetch: transport } : {}) })
+function openaiClient(apiKey: string, model: string, task: Task): OpenAI {
+  return new OpenAI({ apiKey, maxRetries: 2, timeout: TIMEOUT_MS, fetch: meteredFetch('openai', model, task, (transport ?? fetch) as typeof fetch) })
 }
 
 /* ------------------------------------------------------------- completion */
@@ -188,7 +189,7 @@ export async function complete(choice: ModelChoice, request: CompletionRequest):
   const started = Date.now()
   let text: string
   if (choice.provider === 'anthropic') {
-    const response = await anthropicClient(apiKey).beta.messages.create({
+    const response = await anthropicClient(apiKey, choice.model, request.task).beta.messages.create({
       model: choice.model,
       max_tokens: maxTokens,
       betas: ['server-side-fallback-2026-07-01'],
@@ -197,6 +198,7 @@ export async function complete(choice: ModelChoice, request: CompletionRequest):
       messages: [{ role: 'user', content: request.prompt }],
       output_config: { effort, ...(request.schema ? { format: { type: 'json_schema', schema: request.schema } } : {}) },
     })
+    if (response.stop_reason === 'max_tokens') throw new ModelError(choice, 'output budget exhausted; incomplete response (usage recorded)')
     if (response.stop_reason === 'refusal') {
       throw new ModelError(choice, `declined the request${response.stop_details?.explanation ? `: ${response.stop_details.explanation}` : ''}`)
     }
@@ -205,7 +207,7 @@ export async function complete(choice: ModelChoice, request: CompletionRequest):
       .map((block) => block.text)
       .join('')
   } else {
-    const response = await openaiClient(apiKey).responses.create({
+    const response = await openaiClient(apiKey, choice.model, request.task).responses.create({
       model: choice.model,
       instructions: request.system,
       input: request.prompt,
@@ -213,6 +215,7 @@ export async function complete(choice: ModelChoice, request: CompletionRequest):
       max_output_tokens: maxTokens,
       ...(request.schema ? { text: { format: { type: 'json_schema', name: request.name ?? 'reply', schema: request.schema, strict: true } } } : {}),
     })
+    if (response.status === 'incomplete') throw new ModelError(choice, `incomplete response: ${response.incomplete_details?.reason || 'unknown'} (usage recorded)`)
     text = response.output_text || outputText(response)
   }
   log.debug(`${choice.model} ${request.task}: ${text.length} chars in ${Date.now() - started}ms`)
@@ -259,7 +262,7 @@ export async function planWithTools(choice: ModelChoice, request: { system: stri
   const history = trimHistory(request.history)
   const maxTokens = request.maxTokens ?? taskSpec('planner').maxTokens
   if (choice.provider === 'anthropic') {
-    const response = await anthropicClient(apiKey).beta.messages.create({
+    const response = await anthropicClient(apiKey, choice.model, 'planner').beta.messages.create({
       model: choice.model,
       max_tokens: maxTokens,
       betas: ['server-side-fallback-2026-07-01'],
@@ -269,6 +272,7 @@ export async function planWithTools(choice: ModelChoice, request: { system: stri
       messages: [...history.map((turn) => ({ role: turn.role, content: turn.content })), { role: 'user', content: request.prompt }],
       output_config: { effort: taskSpec('planner').effort },
     })
+    if (response.stop_reason === 'max_tokens') throw new ModelError(choice, 'output budget exhausted; incomplete response (usage recorded)')
     if (response.stop_reason === 'refusal') throw new ModelError(choice, 'declined the request')
     const calls: PlanReply['calls'] = []
     const text: string[] = []
@@ -278,7 +282,7 @@ export async function planWithTools(choice: ModelChoice, request: { system: stri
     }
     return { text: text.join(' ').trim(), calls }
   }
-  const response = await openaiClient(apiKey).responses.create({
+  const response = await openaiClient(apiKey, choice.model, 'planner').responses.create({
     model: choice.model,
     instructions: request.system,
     input: [...history.map((turn) => ({ role: turn.role, content: turn.content })), { role: 'user', content: request.prompt }],
@@ -286,6 +290,7 @@ export async function planWithTools(choice: ModelChoice, request: { system: stri
     max_output_tokens: maxTokens,
     tools: request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.input_schema, strict: false })),
   })
+  if (response.status === 'incomplete') throw new ModelError(choice, `incomplete response: ${response.incomplete_details?.reason || 'unknown'} (usage recorded)`)
   const calls: PlanReply['calls'] = []
   for (const item of response.output) {
     if (item.type !== 'function_call') continue

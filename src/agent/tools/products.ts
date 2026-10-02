@@ -66,7 +66,7 @@ export const productTools: Tool[] = defineTools([
       // been researched still gets a complete page, from the category rules.
       const brief = readBrief(`${store?.prompt ?? ''} ${title}`)
       const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(brief)
-      const { content, source } = await authorProductContent(
+      const { content, source, warning } = await authorProductContent(
         modelFor(ctx.db, ctx.storeId, 'pages'),
         research,
         brief,
@@ -113,7 +113,7 @@ export const productTools: Tool[] = defineTools([
         keyword: product.title.toLowerCase(),
       })
       return {
-        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}, ${content.benefits?.length ?? 0} benefits, a comparison and ${content.faq?.length ?? 0} questions answered${source === 'rules' ? ' (page from category rules; set a model key for written pages)' : ''}${reference ? ', imagery from your photo' : ''}.`,
+        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}, ${content.benefits?.length ?? 0} benefits, a comparison and ${content.faq?.length ?? 0} questions answered${source === 'rules' ? ` (rules scaffolding: ${warning || 'no model configured'})` : ''}${image.startsWith('/_media/render.svg') ? ', SVG illustration scaffolding (image model did not produce a photograph)' : reference ? ', imagery from your photo' : ''}.`,
         data: { id: product.id, handle: product.handle },
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/products/${product.id}` }],
       }
@@ -349,10 +349,10 @@ export const productTools: Tool[] = defineTools([
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
       const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(readBrief(`${store?.prompt ?? ''} ${product.title}`))
-      const { content, source } = await authorContentFor(modelFor(ctx.db, ctx.storeId, 'pages'), research, { name: store?.name ?? 'the store', prompt: store?.prompt ?? '', ...(store?.brand.voice ? { voice: store.brand.voice } : {}), currency: store?.currency ?? 'USD' }, product)
+      const { content, source, warning } = await authorContentFor(modelFor(ctx.db, ctx.storeId, 'pages'), research, { name: store?.name ?? 'the store', prompt: store?.prompt ?? '', ...(store?.brand.voice ? { voice: store.brand.voice } : {}), currency: store?.currency ?? 'USD' }, product)
       updateProduct(ctx.db, ctx.storeId, product.id, { content })
       return {
-        summary: `Rewrote the page for ${product.title}: ${content.benefits?.length ?? 0} benefits, ${content.comparison?.rows.length ?? 0}-row comparison, ${content.faq?.length ?? 0} questions${source === 'rules' ? ' (from category rules; set a model key for a written page)' : ''}.`,
+        summary: `Rewrote the page for ${product.title}: ${content.benefits?.length ?? 0} benefits, ${content.comparison?.rows.length ?? 0}-row comparison, ${content.faq?.length ?? 0} questions${source === 'rules' ? ` (rules scaffolding: ${warning || 'no model configured'})` : ''}.`,
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/admin/products/${product.id}` }],
       }
     },
