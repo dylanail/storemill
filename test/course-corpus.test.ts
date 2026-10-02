@@ -22,3 +22,11 @@ test('actual generation prompts include source excerpts with truth and consent p
   assert.match(courseContext(['offers']), /Merchant facts and HONESTY rules override/)
   assert.match(knowledge('product'), /docs\/knowledge\/product-research.md/)
 })
+test('deployment includes the source corpus rather than excluding all docs', async () => {
+  const { readFileSync } = await import('node:fs')
+  const docker = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
+  const ignore = readFileSync(new URL('../.dockerignore', import.meta.url), 'utf8')
+  assert.match(docker, /COPY docs\/knowledge/)
+  assert.match(ignore, /!docs\/knowledge\//)
+  assert.doesNotMatch(ignore, /^docs$/m)
+})
