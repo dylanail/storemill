@@ -37,6 +37,12 @@ export function readSourceCommerce(html: string, source: string, fallbackCurrenc
   if (funnel?.id && step?.id) {
     out.platform = 'funnelish'; out.funnelId = String(funnel.id); out.stepType = Number(step.type); out.stepOrder=Number(step.order_index||0)
     if (!Array.isArray(sourceProducts)) return out
+    // Newer templates group independent products under named radio controls.
+    // Treating the entire PRODUCTS list as one variant selector corrupts shipping and add-ons.
+    if (/\bname\s*=\s*["']product-id_(?:main|shipping)_product["']/i.test(html)) {
+      out.issues.push('Grouped Funnelish product, shipping and add-on controls need manual commerce configuration. The source catalog was not converted into a misleading single-product variant list; this checkout is incomplete.');
+      return out
+    }
     const currency = /^[A-Z]{3}$/.test(funnel.currency_code) ? funnel.currency_code : fallbackCurrency
     const entries = sourceProducts.filter((entry: any) => entry && (typeof entry.id === 'number' || typeof entry.id === 'string') && typeof entry.name === 'string')
     const primary: Array<{entry:any;variant:ImportedProduct['variants'][number]}> = []

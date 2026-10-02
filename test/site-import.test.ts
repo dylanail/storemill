@@ -135,3 +135,8 @@ test('post-purchase Stripe retries carry a stable provider idempotency key',asyn
   await stripe.paymentIntents.chargeOffSession(input);await stripe.paymentIntents.chargeOffSession(input)
   assert.deepEqual(keys,['offer_receipt_1','offer_receipt_1'])
 })
+
+test('grouped Funnelish checkout fails closed instead of treating shipping and add-ons as primary variants',()=>{
+ const html=source(1,1,[product(1,'Express delivery',4.99),product(2,'Ice cream box',48),product(3,'Toppings',5)],'<input type="radio" name="product-id_main_product" value="2"><input type="radio" name="product-id_shipping_product" value="1"><input type="checkbox" name="product-id" value="3">')
+ const data=readSourceCommerce(html,origin+'/checkout','USD');assert.equal(data.platform,'funnelish');assert.deepEqual(data.products,[]);assert.match(data.issues[0]!,/manual commerce configuration/);
+})
