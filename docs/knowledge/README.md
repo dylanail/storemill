@@ -40,12 +40,11 @@ course examples. No embeddings or remote retrieval provider is required.
 These files are distilled notes, not the original transcripts. The original
 Course → Module → Lesson hierarchy, timestamps, audio and raw transcripts are
 not present in this checkout. Do not treat document filenames or generated
-paragraph identifiers as recovered lesson IDs. Full transcript ingestion and
-semantic/vector retrieval remain blocked until those source files are located.
+paragraph identifiers as recovered lesson IDs. The recovered private originals now use the separate provenance-preserving pipeline described below. Audio and raw course content remain outside this public checkout.
 
 ### Canonical transcript import
 
-When the originals are available, run `node scripts/import-course.mjs course.json output-directory`.
+For a separately supplied canonical lesson hierarchy, run `node scripts/import-course.mjs course.json output-directory`.
 Input contains `courseId`, `title`, `modules` with `moduleId`, `title`, and
 `lessons` with `lessonId`, `title`, `transcript` and optional `timestamps`.
 Supply original stable IDs. The importer preserves exact raw JSON, emits
@@ -53,4 +52,41 @@ bounded paragraph chunks with hierarchy IDs and transcript hashes, retains
 supplied timestamps, and refuses to overwrite an existing course. This is a
 local preparation path; imported chunks are not automatically trusted or
 connected to runtime retrieval. Review the corpus and its course map before
-connecting it. Current runtime retrieval uses only the checked-in distillations.
+connecting it. Runtime retrieval also supports the recovered private intake described below.
+
+## Private original Evolve corpus
+
+The original intake was recovered from `/Volumes/Non-Time Machine/Storemill-course-intake`.
+`package-course-intake.py` consumes its existing ledger, canonical transcripts,
+recording manifests, chunks, attachment text and three source-reviewed pilot
+extractions. It validates canonical hashes against the read-only ledger,
+preserves all 204 original JSON files as exact-byte compressed private archives,
+and retains original course/module/recording/chunk/segment IDs and timestamps.
+Transport chunks are not relabeled as lessons. The source course map and reviewed
+pilot lesson boundaries remain separate from retrieval passages.
+
+The runtime uses topic facets plus BM25 ranking, title weighting and commerce-term
+expansion. This is local metadata/lexical retrieval; no embedding model is used.
+All existing writers and the business assistant consume the same context builder.
+Selected source citations contain exact hierarchy IDs, timestamps and fingerprints.
+Source transcripts are evidence with caveats; merchant data stays separate.
+
+Thirteen language-suspect transcript identities are quarantined, repeated segments
+are excluded, and remaining quality warnings are retained and downweighted.
+The 61 source-reviewed teaching items retain applicability, ordered procedures,
+exceptions, dependencies and evidence. Attachment instructor text excludes saved
+page discussions and navigation. PDF text retains page numbers and visual flags;
+spreadsheets lacking reviewed interpretation are deferred. Full visual review,
+language repair and full-corpus reviewed teaching extraction remain incomplete.
+
+`course-data/` is ignored by Git. NEVER commit it, its archives, or transcripts to
+this public repository. A private CLI deployment bundles the data; runtime startup
+persists it under `data/course-corpus` on the existing `/app/data` volume, outside
+public uploads. Subsequent code-only deployments load that persisted index. A
+configured `STOREMILL_COURSE_ROOT` can select another private directory. `/healthz`
+reports counts and index hash only, never course text or local source paths.
+Runtime integrity checks fail on a mismatched index hash. No public corpus endpoint
+exists. Live calls that disclose private excerpts to model providers require the
+owner's specific disclosure approval.
+
+Private excerpts are excluded from model context unless `STOREMILL_COURSE_MODEL_DISCLOSURE=approved` is explicitly configured following owner approval. Local retrieval and aggregate health reporting work while the gate is closed.

@@ -1,4 +1,5 @@
 import './lib/env.ts'
+import { privateCourseStatus } from './agent/private-course.ts'
 import { sweepReviewRequests } from './email/reviews.ts'
 import { drainImports } from './control/asset-import-jobs.ts'
 import { recoverHealthFixes } from './storefront/health-fixes.ts'
@@ -117,7 +118,7 @@ const server = createServer(async (req, res) => {
       return
     }
     if (ctx.url.pathname === '/healthz') {
-      await send(res, { ok: true, uptime: Math.round(process.uptime()) })
+      await send(res, { ok: true, uptime: Math.round(process.uptime()), courseKnowledge: privateCourseStatus() })
       return
     }
     // Caddy asks here before issuing a certificate on demand. Only names this

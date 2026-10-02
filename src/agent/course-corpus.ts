@@ -1,3 +1,4 @@
+import { privateCourseContext } from './private-course.ts'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
@@ -46,6 +47,6 @@ export function retrieveCourse(topics: string[], query = '', maxChars = 9000): C
 }
 export function courseContext(topics: string[], query = ''): string {
   const found = retrieveCourse(topics, query)
-  if (!found.length) return ''
-  return '\n\nSOURCE EXCERPTS (course strategy, never evidence of product claims). Merchant facts and HONESTY rules override examples, urgency, social proof and suggested guarantees. Apply only truthful, configured offers and consent.\n' + found.map(p => `[${p.source} · ${p.section} · sha256:${p.sha256.slice(0, 12)}]\n${p.text}`).join('\n\n')
+  if (!found.length) return privateCourseContext(topics, query)
+  return '\n\nSOURCE EXCERPTS (course strategy, never evidence of product claims). Merchant facts and HONESTY rules override examples, urgency, social proof and suggested guarantees. Apply only truthful, configured offers and consent.\n' + found.map(p => `[${p.source} · ${p.section} · sha256:${p.sha256.slice(0, 12)}]\n${p.text}`).join('\n\n') + privateCourseContext(topics, query)
 }

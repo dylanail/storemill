@@ -7,3 +7,6 @@ data/
 .env
 .env.*
 !.env.example
+
+# Private course data must never be published to GitHub.
+course-data/
