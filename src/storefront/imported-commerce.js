@@ -260,10 +260,35 @@
   function mountCheckout() {
     if(!config.checkout)return;
     all('.order-bump').forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
+    const modernPayment=one('.payment-form');
+    const modernFunnel=modernPayment&&one('[data-copy-choice=primary]')&&one('[name=first_name]');
     const original=one('form.fk-card-payment-container') || one('form[action*="checkout"],form[action*="payment"],form[data-copy-original-action*="checkout"],form[data-copy-original-action*="payment"],form#checkout,form.checkout');
     const holder=document.createElement('div');holder.dataset.ownedCheckout='';holder.innerHTML=(config.checkout.error ? '<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.express+config.checkout.form;
     const funnelColumn=one('.basic-information-section');
-    let paymentRegion=original;
+    let paymentRegion=modernFunnel?modernPayment:original;
+    if(modernFunnel){
+      // Modern Funnelish is a script-driven section, not a checkout form. Mount
+      // the owned payment form in its payment slot, keeping the source design.
+      holder.dataset.ownedFunnelish='';holder.innerHTML=(config.checkout.error?'<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.form;
+      one('[data-funnel-selection]',holder)?.remove();one('[data-funnel-addons]',holder)?.remove();
+      const status=document.createElement('p');status.dataset.funnelError='';status.setAttribute('role','status');holder.prepend(status);
+      const methods=one('#methods',holder);if(methods){methods.closest('.co-block').hidden=true;methods.closest('.co-block').dataset.copyHidden='';}
+      // The captured phone widget depends on removed source JavaScript. Restore
+      // its original named field as a single accessible phone input.
+      all('.pn__wrapper').forEach(widget=>{const field=one('input[name=phone]',widget.parentElement);if(field){widget.remove();field.type='tel';field.placeholder='Phone number (optional)';field.style.setProperty('display','block','important');field.removeAttribute('data-phone-number-initialized');}});
+      // Only explicitly bound source offers may remain clickable. Hidden source
+      // reference products are catalog provenance, not additional order options.
+      all('[data-source=currentProduct]').filter(node=>!one('[data-copy-choice]:not([data-copy-control-hidden])',node)?.getClientRects().length).forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
+      const shippingCards=all('[data-copy-choice=shipping]').map(input=>({input,card:input.closest('.product-list')})).filter(({card})=>card);
+      // Source delivery recaps were toggled by removed x-on scripts. Associate
+      // only an exact content match with an explicitly bound shipping choice.
+      const recapText=node=>{const copy=node.cloneNode(true);all('style,script',copy).forEach(style=>style.remove());return norm(text(copy));};
+      all('.container').filter(node=>!one('input',node)).forEach(node=>{const match=shippingCards.find(({card})=>recapText(card)===recapText(node));if(match)node.dataset.copyShippingPreview=match.input.dataset.copyShippingId;});
+      const syncDelivery=()=>all('[data-copy-shipping-preview]').forEach(node=>{const selected=one('[data-copy-choice=shipping]:checked');node.hidden=node.dataset.copyShippingPreview!==selected?.dataset.copyShippingId;node.style.setProperty('display',node.hidden?'none':'flex','important');});
+      document.addEventListener('owned:shipping-selection',syncDelivery);window.addEventListener('owned:checkout-selection',syncDelivery);requestAnimationFrame(syncDelivery);
+      const sourcePay=one('a[href="#submit-step"]');
+      if(sourcePay){const pay=one('#pay',holder),style=getComputedStyle(sourcePay);const amountText=one('[data-pay-total]',pay)?.textContent||'';pay.className=sourcePay.className;pay.style.backgroundColor=style.backgroundColor;pay.style.color=style.color;pay.style.borderRadius=style.borderRadius;pay.setAttribute('form','checkout-form');pay.dataset.ownedSourcePay='';pay.innerHTML=escape(text(sourcePay))+' · <b data-pay-total>'+escape(amountText)+'</b>';sourcePay.replaceWith(pay);}
+    }
     if(funnelColumn){
       const layout=funnelColumn.parentElement;layout.dataset.ownedCheckoutLayout='';
       funnelColumn.dataset.ownedCheckoutColumn='form';
@@ -288,16 +313,23 @@
       all('.sub_details',funnelColumn).forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
       all('input[type=checkbox]',funnelColumn).filter(node=>!node.matches('[data-copy-choice=addon]')).forEach(node=>{node.checked=false;node.disabled=true;});
     }
-    const aliases={emailAddress:'email',shipCountry:'country',shipFirstName:'firstName',shipLastName:'lastName',shipAddress1:'line1',shipAddress2:'line2',shipCity:'city',shipState:'state',shipPostalCode:'postal',phoneNumber:'phone'};
+    const addressScope=modernFunnel?modernPayment.closest('.section_row')||document:funnelColumn||document;
+    const aliases={emailAddress:'email',shipCountry:'country',shipFirstName:'firstName',shipLastName:'lastName',shipAddress1:'line1',shipAddress2:'line2',shipCity:'city',shipState:'state',shipPostalCode:'postal',phoneNumber:'phone',first_name:'firstName',last_name:'lastName',email:'email',phone:'phone',shipping_country:'country',shipping_address:'line1',shipping_address_1:'line1',shipping_address_2:'line2',shipping_city:'city',shipping_state:'state',shipping_zip:'postal'};
     const canonicalFields=new Map(all('input,select,textarea',holder).map(field=>[field.name,field]));
-    const externalFields=new Map();all('input,select,textarea').forEach(field=>{const name=aliases[field.name];if(name&&(!original||!original.contains(field)))externalFields.set(name,field);});
+    const externalFields=new Map();all('input,select,textarea',addressScope).forEach(field=>{let name=aliases[field.name];if(modernFunnel&&field.name==='shipping_state'&&/^street address$/i.test(text(one('.fe-label',field.closest('.form-element')))))name='line1';if(name&&!field.closest('[data-owned-checkout]')&&(!original||!original.contains(field)))externalFields.set(name,field);});
     const useGroup=names=>names.every(name=>externalFields.has(name));
-    const bind=names=>names.forEach(name=>{let field=externalFields.get(name);if(!field)return;const canonical=canonicalFields.get(name);if(name==='state'&&field.tagName==='SELECT'&&canonical){const input=document.createElement('input');for(const attribute of field.attributes)input.setAttribute(attribute.name,attribute.value);input.type='text';input.placeholder='State / province';input.autocomplete='address-level1';if(field.parentElement.matches('.select-wrap'))field.parentElement.dataset.copyTextField='';field.replaceWith(input);field=input;externalFields.set(name,field);}field.name=name;if(canonical){if(name==='country'&&field.tagName==='SELECT')field.innerHTML=canonical.innerHTML;field.value=canonical.value;field.setAttribute('aria-label',canonical.getAttribute('aria-label')||canonical.labels?.[0]?.textContent||name);}field.setAttribute('form','checkout-form');field.dataset.copyCheckoutField='';field.required=!['line2','state','phone'].includes(name);field.removeAttribute('aria-invalid');if(name==='email'){field.type='email';field.inputMode='email';field.removeAttribute('pattern');}});
+    const bind=names=>names.forEach(name=>{let field=externalFields.get(name);if(!field)return;const canonical=canonicalFields.get(name);if(name==='state'&&field.tagName==='SELECT'&&canonical){const input=document.createElement('input');for(const attribute of field.attributes)input.setAttribute(attribute.name,attribute.value);input.type='text';input.placeholder='State / province';input.autocomplete='address-level1';if(field.parentElement.matches('.select-wrap'))field.parentElement.dataset.copyTextField='';field.replaceWith(input);field=input;externalFields.set(name,field);}field.name=name;if(canonical){if(name==='country'&&field.tagName==='SELECT')field.innerHTML=canonical.innerHTML;field.value=canonical.value;field.setAttribute('aria-label',canonical.getAttribute('aria-label')||canonical.labels?.[0]?.textContent||name);}field.setAttribute('form','checkout-form');field.dataset.copyCheckoutField='';field.id=canonical?.id||'co-'+name;if(canonical?.autocomplete)field.autocomplete=canonical.autocomplete;const sourceLabel=one('.fe-label',field.closest('.form-element')||field.parentElement);if(sourceLabel){sourceLabel.setAttribute('for',field.id);if(modernFunnel&&name==='phone')sourceLabel.textContent='Phone number (optional)';}field.required=!['line2','state','phone'].includes(name);field.removeAttribute('aria-invalid');if(name==='email'){field.type='email';field.inputMode='email';field.removeAttribute('pattern');}});
     if(useGroup(['email'])){one('input[name=email]',holder)?.closest('.co-block')?.remove();bind(['email']);}
     if(useGroup(['country','firstName','lastName','line1','city','postal'])){
       const delivery=one('input[name=line1]',holder)?.closest('.co-block');
       const missingOptional=['line2','state','phone'].filter(name=>!externalFields.has(name)).map(name=>one('input[name="'+name+'"]',holder)?.closest('.field')).filter(Boolean);
-      if(missingOptional.length)delivery?.replaceChildren(...missingOptional);else delivery?.remove();
+      if(modernFunnel&&missingOptional.length){
+        const extras=document.createElement('div');extras.dataset.ownedSourceAddress='';
+        const sample=getComputedStyle(externalFields.get('postal'));
+        for(const target of [extras,holder]){target.style.setProperty('--copy-field-radius',sample.borderRadius);target.style.setProperty('--copy-field-border',sample.borderColor);target.style.setProperty('--copy-field-background',sample.backgroundColor);}
+        missingOptional.forEach(field=>{field.className='form-element';const input=one('input',field),label=one('label',field);input.placeholder=label.textContent;});
+        extras.append(...missingOptional);externalFields.get('postal').closest('.element-wrapper').after(extras);delivery?.remove();
+      }else if(missingOptional.length)delivery?.replaceChildren(...missingOptional);else delivery?.remove();
       bind(['country','firstName','lastName','line1','line2','city','state','postal','phone']);
     }
     if(paymentRegion)paymentRegion.replaceWith(holder);
@@ -493,6 +525,18 @@
     Object.entries(metadata.nodes||{}).forEach(([id,node])=>{if(!['cart.add','cart.buyNow'].includes(node.binding?.field))return;const el=all('[data-pb-id]').find(el=>el.getAttribute('data-pb-id')===id);if(el){el.dataset.copyAction=node.binding.field==='cart.add'?'add':'buy';el.dataset.pbProduct=node.binding.productId;}});
   }catch{/* An old editor metadata snapshot does not stop the source page. */}
   all('form').filter(form=>one('[name=code],[name=discount]',form)&&!form.closest('[data-owned-checkout-summary]')).forEach(form=>{form.dataset.copyDiscountForm='';one('[name=discount]',form)?.setAttribute('name','code');});
+  // Source FAQ and video controls otherwise depend on scripts removed at import.
+  all('.faq').forEach((faq,index)=>{
+    const header=one('.faq-header',faq),panel=one('.faq-content-wrapper',faq);if(!header||!panel)return;
+    panel.id=panel.id||'copy-faq-'+index;header.setAttribute('role','button');header.tabIndex=0;header.setAttribute('aria-controls',panel.id);
+    const sync=()=>{const open=faq.classList.contains('active');header.setAttribute('aria-expanded',String(open));panel.hidden=!open;panel.style.setProperty('height',open?'auto':'0px','important');panel.style.setProperty('display',open?'block':'none','important');};
+    const toggle=()=>{faq.classList.toggle('active');sync();};header.addEventListener('click',toggle);header.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}});sync();
+  });
+  all('video.__video').forEach(video=>{
+    video.controls=true;video.removeAttribute('disablepictureinpicture');
+    all('.play-button',video.parentElement).forEach(button=>{button.hidden=true;button.dataset.copyHidden='';});
+    video.addEventListener('error',()=>{if(one('[data-copy-video-error]',video.parentElement))return;const message=document.createElement('p');message.dataset.copyVideoError='';message.setAttribute('role','status');message.textContent='Video unavailable in this imported preview.';video.after(message);});
+  });
   mountCopiedBundles();
   mountCheckout();
   mountSourcePackages();

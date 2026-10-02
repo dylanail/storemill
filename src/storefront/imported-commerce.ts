@@ -70,6 +70,25 @@ export function importedCommerceHtml(view: StoreView, page: Page, checkout?: { f
   const config = JSON.stringify({ ...importedCommerceConfig(view, page), checkout, scope }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   return `<style data-owned-commerce>
 [data-copy-hidden]{display:none!important}
+.co-image-placeholder{display:grid;place-items:center;width:56px;height:64px;background:#f5f5f5;border:1px solid #ddd;border-radius:6px;color:#888}
+[data-owned-checkout] .co-block[data-copy-hidden]{display:none!important}
+[data-owned-source-address]{display:grid;grid-template-columns:1fr;gap:8px;margin:8px 0}
+[data-owned-source-address] .form-element{margin:0}
+[data-owned-source-address] input{width:100%;height:44px;box-sizing:border-box;border:1px solid var(--copy-field-border,#8888);border-radius:var(--copy-field-radius,6px);padding:10px;font:16px Arial;background:var(--copy-field-background,transparent);color:#222}
+[data-owned-source-address] label{display:block;position:static;margin-bottom:6px;font:700 14px/1.4 Arial;color:inherit}
+[data-owned-funnelish]{width:100%!important;flex:1 1 100%!important}
+[data-owned-checkout][data-owned-funnelish] .co-card-preview .co-field input:not([type=hidden]){border-radius:var(--copy-field-radius,6px)!important;border-color:var(--copy-field-border,#8888)!important;background:var(--copy-field-background,#fff)!important}
+[data-owned-funnelish] .co-block{margin:12px 0!important}
+[data-owned-funnelish] .co-block>h2{display:none!important}
+[data-owned-source-pay]{display:block!important;width:100%!important;min-height:48px!important;border:0;font:inherit;font-weight:700;cursor:pointer;padding:12px 16px!important;white-space:normal!important;box-sizing:border-box!important}
+[data-owned-source-pay]:disabled{opacity:.65;cursor:default}
+[data-copy-checkout-field][aria-invalid=true]{border-color:#b3261e!important}
+.form-element>.field-error{display:block;color:#b3261e;font-size:13px;margin-top:4px}
+[data-copy-checkout-field]{min-height:44px!important;box-sizing:border-box!important;font-size:16px!important}
+[data-owned-checkout-summary] .lines td{padding:8px 4px;vertical-align:middle;overflow-wrap:anywhere}
+[data-owned-checkout-summary] .lines td:last-child{white-space:nowrap;text-align:right}
+[data-owned-checkout-summary] .thumb b{background:#666;color:#fff;border-radius:12px;min-width:20px;text-align:center;font:12px/20px Arial}
+
 [data-copy-text-field]::after,[data-copy-text-field]::before{display:none!important}
 [data-owned-checkout-column="summary"]{display:block!important;align-self:start!important}
 [data-owned-checkout-column]>.wrap{width:100%!important;max-width:100%!important;min-width:0!important;margin:0!important;padding:0!important;box-sizing:border-box!important}

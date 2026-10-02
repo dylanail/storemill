@@ -812,7 +812,7 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const pricedLines = cart ? cartDisplayLines(view.db, view.store.id, cart, totals) : []
   const code = totals.appliedPromotions.find(p => p.code && p.code === cart?.discountCode)?.code || ''
   const summary = `<div class="summary-body">
-    <table class="lines" aria-label="Order items"><tbody>${items.map((item, index) => `<tr><td><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b aria-label="Quantity ${item.quantity}">${item.quantity}</b></span></td>
+    <table class="lines" aria-label="Order items"><tbody>${items.map((item, index) => `<tr><td><span class="thumb">${item.image ? `<img src="${escapeHtml(item.image)}" alt="">` : `<span class="co-image-placeholder" role="img" aria-label="No product image">${CHECKOUT_ICONS.bag}</span>`}<b aria-label="Quantity ${item.quantity}">${item.quantity}</b></span></td>
       <td><div>${escapeHtml(item.title)}</div>${/^(default( title)?|standard)$/i.test(item.variantTitle) ? '' : `<div class="micro">${escapeHtml(item.variantTitle)}</div>`}</td>
       <td>${(pricedLines[index]?.compareAtLineCents || 0) > (pricedLines[index]?.lineCents || 0) ? `<s class="micro">${money(pricedLines[index]!.compareAtLineCents, view)}</s>` : ''}${item.unitCents ? money(pricedLines[index]?.lineCents ?? item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</tbody></table>
     <form method="post" action="${view.base}/checkout/code" class="code" novalidate><div class="field co-field"><input name="code" placeholder=" " aria-label="Discount code"><label>Discount code</label></div><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>

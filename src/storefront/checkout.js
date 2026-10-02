@@ -60,10 +60,10 @@
   });
   document.querySelectorAll('#methods input').forEach(r=>r.dataset.confirmed=String(r.checked));
   if(form.elements.country)form.elements.country.dataset.confirmed=form.elements.country.value;
-  function clearInvalid(input){input.removeAttribute('aria-invalid');input.removeAttribute('aria-describedby');input.closest('.field')?.querySelector('.field-error')?.remove();}
+  function clearInvalid(input){input.removeAttribute('aria-invalid');input.removeAttribute('aria-describedby');input.closest('.field,.form-element')?.querySelector('.field-error')?.remove();}
   function markInvalid(input){
     clearInvalid(input);input.setAttribute('aria-invalid','true');
-    const message=document.createElement('span');message.className='field-error';message.id=input.id+'-error';message.textContent=input.validity.valueMissing?'This field is required.':'Enter a valid '+(input.type==='email'?'email address.':'value.');input.setAttribute('aria-describedby',message.id);input.closest('.field')?.append(message);
+    const message=document.createElement('span');message.className='field-error';message.id=input.id+'-error';message.textContent=input.validity.valueMissing?'This field is required.':'Enter a valid '+(input.type==='email'?'email address.':'value.');input.setAttribute('aria-describedby',message.id);input.closest('.field,.form-element')?.append(message);
   }
   document.addEventListener('input',event=>{if(event.target.form===form&&event.target.matches('[aria-invalid=true]')&&event.target.validity.valid)clearInvalid(event.target);});
   form.addEventListener('submit',event=>{

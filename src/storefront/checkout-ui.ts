@@ -46,6 +46,7 @@ export function addressFields(address:Address={},countries:string[]=[],billing=f
 
 /** Checkout has its own neutral surfaces. A dark imported brand must never make fields illegible. */
 export const CHECKOUT_CSS = `
+.co-image-placeholder{display:grid;place-items:center;width:56px;height:64px;background:#f5f5f5;border:1px solid #dedede;border-radius:6px;color:#888}
 body.checkout-page{--paper:#fff;--ink:#1a1a1a;--raise:#f5f5f5;--muted:#626262;--line:#dedede;--primary:var(--co-accent,#1773b0);--button-label:#fff;--radius:6px;--body:Arial,Helvetica,sans-serif;--display:var(--body);--body-weight:400;background:#fff;color:#1a1a1a;font:400 14px/1.5 var(--body);color-scheme:light}
 .checkout-page #main{background:linear-gradient(to right,#fff 0,#fff calc(50% + 77px),#f5f5f5 calc(50% + 77px),#f5f5f5 100%)}
 .checkout-page .blk--checkout-form{padding:0;background:transparent;text-align:left}

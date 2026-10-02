@@ -1,6 +1,6 @@
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,existsSync} from 'node:fs';
+import {mkdtempSync,rmSync,existsSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
@@ -38,10 +38,12 @@ for(const width of [320,390,820,1440])test(`checkout stays readable and usable w
  const metrics=await page.locator('#co-email').evaluate(el=>({bg:getComputedStyle(el).backgroundColor,color:getComputedStyle(el).color,height:el.getBoundingClientRect().height,font:parseFloat(getComputedStyle(el).fontSize)}));
  assert.equal(metrics.bg,'rgb(255, 255, 255)');assert.equal(metrics.color,'rgb(26, 26, 26)');assert.equal(metrics.height,52);assert.equal(await page.locator('#pay').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(49, 131, 48)');if(width<1000)assert.ok(metrics.font>=16);
  assert.equal(await page.locator('.co-header').count(),1);assert.equal(await page.locator('.co-logo img').getAttribute('src'),'/site-logo.svg');assert.equal(await page.locator('[name=line1]').getAttribute('autocomplete'),'shipping address-line1');assert.equal(await page.locator('.checkout-steps').count(),0);assert.equal(await page.getByText('Default Title',{exact:true}).count(),0);
+ assert.equal(await page.locator('.thumb img[src=""]').count(),0);assert.ok(await page.locator('.co-image-placeholder').count()>0);
  assert.equal(await page.locator('#pay').isDisabled(),true);assert.equal(await page.locator('[name=preview-card]').isDisabled(),true);
  if(width<1000){await page.locator('.co-summary-mobile summary').click();assert.equal(await page.locator('.co-summary-mobile .summary-body').isVisible(),true);assert.equal(await page.locator('.co-side').isVisible(),false);}
  else{const [main,side]=await Promise.all([page.locator('.co-main').boundingBox(),page.locator('.co-side').boundingBox()]);assert.ok(side.x>=main.x+main.width-1);await page.evaluate(()=>scrollTo(0,500));assert.ok((await page.locator('.co-side').boundingBox()).y>=-1);}
  await page.locator('[name=billingSame]').uncheck();assert.equal(await page.locator('[name=billingLine1]').isVisible(),true);await page.locator('[name=billingSame]').check();assert.equal(await page.locator('[name=billingLine1]').isEnabled(),false);
+ if(process.env.CHECKOUT_SCREENSHOTS){mkdirSync(process.env.CHECKOUT_SCREENSHOTS,{recursive:true});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:join(process.env.CHECKOUT_SCREENSHOTS,`shopify-style-fixture-${width}.png`),fullPage:true});}
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);await context.close();
 });
 test('discounts apply/remove in place, invalid codes preserve the prior price, and shipping uses server totals',async()=>{
