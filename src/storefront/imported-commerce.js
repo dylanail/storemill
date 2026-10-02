@@ -284,9 +284,9 @@
       if(express){express.innerHTML=config.checkout.express;holder.innerHTML=(config.checkout.error?'<p role="alert">'+escape(config.checkout.error)+'</p>':'')+config.checkout.form;}
       all('button,a[action]',funnelColumn).filter(node=>/^(pay now|complete order)$/i.test(text(node))).forEach(node=>{const style=getComputedStyle(node),pay=one('#pay',holder);if(pay){pay.style.setProperty('background',style.backgroundColor,'important');pay.style.setProperty('color',style.color,'important');pay.style.setProperty('border-radius',style.borderRadius,'important');}node.hidden=true;node.dataset.copyHidden='';});
       // Captured zero-price placeholders and source marketing opt-ins are not orders.
-      all('.product-list,.productBox',funnelColumn).filter(node=>!one('[data-copy-variant-id]',node)).forEach(node=>node.remove());
+      all('.product-list,.productBox',funnelColumn).filter(node=>!one('[data-copy-variant-id],[data-copy-shipping-id]',node)).forEach(node=>node.remove());
       all('.sub_details',funnelColumn).forEach(node=>{node.hidden=true;node.dataset.copyHidden='';});
-      all('input[type=checkbox]',funnelColumn).forEach(node=>{node.checked=false;node.disabled=true;});
+      all('input[type=checkbox]',funnelColumn).filter(node=>!node.matches('[data-copy-choice=addon]')).forEach(node=>{node.checked=false;node.disabled=true;});
     }
     const aliases={emailAddress:'email',shipCountry:'country',shipFirstName:'firstName',shipLastName:'lastName',shipAddress1:'line1',shipAddress2:'line2',shipCity:'city',shipState:'state',shipPostalCode:'postal',phoneNumber:'phone'};
     const canonicalFields=new Map(all('input,select,textarea',holder).map(field=>[field.name,field]));
@@ -502,5 +502,20 @@
     if(!one('[data-copy-checkout],a[href$="/checkout"],button[name=checkout]',main)){const footer=document.createElement('div');footer.style.cssText='max-width:960px;margin:24px auto;padding:16px';footer.innerHTML='<p>Subtotal <strong data-cart-subtotal></strong></p><a class="button" data-copy-checkout href="'+escape(config.base)+'/checkout">Checkout</a>';main.append(footer);}
   }
   if(findDrawer()||config.role==='cart'||one('[data-cart-count],.cart-count-bubble'))request('/cart/state').then(updateCart).catch(()=>{});
+  if(config.role==='checkout'&&config.products.some(product=>product.grouped)){
+    const confirmed=()=>all('[data-copy-choice]').forEach(node=>node.dataset.confirmed=String(node.checked));confirmed();
+    const restore=()=>all('[data-copy-choice]').forEach(node=>node.checked=node.dataset.confirmed==='true');
+    document.addEventListener('change',async event=>{
+      const node=event.target.closest('[data-copy-choice]');if(!node)return;
+      if(node.dataset.copyChoice==='shipping'){const owned=all('#methods input').find(input=>input.value===node.dataset.copyShippingId);if(!owned){restore();announce('This shipping option needs merchant configuration.');return;}owned.checked=true;owned.dispatchEvent(new Event('change',{bubbles:true}));return;}
+      const primary=node.dataset.copyChoice==='primary'?node:one('[data-copy-choice=primary]:checked');
+      if(!primary||!window.__selectFunnelPackage){restore();announce('Choose a configured package first.');return;}
+      const extras=all('[data-copy-choice=addon]:checked').map(input=>input.dataset.copyVariantId);
+      if(!await window.__selectFunnelPackage(primary.dataset.copyVariantId,1,extras))restore();else confirmed();
+    });
+    document.addEventListener('owned:shipping-selection',event=>{all('[data-copy-choice=shipping]').forEach(node=>node.checked=node.dataset.copyShippingId===event.detail.shippingOptionId);confirmed();});
+    const initial=()=>{if(config.groupedSelection){const data=config.groupedSelection;all('[data-copy-choice]').forEach(node=>{if(node.dataset.copyChoice==='primary')node.checked=node.dataset.copyVariantId===data.variantId;if(node.dataset.copyChoice==='addon')node.checked=data.additionalVariantIds.includes(node.dataset.copyVariantId);if(node.dataset.copyChoice==='shipping')node.checked=node.dataset.copyShippingId===data.shippingOptionId;});confirmed();return;}const primary=one('[data-copy-choice=primary]:checked');if(primary&&window.__selectFunnelPackage&&!one('[data-funnel-variant]:checked'))window.__selectFunnelPackage(primary.dataset.copyVariantId,1,all('[data-copy-choice=addon]:checked').map(node=>node.dataset.copyVariantId));};
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initial,{once:true});else setTimeout(initial,0);
+  }
   window.__COPY_COMMERCE_READY=true;
 })();

@@ -23,7 +23,8 @@
     "test:browser": "node --disable-warning=ExperimentalWarning --test --test-concurrency=2 test/*.browser.mjs",
     "test:production": "node --disable-warning=ExperimentalWarning --test test/production.test.ts",
     "test:all": "npm run typecheck && npm test && npm run test:browser",
-    "test:cro": "node --disable-warning=ExperimentalWarning --test test/cro-review.browser.mjs"
+    "test:cro": "node --disable-warning=ExperimentalWarning --test test/cro-review.browser.mjs",
+    "test:grouped": "node --disable-warning=ExperimentalWarning --test test/grouped-checkout.browser.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

@@ -11,8 +11,8 @@ const runtime = readFileSync(new URL('./imported-commerce.js', import.meta.url),
 
 /** Authenticated previews include drafts; public storefronts only expose published catalog fields. */
 export function importedCommerceConfig(view: StoreView, page: Page) {
-  const products = listProducts(view.db, view.store.id, { status: view.preview ? 'all' : 'published', limit: 250 }).filter(product => product.status !== 'archived').map(product => ({
-    id: product.id, handle: product.handle, title: product.title, image: product.heroImage, defaultSourceId:product.metadata.sourceDefaultVariant||'',
+  const products = listProducts(view.db, view.store.id, { status: view.preview ? 'all' : 'published', limit: 250, includeHidden:true }).filter(product => product.status !== 'archived'&&(!product.metadata.hidden||product.metadata.sourcePurpose==='addon'&&product.metadata.sourceControlHidden!=='true')).map(product => ({
+    id: product.id, handle: product.handle, title: product.title, image: product.heroImage, defaultSourceId:product.metadata.sourceDefaultVariant||'', group:product.metadata.sourceGroup||'', purpose:product.metadata.sourcePurpose||'', defaultChecked:product.metadata.sourceDefaultChecked==='true', grouped:product.metadata.sourceGrouped==='true', shipping:product.metadata.sourceShippingIds||'{}',
     variants: product.variants.map(variant => ({
       id: variant.id, title: variant.title, options: variant.optionValues, image: variant.image,
       sourceId: product.metadata[`sourceVariant:${variant.id}`] || '',
@@ -38,6 +38,7 @@ export function importedCommerceConfig(view: StoreView, page: Page) {
     currency: view.totals?.currency || view.region?.currency || view.store.currency,
     minor: minorDigits(view.totals?.currency || view.region?.currency || view.store.currency),
     products,
+    groupedSelection:(()=>{const main=view.cart?.items.find(item=>products.some(p=>p.grouped&&p.id===item.productId&&(!page.productId||p.id===page.productId)));return main?{variantId:main.variantId,quantity:main.quantity,additionalVariantIds:view.cart!.items.filter(item=>products.some(p=>p.purpose==='addon'&&p.id===item.productId)).map(item=>item.variantId),shippingOptionId:view.totals?.shippingOptionId||view.cart!.shippingOptionId}:null})(),
     checkoutPaths: listPages(view.db, view.store.id).filter(p => p.role === 'checkout' && (view.preview || p.status === 'published')).flatMap(p => { const paths = ['/pages/'+p.handle]; try { if(p.sourceUrl)paths.push(new URL(p.sourceUrl).pathname) } catch { /* Older imports may have relative source URLs. */ } return paths }),
   }
 }

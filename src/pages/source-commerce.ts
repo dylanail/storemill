@@ -1,3 +1,4 @@
+import { groupedFunnelish } from './grouped-funnelish.ts'
 import { parse } from 'parse5'
 import { readImportedGallery } from './product-media-import.ts'
 import type { ImportedProduct } from '../domain/ops.ts'
@@ -6,8 +7,8 @@ import { minorDigits } from '../lib/money.ts'
 import { assignedJson } from './source-data.ts'
 import { mapMediaDocument, decodeMediaAttribute } from './clone-media.ts'
 
-export type SourceProduct = { key: string; product: ImportedProduct; purpose: 'primary'|'bump'|'gift'; sourceIds: string[]; defaultSourceId?: string }
-export type SourceCommerce = { products: SourceProduct[]; issues: string[]; giftRules: Record<string,string[]>; platform?: string; stepType?: number; funnelId?: string; stepOrder?: number }
+export type SourceProduct = { key: string; product: ImportedProduct; purpose: 'primary'|'bump'|'gift'|'addon'; sourceIds: string[]; defaultSourceId?: string }
+export type SourceCommerce = { products: SourceProduct[]; issues: string[]; giftRules: Record<string,string[]>; platform?: string; stepType?: number; funnelId?: string; stepOrder?: number; shipping?: Array<{sourceId:string;name:string;amountCents:number;currency:string;isDefault:boolean;group:string}> }
 const plain = (value: unknown) => decodeMediaAttribute(String(value ?? '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
 const amount = (value: unknown, currency: string) => {
   if (typeof value !== 'number' && typeof value !== 'string' || !/^\d+(?:\.\d+)?$/.test(String(value))) return null
@@ -37,12 +38,7 @@ export function readSourceCommerce(html: string, source: string, fallbackCurrenc
   if (funnel?.id && step?.id) {
     out.platform = 'funnelish'; out.funnelId = String(funnel.id); out.stepType = Number(step.type); out.stepOrder=Number(step.order_index||0)
     if (!Array.isArray(sourceProducts)) return out
-    // Newer templates group independent products under named radio controls.
-    // Treating the entire PRODUCTS list as one variant selector corrupts shipping and add-ons.
-    if (/\bname\s*=\s*["']product-id_(?:main|shipping)_product["']/i.test(html)) {
-      out.issues.push('Grouped Funnelish product, shipping and add-on controls need manual commerce configuration. The source catalog was not converted into a misleading single-product variant list; this checkout is incomplete.');
-      return out
-    }
+    const grouped=groupedFunnelish(html,source,funnel,step,sourceProducts);if(grouped)return grouped
     const currency = /^[A-Z]{3}$/.test(funnel.currency_code) ? funnel.currency_code : fallbackCurrency
     const entries = sourceProducts.filter((entry: any) => entry && (typeof entry.id === 'number' || typeof entry.id === 'string') && typeof entry.name === 'string')
     const primary: Array<{entry:any;variant:ImportedProduct['variants'][number]}> = []
@@ -126,8 +122,18 @@ export function bindSourceProducts(html: string, products: Product[]): string {
   return mapMediaDocument(html,tag=>{
     const action=/(?:href|data-yes-link)\s*=\s*["']?#yes-link-(\d+)(?=["'\s>])/.exec(tag)
     const raw=/\s(?:data-pid|data-product-id)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag)
-    const binding=action?bindings.get(action[1]!):raw ? bindings.get(decodeMediaAttribute(raw[1]??raw[2]??raw[3]??'')) : undefined
+    const inputName=/^<input\b/i.test(tag)?/\sname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag):null
+    const name=decodeMediaAttribute(inputName?.[1]??inputName?.[2]??inputName?.[3]??'')
+    const inputValue=inputName?/\svalue\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag):null
+    const sourceId=decodeMediaAttribute(inputValue?.[1]??inputValue?.[2]??inputValue?.[3]??'')
+    if(name==='product-id_shipping_product'){
+      for(const product of products){let shipping:Record<string,string>={};try{shipping=JSON.parse(product.metadata.sourceShippingIds||'{}')}catch{};if(shipping[sourceId])return tag.replace(/\/?>(?=$)/,` data-copy-choice="shipping" data-copy-shipping-id="${shipping[sourceId]}">`)}
+    }
+    const binding=action?bindings.get(action[1]!):raw ? bindings.get(decodeMediaAttribute(raw[1]??raw[2]??raw[3]??'')) : name.startsWith('product-id')?bindings.get(sourceId):undefined
+    if(binding&&binding.product.metadata.sourceGroup&&name.startsWith('product-id'))tag=tag.replace(/\/?>(?=$)/,` data-copy-choice="${binding.product.metadata.sourcePurpose==='addon'?'addon':'primary'}">`)
+
     if(!binding)return tag
+    if(name.startsWith('product-id')&&binding.variant.inventory===0&&!binding.variant.allowBackorder&&!/\sdisabled(?:\s|=|>)/i.test(tag))tag=tag.replace(/\/?>(?=$)/,' disabled aria-disabled="true">')
     return tag.replace(/\sdata-copy-(?:product-id|variant-id|purchase-type)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,'').replace(/\/?>(?=$)/,` data-copy-product-id="${binding.product.id}" data-copy-variant-id="${binding.variant.id}" data-copy-purchase-type="one-time">`)
   })
 }

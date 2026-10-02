@@ -400,7 +400,7 @@ export function importReviews(db: Db, storeId: string, csv: string, opts: { prod
 
 /* ------------------------------------------------------- product import */
 
-export type ImportedProduct = { title: string; description: string; images: string[]; media?: Media[]; mediaIssues?: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
+export type ImportedProduct = { title: string; description: string; images: string[]; media?: Media[]; mediaIssues?: string[]; priceCents: number | null; currency: string; variants: Array<{ title: string; priceCents: number; compareAtCents?: number; inventory?: number; allowBackorder?: boolean; sku?: string; image?: string; sourceId?: string; sourceAliases?: string[]; optionValues?: Record<string, string> }>; options: Array<{ title: string; values: string[] }>; source: string; vendor?: string; metadata?: Record<string,string> }
 
 /**
  * Import a product from a URL.
@@ -521,7 +521,7 @@ export function createFromImport(
   const supplierCost = opts.asSupplier ? (imported.priceCents ?? 0) : 0
   const supplierShipping = Math.max(0, Math.round(opts.supplierShippingCents ?? 0))
   const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round(((cents + supplierShipping) * markup) / 100) * 100 - 1) : cents)
-  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.compareAtCents!==undefined&&!opts.asSupplier?{compareAtCents:variant.compareAtCents}:{}), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: variant.inventory ?? 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
+  const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.compareAtCents!==undefined&&!opts.asSupplier?{compareAtCents:variant.compareAtCents}:{}), ...(variant.optionValues ? { optionValues: variant.optionValues } : {}), ...(variant.sku ? { sku: variant.sku } : {}), ...(variant.image ? { image: variant.image } : {}), inventory: variant.inventory ?? 100, ...(variant.allowBackorder!==undefined?{allowBackorder:variant.allowBackorder}:{}) })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
   const product = createProduct(db, storeId, {
     title: imported.title,
     description: imported.description,

@@ -46,8 +46,9 @@
       catch(e){error.textContent=e.message;el.value=el.dataset.confirmed||el.options[0].value;el.disabled=false;}
     }
     if(el.matches('#methods input')){
-      try{refresh(await request('/checkout/shipping',{shippingOptionId:el.value}));document.querySelectorAll('#methods input').forEach(r=>r.dataset.confirmed=String(r.checked));}
-      catch(e){error.textContent=e.message;document.querySelectorAll('#methods input').forEach(r=>r.checked=r.dataset.confirmed==='true');}
+      if(pending>0||window.__funnelSelectionBusy?.()||form.dataset.paymentInProgress==='true'){document.querySelectorAll('#methods input').forEach(r=>r.checked=r.dataset.confirmed==='true');document.dispatchEvent(new CustomEvent('owned:shipping-selection',{detail:{shippingOptionId:document.querySelector('#methods input:checked')?.value}}));error.textContent='Finish the current checkout update before changing shipping.';return;}
+      try{const quote=await request('/checkout/shipping',{shippingOptionId:el.value});refresh(quote);document.dispatchEvent(new CustomEvent('owned:shipping-selection',{detail:quote}));document.querySelectorAll('#methods input').forEach(r=>r.dataset.confirmed=String(r.checked));}
+      catch(e){error.textContent=e.message;document.querySelectorAll('#methods input').forEach(r=>r.checked=r.dataset.confirmed==='true');document.dispatchEvent(new CustomEvent('owned:shipping-selection',{detail:{shippingOptionId:document.querySelector('#methods input:checked')?.value}}));}
     }
     if(el.matches('.bump input')){
       const value=el.checked;

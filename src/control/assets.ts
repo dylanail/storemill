@@ -1,7 +1,7 @@
 import { copyScope, type CopyScope } from './copy-scope.ts'
 import { readSourceCommerce, readSourceCurrency, bindSourceProducts, type SourceProduct } from '../pages/source-commerce.ts'
 import { createPromotion } from '../domain/promotions.ts'
-import { getProduct } from '../domain/catalog.ts'
+import { getProduct, updateProduct } from '../domain/catalog.ts'
 import { sourceThemeFromHtml, fontFacesFromHtml } from '../pages/source-theme.ts'
 import { logoFromClone } from '../pages/source-logo.ts'
 import type { Db } from '../lib/db.ts'
@@ -13,7 +13,7 @@ import { canonicalPageUrl, relatedSiteOrigin, copyUrlPriority, discoverPageLinks
 import { bindImportedOfferProduct, planImportedOfferProduct } from '../pages/imported-offers.ts'
 import { installImportedBundle, planImportedBundle, repairImportedBundleHtml } from '../pages/imported-bundles.ts'
 import { createPage, updatePage, type Page } from '../pages/store.ts'
-import { seedDefaultRegion } from '../domain/regions.ts'
+import { seedDefaultRegion, defaultRegion, addShippingOption } from '../domain/regions.ts'
 import { upsertFunnel } from '../domain/funnels.ts'
 import { createFromImport, importProductFromUrl, type ImportedProduct } from '../domain/ops.ts'
 import type { Brand, Product, Theme } from '../domain/types.ts'
@@ -202,6 +202,18 @@ export async function importAssetFromUrl(
     ...(imported.media ? {media:imported.media.map(item=>({...item,url:rehome(item.url),...(item.poster?{poster:rehome(item.poster)}:{})}))} : {}),
     variants: imported.variants.map((variant) => variant.image ? { ...variant, image: rehome(variant.image) } : variant),
   }, { asSupplier: false, status: 'draft' }))
+  const groupedShipping=[...sourceData.values()].flatMap(data=>data.shipping||[])
+  const shippingGroups=new Set(groupedShipping.map(option=>option.group))
+  if(shippingGroups.size===1&&groupedShipping.every(option=>option.currency===store.currency)){
+    const region=defaultRegion(db,store.id)!,unique=[...new Map(groupedShipping.map(option=>[option.sourceId,option])).values()]
+    db.run('DELETE FROM shipping_options WHERE region_id=?',region.id)
+    const mapping:Record<string,string>={}
+    for(const option of [...unique].sort((a,b)=>Number(b.isDefault)-Number(a.isDefault)))mapping[option.sourceId]=addShippingOption(db,region.id,{name:option.name,amountCents:option.amountCents,freeAboveCents:null}).id
+    for(const product of products.filter(p=>p.metadata.sourceGrouped==='true')){
+      const metadata={...product.metadata,sourceShippingIds:JSON.stringify(mapping),sourceDefaultShipping:mapping[unique.find(o=>o.isDefault)?.sourceId||unique[0]!.sourceId]!}
+      updateProduct(db,store.id,product.id,{metadata});product.metadata=metadata
+    }
+  }else if(shippingGroups.size){commerce.issues.push({url:homeClone.sourceUrl,reason:'Multiple grouped shipping scopes or a source-currency mismatch need explicit merchant configuration; grouped checkout is blocked.'});for(const product of products.filter(p=>p.metadata.sourceGrouped==='true')){product.metadata={...product.metadata,sourceGroupedBlocked:'true'};updateProduct(db,store.id,product.id,{metadata:product.metadata})}}
   const productByKey=new Map(products.map((product,index)=>[productKeys[index]!,product]))
   const ownProduct=(source:string)=>{const entries=(keysByPage.get(source)||[]).map(key=>candidates.get(key)!).filter(entry=>entry.purpose==='primary');return entries.length===1?productByKey.get(entries[0]!.key):undefined}
   const productBySource=new Map<string,Product>()

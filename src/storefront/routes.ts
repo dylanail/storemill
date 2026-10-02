@@ -558,9 +558,16 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const quantity = Number(body.quantity)
     const variant = getVariant(current.db, current.store.id, variantId)
     const product = variant ? getProduct(current.db, current.store.id, variant.productId) : null
-    if (!variant || !product || product.status !== 'published' && !(current.preview && product.status === 'draft') || product.metadata.hidden) throw badRequest('Choose an available package')
+    if (!variant || !product || product.status !== 'published' && !(current.preview && product.status === 'draft') || product.metadata.hidden || product.metadata.sourceGroupedBlocked==='true') throw badRequest('Choose an available package')
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999 || !canReserve(current.db, variantId, quantity)) throw badRequest('That package quantity is not available')
     const cart = ensureCart(ctx, current)
+    const group=product.metadata.sourceGrouped==='true'?product.metadata.sourceGroup:''
+    const groupAddons=group?listProducts(current.db,current.store.id,{status:current.preview?'all':'published',limit:250,includeHidden:true}).filter(p=>p.status!=='archived'&&p.metadata.sourceGroup===group&&p.metadata.sourcePurpose==='addon'&&p.metadata.sourceControlHidden!=='true'):[]
+    if(body.additionalVariantIds!==undefined&&(!group||!Array.isArray(body.additionalVariantIds)||body.additionalVariantIds.length>20||new Set(body.additionalVariantIds).size!==body.additionalVariantIds.length))throw badRequest('Choose explicit available add-ons from this checkout')
+    const existingAddons=cart.items.filter(item=>groupAddons.some(p=>p.variants.some(v=>v.id===item.variantId))).map(item=>item.variantId)
+    const defaultAddons=groupAddons.filter(p=>p.metadata.sourceDefaultChecked==='true').flatMap(p=>p.variants.slice(0,1).map(v=>v.id))
+    const addonIds:string[]=body.additionalVariantIds===undefined?(cart.items.length?existingAddons:defaultAddons):body.additionalVariantIds
+    for(const id of addonIds)if(typeof id!=='string'||!groupAddons.some(p=>p.variants.some(v=>v.id===id))||!canReserve(current.db,id,1))throw badRequest('That add-on is not available in this checkout')
     if (cart.paymentIntentId) {
       const stripe = stripeFor(current.db, current.store.id)
       if (!stripe) throw badRequest('Payment settings changed. Reload checkout before changing your package')
@@ -574,16 +581,18 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     current.db.tx(() => {
       const latest = getCart(current.db, current.store.id, cart.id)
       // Stripe I/O yields to other requests and webhook completion. Never overwrite their order/payment.
-      if (!latest || latest.orderId || latest.paymentIntentId !== cart.paymentIntentId || latest.updatedAt !== cart.updatedAt || JSON.stringify(latest.items) !== JSON.stringify(cart.items)) throw badRequest('Your order changed while updating this package. Reload checkout to review it')
+      if (!latest || latest.orderId || latest.paymentIntentId !== cart.paymentIntentId || latest.updatedAt !== cart.updatedAt || latest.shippingOptionId!==cart.shippingOptionId || latest.regionId!==cart.regionId || latest.discountCode!==cart.discountCode || JSON.stringify(latest.items) !== JSON.stringify(cart.items)) throw badRequest('Your order changed while updating this package. Reload checkout to review it')
       // Preserve contact details, shipping and discount code; replace the explicit main order choice.
       current.db.update('carts', cart.id, { items: [], payment_intent_id: '' })
       addToCart(current.db, current.store.id, cart.id, variantId, quantity, 'funnel-checkout')
+      for(const addonId of addonIds)addToCart(current.db,current.store.id,cart.id,addonId,1,'funnel-addon')
+      if(group&&!cart.shippingOptionId&&product.metadata.sourceDefaultShipping)setShipping(current.db,current.store.id,cart.id,product.metadata.sourceDefaultShipping)
     })
     const updated = getCart(current.db, current.store.id, cart.id)!
     const amounts = paymentTotals(current.db, current.store.id, updated)
     const shown = { ...current, cart: updated, totals: amounts }
     const parts = view.checkoutParts(shown, checkoutInputFor(shown))
-    return { ok: true, ...amounts, variantId, quantity, summaryHtml: parts.summary, bumpHtml:parts.bump, totalsHtml: view.totalsBlock(shown, amounts) }
+    return { ok: true, ...amounts, variantId, quantity, additionalVariantIds:addonIds, summaryHtml: parts.summary, bumpHtml:parts.bump, totalsHtml: view.totalsBlock(shown, amounts) }
   })
 
   /** Buy now: a fresh cart with this line, straight to checkout. */
