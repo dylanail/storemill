@@ -327,7 +327,11 @@
         const extras=document.createElement('div');extras.dataset.ownedSourceAddress='';
         const sample=getComputedStyle(externalFields.get('postal'));
         for(const target of [extras,holder]){target.style.setProperty('--copy-field-radius',sample.borderRadius);target.style.setProperty('--copy-field-border',sample.borderColor);target.style.setProperty('--copy-field-background',sample.backgroundColor);}
-        missingOptional.forEach(field=>{field.className='form-element';const input=one('input',field),label=one('label',field);input.placeholder=label.textContent;});
+        missingOptional.forEach(field=>{
+          field.className='form-element';const input=one('input',field),label=one('label',field);input.placeholder=label.textContent;field.prepend(label);
+          for(const [key,value]of Object.entries({width:'100%',height:'44px',boxSizing:'border-box',borderRadius:sample.borderRadius,borderColor:sample.borderColor,backgroundColor:sample.backgroundColor,padding:'10px',fontSize:'16px'}))input.style.setProperty(key.replace(/[A-Z]/g,c=>'-'+c.toLowerCase()),value,'important');
+          for(const [key,value]of Object.entries({display:'block',position:'static',textAlign:'left',fontSize:'14px',fontWeight:'700',marginBottom:'6px'}))label.style.setProperty(key.replace(/[A-Z]/g,c=>'-'+c.toLowerCase()),value,'important');
+        });
         extras.append(...missingOptional);externalFields.get('postal').closest('.element-wrapper').after(extras);delivery?.remove();
       }else if(missingOptional.length)delivery?.replaceChildren(...missingOptional);else delivery?.remove();
       bind(['country','firstName','lastName','line1','line2','city','state','postal','phone']);

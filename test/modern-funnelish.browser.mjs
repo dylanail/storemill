@@ -34,6 +34,7 @@ for(const width of [1440,390,320]) test(`modern imported checkout has one design
  assert.equal(await page.locator('[data-funnel-selection],[data-funnel-addons],.payment-form,.pn__wrapper,a[href="#submit-step"]').count(),0);
  const geometry=await page.locator('[data-owned-funnelish]').evaluate(n=>({width:n.getBoundingClientRect().width,parent:n.parentElement.getBoundingClientRect().width}));assert.ok(geometry.width>=geometry.parent-2,'payment form must fill its source slot');
  assert.ok(await page.locator('[data-owned-source-address] label').first().evaluate(n=>parseFloat(getComputedStyle(n).fontSize)>=14));
+ assert.equal(await page.locator('[data-owned-source-address] .form-element').first().evaluate(n=>n.firstElementChild.tagName),'LABEL');assert.equal(await page.locator('[data-owned-source-address] input').first().evaluate(n=>getComputedStyle(n).borderRadius),await page.locator('[name=postal]').evaluate(n=>getComputedStyle(n).borderRadius));
  assert.equal(await page.locator('#methods').isVisible(),false);assert.equal(await page.locator('[name="checkout[payment_gateway]"]').count(),0);
  for(const name of ['email','firstName','lastName','line1','city','postal','phone','country']){const f=page.locator('[name="'+name+'"]');assert.equal(await f.count(),1,name);assert.equal(await f.isVisible(),true,name);assert.equal(await f.getAttribute('form'),'checkout-form');}
  assert.equal(await page.locator('[name=line1]').getAttribute('data-copy-checkout-field'),'');assert.equal(await page.locator('[name=phone]').getAttribute('type'),'tel');
